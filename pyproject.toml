@@ -1,0 +1,51 @@
+[project]
+name = "mission-control"
+version = "0.1.0"
+description = "Agentic Coding Mission Control — Python sidecar (state detection + two-pool quota)"
+readme = "README.md"
+requires-python = ">=3.12,<3.15"
+dependencies = [
+    "pydantic>=2.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.13",
+    "ty>=0.0.1a1",
+    "complexipy>=3",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mission_control"]
+
+[tool.uv]
+package = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "unit: pure-function unit tests",
+    "integration: component integration tests",
+    "e2e: end-to-end flows (fake-agent fixture; never spends quota)",
+]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "C4", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+[tool.saha]
+tasks_dir = "docs/tasks"

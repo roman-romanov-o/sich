@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.ty_cache/
+dist/
+build/
+*.egg-info/
+.DS_Store
+
+# Swift / Ghostling app
+.build/
+# Vendored libghostty-vt static archives are large (~32M) and rebuildable.
+# Headers + modulemap + Info.plist stay tracked (ABI of record); see
+# app/Frameworks/README.md for the one-command rebuild.
+app/Frameworks/*.xcframework/**/*.a
+
+# QA / sign-off capture output — transient, machine-local, and large (multi-MB
+# PNGs of the live window). The sign-off itself is a live human confirmation
+# recorded in STATUS.md + the loop-state YAML, not a checked-in binary.
+.artifacts/
+
+# Compiled Phase 00 spike binary (rebuildable via spike/phase00-pty-smoke/build.sh;
+# smoke.c + RESULT.md stay tracked).
+spike/phase00-pty-smoke/smoke

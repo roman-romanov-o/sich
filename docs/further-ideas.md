@@ -1,0 +1,6 @@
+- Analytics over work we do (understanding amount of human time, amount of agent time, amount of tokens spent on each task)
+- Retrospective estimation of task description, and RL over estimation <-> actual time spent
+- Sync with calendars, so we can make optimizations, on which task we should work next
+- Emphasize, that human is single-threaded, and optimization for that puprose, planning of rest based on calendar
+- Switch between Claude Code / Codex / Gemini CLI / Cursor CLI -> I can replace agent easily for the task
+- Easy integration with Jira for task import

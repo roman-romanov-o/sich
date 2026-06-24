@@ -1,0 +1,2 @@
+{"hook_event_name": "SessionStart", "session_id": "sess-silent", "cwd": "/repo", "timestamp": "2026-06-16T12:00:00+00:00", "source": "hook"}
+{"hook_event_name": "PreToolUse", "session_id": "sess-silent", "cwd": "/repo", "tool_name": "Bash", "tool_input": {"command": "sleep 600"}, "timestamp": "2026-06-16T12:00:03+00:00", "source": "hook"}

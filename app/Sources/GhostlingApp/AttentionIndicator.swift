@@ -1,0 +1,57 @@
+import AppKit
+import GhostlingCore
+
+/// The board-header "N waiting on you" signal (US-005 AC#1). It renders the
+/// `Attention.count` and reads quiet/zero with no false alarm when nothing needs
+/// the operator (AC#3). Clicking it (when non-zero) routes to the waiting/blocked
+/// cards (AC#2) via ``onActivate``. Single responsibility: present the count and
+/// report activation — it derives nothing it isn't handed.
+@MainActor
+final class AttentionIndicator: NSView {
+    /// Invoked when the operator activates a non-zero indicator (US-005 AC#2).
+    var onActivate: (() -> Void)?
+
+    private let label = NSTextField(labelWithString: "")
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = 4
+        buildLabel()
+        update(count: 0)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    private func buildLabel() {
+        label.font = BoardTheme.monoBold
+        label.isBezeled = false
+        label.drawsBackground = false
+        label.isEditable = false
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    /// Re-render for a new count. Zero is the quiet state: muted text, no badge
+    /// fill, not clickable — the explicit no-false-alarm read (US-005 AC#3).
+    func update(count: Int) {
+        if count == 0 {
+            label.stringValue = "all quiet"
+            label.textColor = BoardTheme.textFaint
+            layer?.backgroundColor = NSColor.clear.cgColor
+        } else {
+            label.stringValue = "⚠ \(count) waiting on you"
+            label.textColor = NSColor.white
+            layer?.backgroundColor = BoardTheme.alert.cgColor
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        onActivate?()
+    }
+}
