@@ -1,0 +1,232 @@
+task_id: task-03-native-core
+task_path: docs/tasks/task-03-native-core
+current_phase: awaiting_visual_signoff
+current_iteration: 4
+max_iterations: 10
+started_at: 2026-06-26T00:00:00Z
+completed_at: 2026-06-26T00:00:00Z
+error_message: null
+iterations:
+  - iteration: 1
+    started_at: 2026-06-26T00:00:00Z
+    steps:
+      - phase: implementation
+        status: completed
+        output_summary: "Native QuotaUsageReader (port of jsonl_usage+live); 10 tests TC-UNIT-301..306 + TC-INT-300..303; 81/81 swift green; no Python deleted"
+      - phase: integrity_guard
+        status: passed
+        output_summary: "all 6 frozen-spec hashes unchanged"
+      - phase: test_critique
+        status: passed
+        output_summary: "A grade; 10/10 cases present; parity test genuine; 0 hollow"
+      - phase: qa
+        status: passed
+        output_summary: "swift 81/81, pytest 67/67, firewall grep clean; 1 unhandled-resource build warning to check"
+      - phase: code_quality
+        status: failed
+        output_summary: "2 blocking build warnings: Package.swift fixtures undeclared (.copy Fixtures); QuotaSidecar.isHealthy() Swift6 captured-var race (nonisolated(unsafe))"
+      - phase: manager
+        status: completed
+        output_summary: "recorded phase-01 In Progress + 2 pending warnings; user-stories untouched (frozen)"
+    test_critique_passed: true
+    dod_achieved: true
+    quality_passed: false
+    fix_info: "quality fail: 2 build warnings — see context.fix_info"
+  - iteration: 2
+    started_at: 2026-06-26T00:00:00Z
+    mode: fix
+    steps:
+      - phase: implementation
+        status: completed
+        output_summary: "fix-mode: Package.swift resources:[.copy(Fixtures)] + QuotaSidecar nonisolated(unsafe) var healthy; swift build warning-clean; 81/81 green"
+      - phase: integrity_guard
+        status: passed
+        output_summary: "all 6 frozen-spec hashes unchanged"
+      - phase: test_critique
+        status: skipped
+        output_summary: "no test files changed this iteration (build-hygiene only); iter-1 A grade carried"
+      - phase: qa
+        status: passed
+        output_summary: "swift build 0 warnings (was 2); swift 81/81; pytest 67/67; firewall grep clean (no new spawn sites); TC-INT-300 parity survives .copy(Fixtures)"
+      - phase: code_quality
+        status: passed
+        output_summary: "both iter-1 blocking warnings resolved; 0 warnings/0 issues; nonisolated(unsafe) correct (DispatchSemaphore serializes); isHealthy() 13 lines, SRP, imports top"
+      - phase: manager
+        status: completed
+        output_summary: "phase-01 marked Complete (DoD satisfied) in implementation-plan only; frozen user-stories/test-specs untouched; Phase 02/03/04 left pending"
+      - phase: dod_check
+        status: completed
+        output_summary: "task_complete:false (expected — phased task). Integrity PASSED (6 hashes match, pytest 67=baseline, swift 81>=74). Phase 01/US-002 verified genuinely green+bound (10/10 cases, parity diff real). Routes loop to Phase 02 (US-003). NOT a Phase-01 rework."
+    test_critique_passed: true
+    dod_achieved: true
+    quality_passed: true
+    dod_task_complete: false
+    dod_integrity_passed: true
+    fix_info: null
+    files_changed:
+      - app/Package.swift
+      - app/Sources/GhostlingApp/QuotaSidecar.swift
+    files_added: []
+  - iteration: 3
+    started_at: 2026-06-26T00:00:00Z
+    mode: phase
+    steps:
+      - phase: implementation
+        status: completed
+        output_summary: "Phase 02 native hook sink (US-003): ported detector to server-less Swift file sink (SignalEvent/HookNormalizer/JSONLNormalizer/HookSessionStore/HookEventTail); forwarder→atomic append; SessionsFeed→tail loop; TC-INT-320..327 + TC-UNIT-321..323 green, TC-INT-324 diffs frozen Python oracle. swift 95/95, pytest 67/67, warning-clean"
+      - phase: integrity_guard
+        status: passed
+        output_summary: "all 6 frozen-spec hashes unchanged after Phase 02 implementation"
+      - phase: test_critique
+        status: passed
+        output_summary: "A grade; 14 cases, 0 hollow; all US-003 ACs+edges covered; TC-INT-324 real frozen-Python oracle diff (path+final, 4 scenarios); clock injected; tail edge cases real file I/O; TC-INT-320 drives file→tail loop"
+      - phase: qa
+        status: passed
+        output_summary: "swift build 0 warnings; swift 95/95 (TC-INT-320..327 + TC-UNIT-321..323 + TC-INT-324 oracle parity all green); firewall grep clean on new GhostlingCore hook files (comments-only in PoolFirewall/QuotaUsageReader); DD-002 no-server grep clean on SessionsFeed; forwarder curl→O_APPEND; pytest 67/67"
+      - phase: code_quality
+        status: passed
+        output_summary: "0 blocking, 2 advisory. swift build clean (0 warnings); all Swift fns ≲50 lines/SRP/imports-top; shell O_APPEND atomicity+quoting correct (exit-0 contract = intentional no set -e); ruff auto-fixed gen_hook_parity_oracle.py (removed unused UTC import). Advisories: safe non-empty force-unwraps in HookSessionStore.applyBurst; ty null-safety note on tooling script (crash-impossible in call graph)"
+      - phase: manager
+        status: completed
+        output_summary: "phase-02-native-hook-sink.md → Complete (3 steps, 4 ACs, DoD all [x]; iter-3 status block added); README Next Steps ticked P01+P02, left P03/P04 pending. Edited ONLY implementation-plan/ + README; frozen user-stories/test-specs untouched."
+      - phase: dod_check
+        status: completed
+        output_summary: "task_complete:false (expected — phased). Integrity PASSED (6 hashes match, pytest 67=floor, swift 102>=74 floor, 0 skips). Phases 01+02 (US-002+US-003) fully bound to green swift cases (TC-UNIT-301..306+TC-INT-300..303 quota; TC-INT-320..327+TC-UNIT-321..323 hook sink); probe smokes pass (echo exit0, claude -p exit2). No marker conflicts — P01/P02 Complete markers accurate, P03/P04 Pending accurate. Routes loop to Phase 03 cutover (US-001+US-004)."
+    test_critique_passed: true
+    dod_achieved: true
+    quality_passed: true
+    dod_task_complete: false
+    dod_integrity_passed: true
+    fix_info: null
+    files_changed:
+      - .claude/scripts/ghostling-forward.sh
+      - app/Sources/GhostlingApp/SessionsFeed.swift
+      - app/Tests/GhostlingAppTests/SessionsFeedTests.swift
+      - scripts/gen_hook_parity_oracle.py
+    files_added:
+      - app/Sources/GhostlingCore/SignalEvent.swift
+      - app/Sources/GhostlingCore/HookNormalizer.swift
+      - app/Sources/GhostlingCore/JSONLNormalizer.swift
+      - app/Sources/GhostlingCore/HookSessionStore.swift
+      - app/Sources/GhostlingCore/HookEventTail.swift
+      - app/Tests/GhostlingCoreTests/HookSinkTests.swift
+      - app/Tests/GhostlingCoreTests/Fixtures/hook-parity/normal_turn.jsonl
+      - app/Tests/GhostlingCoreTests/Fixtures/hook-parity/dropped_stop.jsonl
+      - app/Tests/GhostlingCoreTests/Fixtures/hook-parity/rapid_transitions.jsonl
+      - app/Tests/GhostlingCoreTests/Fixtures/hook-parity/silent_after_running.jsonl
+      - app/Tests/GhostlingCoreTests/Fixtures/hook-parity/oracle-detector.json
+      - scripts/gen_hook_parity_oracle.py
+  - iteration: 4
+    started_at: 2026-06-26T00:00:00Z
+    mode: phase
+    steps:
+      - phase: implementation
+        status: completed
+        output_summary: "Phase 03 cutover (US-001+US-004): removed SidecarProcess(python3 spawn)+HTTP QuotaPoller from QuotaSidecar.swift; live quota rewired to native NativeQuotaPoller→QuotaUsageReader→QuotaProjection.gauge() (BoardShell bootstrap); SessionsFeed confirmed server-less tail. git rm -r src/mission_control + Python tests/ (39 files); deleted scripts/gen_hook_parity_oracle.py (dead — oracle JSON frozen); pyproject.toml stripped to repo tooling (no Python pkg). Added CutoverGuard.swift + CutoverTests.swift binding TC-E2E-301/302/303/320. swift build warning-clean; swift test 98 passed (95→98: −2 QuotaWireTests transport, +5 CutoverTests). [implementer agent stalled before returning JSON; step reconstructed + independently re-verified: build/test green, probe claude -p exit2, grep guard clean, frozen-Python parity TC-INT-300 still green]"
+      - phase: integrity_guard
+        status: passed
+        output_summary: "all 6 frozen-spec hashes match baseline exactly (re-verified post-stall). Python tests/ deletion (pytest floor retires) is the PLANNED US-004 AC2 cutover, parity-gated — NOT tampering. Swift floor 74 intact (suite 98>=74)."
+      - phase: test_critique
+        status: passed
+        output_summary: "A grade (4.6/5, confidence high); 27 cases analyzed, 0 hollow. 100% parity-matrix coverage (TC-UNIT-301..306, TC-INT-300..303, TC-INT-320..327, TC-UNIT-321..323, TC-E2E-301..303+320). All US-001/002/003/004 ACs bound. Frozen-oracle parity (TC-INT-300/324) survives the cutover = US-004 AC1 guard. TC-E2E-303 grep guard greps full wire 127.0.0.1:8787 (not bare 8787 the production constant holds) — correct. Real data sources, no SUT mocking. Pixel 'panels still render' correctly flagged needs_human_visual, not failed."
+      - phase: qa
+        status: passed
+        output_summary: "dod_achieved:true. swift build 0 warnings; swift test 98/98 (0 failed/0 skipped, >=74 floor); probe claude -p → exit 2 (firewall survives cutover). Structural: src/mission_control + tests/ absent, grep guard clean (mission_control/127.0.0.1:8787 zero hits in app/Sources+scripts), pyproject.toml has no [project]/[build-system]/Python pkg. Parity-before-deletion US-004 AC1 green (TC-INT-300 quota oracle + TC-INT-324 detector oracle). pytest intentionally absent (Python retired) — NOT a regression. 1 pixel AC (US-001 AC3 panels render) → needs_human_visual, carried to DoD."
+      - phase: code_quality
+        status: passed
+        output_summary: "quality_passed:true; 0 blocking, 0 ignored. swift build 0-warning/0-error whole package; all changed fns ≲50 lines + SRP; no dead sidecar code, no orphaned URLSession/HTTP imports, all imports module-level; pyproject.toml cleanly stripped to [tool.ruff]+[tool.saha]. CutoverGuard watcher-not-spawner compliant (ps = read-only query, socket connect = probe not bind/listen, never spawns an agent). SidecarProcess/GET-quota strings remain only as cutover doc-comment narrative. swiftlint/swift-format not installed (build-warnings + repo heuristics used)."
+      - phase: manager
+        status: completed
+        output_summary: "phase-03-cutover-and-delete.md → 'Complete (iter 4: machine verification passed, visual sign-off pending)'; 3 steps + machine ACs [x]; DoD [~] (pixel AC awaiting visual). implementation-plan/README phase table: P01 Complete(iter2)/P02 Complete(iter3)/P03 Machine-complete(iter4). README header + Next Steps updated (P01/02/03 done-pending-visual; P04 optional stretch). Edited ONLY implementation-plan/ + README — frozen user-stories/ + test-specs/ untouched."
+      - phase: dod_check
+        status: completed
+        output_summary: "AUTHORITATIVE VERDICT (confidence high): task_complete:false, machine_gates_complete:true, awaiting_visual_signoff:true. All 4 gates pass across both runtimes. COVERAGE 14/14 ACs bound (US-001 AC1→TC-E2E-301, AC2→TC-E2E-302; US-002 AC1-4→TC-UNIT-301..306+TC-INT-300..303; US-003 AC1-4→TC-INT-320..327+TC-UNIT-321..323+TC-E2E-320; US-004→parity matrix+TC-E2E-303 grep guard); US-005 stretch excluded per test-specs README. GREEN: swift 105 collected (98 swift-testing + 7 XCTest), all passed, 0 skipped (>=74 floor); probe claude -p exit 2; pytest 0 (Python retired, planned US-004 AC2). INTEGRITY: all 6 frozen-spec hashes match exactly; parity oracles TC-INT-300+TC-INT-324 present+green (proof no behavior dropped in deletion); src/mission_control + tests/ absent; grep mission_control/127.0.0.1:8787 clean (bare 8787 only in CutoverGuard.sidecarPort); pyproject no Python pkg. QUALITY: swift build warning-clean. SOLE RESIDUE: US-001 AC3 pixel AC (panels still render with no Python) → needs_human_visual, no screenshot → routes to awaiting_visual_signoff terminal state, NOT a fix iteration. No marker_conflicts (phase-03 README agrees with ground truth)."
+    test_critique_passed: true
+    dod_achieved: true
+    quality_passed: true
+    fix_info: null
+    visual_checks:
+      - criterion: "US-001 AC3 — quota panel shows interactive pool populated + board shows reconciled sessions with NO sidecar (no python3 child)"
+        needs_human_visual: true
+        artifact: null
+        what_to_check: "cd app && swift run ghostling; open quota panel; interactive pool shows real usage (not unknown); board populates from native poller; no python3 in Activity Monitor."
+    files_changed:
+      - app/Sources/GhostlingApp/QuotaSidecar.swift
+      - app/Sources/GhostlingApp/BoardShell.swift
+      - app/Sources/GhostlingApp/SessionsFeed.swift
+      - pyproject.toml
+    files_added:
+      - app/Sources/GhostlingApp/CutoverGuard.swift
+      - app/Tests/GhostlingAppTests/CutoverTests.swift
+    files_deleted:
+      - src/mission_control/** (23 files — board/detector/quota/server)
+      - tests/** (16 Python files — e2e/integration/unit/fixtures)
+      - scripts/gen_hook_parity_oracle.py
+context:
+  current_plan_phase: phase-03-cutover-and-delete
+  fix_info: |
+    Phases 01 (US-002 native quota) and 02 (US-003 native hook sink) are COMPLETE and DoD-verified
+    green — do NOT re-work them. Parity is PROVEN (iter-3 DoD: every parity-matrix row binds to a
+    green swift case with Python still present). Proceed to Phase 03: the cutover + Python deletion.
+    Read implementation-plan/phase-03-cutover-and-delete.md, user-stories/US-001-single-binary-launch.md,
+    user-stories/US-004-retire-python-core.md.
+
+    GOAL — single Swift binary, no Python, no localhost server. Steps:
+    1. Remove sidecar coupling in app/:
+       - Delete SidecarProcess (python3 spawn + isHealthy port probe) from QuotaSidecar.swift.
+       - Delete the HTTP QuotaPoller; wire the LIVE quota panel to the native QuotaUsageReader →
+         QuotaProjection.gauge() (projection math already native — REUSE, do not reimplement).
+       - SessionsFeed is already file-tail (Phase 02) — confirm zero residual HTTP.
+       - Update the launcher/app bootstrap so nothing spawns or probes a sidecar.
+    2. Delete the Python core LAST (parity already proven — safe):
+       - git rm -r src/mission_control tests/ (Python).
+       - Remove the app's Python runtime from pyproject.toml.
+       - Delete scripts/gen_hook_parity_oracle.py (it imports the now-deleted detector; the
+         oracle-detector.json fixture is already frozen+committed, so the generator is dead code).
+       - Update/remove any .claude/scripts referencing mission_control.
+    3. Bind the cutover ACs to GREEN swift cases / probe smokes:
+       - TC-E2E-301: launch → ZERO python/python3 child processes.
+       - TC-E2E-302: nothing bound on 127.0.0.1:8787.
+       - TC-E2E-303: grep guard — no `mission_control` / `8787` in app/ + scripts (only historical docs).
+       - TC-E2E-320: append a Stop line → board reflects it within one poll, NO server (app-level tail).
+
+    HARD CONSTRAINTS:
+      - Watcher-not-spawner: KEEP the PTYSession/$SHELL terminal spawn (the allowed interactive-shell
+        spawn — never claude -p). Only the python3 SIDECAR spawn + HTTP are deleted. After cutover the
+        firewall grep must still show no `claude -p` / headless-agent spawn.
+      - Do NOT delete or weaken any SWIFT test. The swift floor (74) stays the monotonicity guard and
+        the suite must remain >= the full parity matrix. Deleting the PYTHON tests/ is the PLANNED
+        US-004 deletion (the pytest floor retires once Python is gone — that is expected, NOT tampering).
+      - Frozen contract: do NOT touch user-stories/ or test-specs/.
+      - Two Anthropic pools never netted (projection math untouched).
+    NOTE: a pixel AC ("quota/board panel still renders with no Python") will route to
+    awaiting_visual_signoff with a captured screenshot — that is the loop's legitimate terminal
+    checkpoint, not an iteration failure.
+
+    --- prior fix-info (Phase 02, resolved, retained for trail) ---
+    Phase 02 ported the detector to a server-less Swift file sink (SignalEvent/HookNormalizer/
+    JSONLNormalizer/HookSessionStore/HookEventTail); forwarder curl→O_APPEND; SessionsFeed→tail loop.
+    swift 95/95, pytest 67/67, TC-INT-320..327 + TC-UNIT-321..323 + TC-INT-324 oracle parity green.
+  git_baseline: 47d375a1e5b8bf02920474119682d410029111c3
+  tests_collected_baseline: 67
+  swift_tests_collected_baseline: 74
+  spec_baseline:
+    docs/tasks/task-03-native-core/user-stories/US-001-single-binary-launch.md: 8ecbd36ef5d309fc0f33ad51f9e184578b8a211eca15ac0558a35570ced1ef5c
+    docs/tasks/task-03-native-core/user-stories/US-002-native-quota-reads.md: a73aa3d71ee8aa90145df09287b648fc8b70f49ea89861098b2a5588aa1d1074
+    docs/tasks/task-03-native-core/user-stories/US-003-native-hook-sink.md: dbf4b6dacb5eaf9584ca1536c53f3f0ebec407c639d007cc0c9e7498f71fac34
+    docs/tasks/task-03-native-core/user-stories/US-004-retire-python-core.md: 6308b19c0d8422cbefe8b3a21f3d87980e8332e87566b835a0d5b1b79e649d6f
+    docs/tasks/task-03-native-core/user-stories/US-005-multitool-hook-normalization.md: b572774505bf8ab68102c89b288c35f7fab8cdfc8e1129f26d569dad3c80a795
+    docs/tasks/task-03-native-core/test-specs/README.md: fc77589b87e2754d3bc105877916526ee5045ff8fff6d7b7b7ae6f35b0fda65a
+  visual_signoff_required:
+    - ac: "US-001:AC3"
+      story: docs/tasks/task-03-native-core/user-stories/US-001-single-binary-launch.md
+      what: "With NO Python sidecar running, the quota panel shows the interactive pool populated (non-empty gauge, legible, no error/empty state) AND the board shows reconciled sessions — confirming the native Swift readers carry the load visually."
+      how_to_verify: "cd app && swift run ghostling  (with no python3 on PATH); open the quota panel — interactive pool gauge shows real usage (not 'unknown'); board populates from the native poller; confirm NO python3 child in Activity Monitor."
+      machine_evidence: "TC-E2E-301/302/320 prove the data is present in-process and server-less; only the on-screen render is unverified."
+      artifact: null
+last_agent_output: |
+  DoD verdict iter 4 (execution-dod-native, confidence high):
+  task_complete:false, machine_gates_complete:true, awaiting_visual_signoff:true.
+  swift 105/105 green (>=74 floor), probe claude -p exit 2, 6 spec hashes match,
+  parity oracles TC-INT-300+TC-INT-324 green, cutover structural checks all pass.
+  Sole residue: US-001 AC3 pixel render → human visual sign-off.

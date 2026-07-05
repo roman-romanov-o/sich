@@ -37,6 +37,49 @@ public final class Terminal {
         }
     }
 
+    /// Resize the emulator grid (reflows the primary screen when wraparound is on)
+    /// and update its pixel dimensions. Pair with the pty's `TIOCSWINSZ` so the
+    /// child and the emulator agree on geometry — the fix for a child stuck at 80×24.
+    public func resize(cols: UInt16, rows: UInt16, cellWidthPx: UInt32, cellHeightPx: UInt32) {
+        ghostty_terminal_resize(handle, cols, rows, cellWidthPx, cellHeightPx)
+    }
+
+    /// A colour-aware viewport snapshot (resolved fg/bg per cell + the real cursor),
+    /// the render path `TerminalSurface` draws. Lazily creates the render state;
+    /// returns ``TerminalGrid/empty`` if it could not be created.
+    public func snapshot() -> TerminalGrid {
+        renderState?.snapshot(from: handle) ?? .empty
+    }
+
+    private lazy var renderState: RenderState? = try? RenderState()
+
+    /// Scroll the viewport by `delta` rows (negative = up into scrollback).
+    /// The next ``snapshot()`` reflects the scrolled viewport.
+    public func scrollViewport(delta: Int) {
+        var behavior = GhosttyTerminalScrollViewport()
+        behavior.tag = GHOSTTY_SCROLL_VIEWPORT_DELTA
+        behavior.value.delta = delta
+        ghostty_terminal_scroll_viewport(handle, behavior)
+    }
+
+    /// Snap the viewport back to the live bottom (the active screen).
+    public func scrollViewportToBottom() {
+        var behavior = GhosttyTerminalScrollViewport()
+        behavior.tag = GHOSTTY_SCROLL_VIEWPORT_BOTTOM
+        ghostty_terminal_scroll_viewport(handle, behavior)
+    }
+
+    /// Whether the child has enabled bracketed paste (DEC mode 2004) — the paste
+    /// path wraps the payload in `ESC[200~` / `ESC[201~` when set, so multi-line
+    /// pastes reach a TUI (Claude Code, vim) as one paste, not typed keystrokes.
+    public var bracketedPasteEnabled: Bool {
+        var value = false
+        // GHOSTTY_MODE_BRACKETED_PASTE is a function-like C macro Swift can't
+        // import; expand it: DEC private mode 2004.
+        let r = ghostty_terminal_mode_get(handle, ghostty_mode_new(2004, false), &value)
+        return r == GHOSTTY_SUCCESS && value
+    }
+
     /// Render the active screen as trimmed plain text.
     public func plainText() throws -> String {
         let formatter = try makePlainFormatter()

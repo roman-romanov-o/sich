@@ -2,7 +2,7 @@ import Foundation
 
 /// Which agentic-coding tool a session runs. The board (Phase 03) and the quota
 /// brain (Phase 04) group and bill by this.
-public enum AgentType: String, Sendable, Equatable, CaseIterable {
+public enum AgentType: String, Codable, Sendable, Equatable, CaseIterable {
     case claude
     case codex
     case gemini
@@ -12,7 +12,7 @@ public enum AgentType: String, Sendable, Equatable, CaseIterable {
 
 /// Which scheduling flow launched the session — the two-pool distinction the
 /// product is built around (see project memory: two-flow thesis).
-public enum FlowTag: String, Sendable, Equatable, CaseIterable {
+public enum FlowTag: String, Codable, Sendable, Equatable, CaseIterable {
     case interactive
     case backlog
 }
@@ -41,6 +41,11 @@ public final class Session: Identifiable {
     public let flowTag: FlowTag
     public let pty: PTYSession
     public private(set) var state: SessionState
+    /// The cwd the running shell has REPORTED via OSC-7 shell-integration (US-004), or
+    /// nil until it emits one. This is the "reported, not inferred" signal — distinct
+    /// from the launch-time ``projectDir`` — updated live off the PTY stream as the
+    /// operator `cd`s inside the session, never derived from a process scan.
+    public private(set) var reportedCwd: String?
 
     public init(
         id: UUID = UUID(),
@@ -61,5 +66,11 @@ public final class Session: Identifiable {
     /// Transition into the given state. Used by ``SessionRegistry``.
     func transition(to newState: SessionState) {
         state = newState
+    }
+
+    /// Record a cwd the shell REPORTED semantically (OSC-7 off the live PTY stream).
+    /// Public so the app-side output bridge can update it as `cd`s arrive.
+    public func reportCwd(_ path: String) {
+        reportedCwd = path
     }
 }

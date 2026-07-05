@@ -1,0 +1,93 @@
+import Foundation
+
+/// A versioned, `Codable` snapshot of the open window/pane tree, persisted on quit
+/// and restored on launch (US-003). Shape is `{createdAt, version, windows}`.
+///
+/// A pane records **cwd + session identity** only — never the agent command — so a
+/// restore can re-open a shell but can't resurrect a headless agent (the
+/// watcher-not-spawner invariant lives in the *shape* of what we persist, not just
+/// the restore code).
+public struct SessionSnapshot: Codable, Equatable, Sendable {
+    /// Bump when the on-disk shape changes. A snapshot whose `version` differs is
+    /// ignored (start clean) rather than crashed on — US-003 edge case 1.
+    public static let currentVersion = 1
+
+    public let createdAt: Date
+    public let version: Int
+    public let windows: [WindowSnapshot]
+
+    public init(
+        createdAt: Date,
+        version: Int = SessionSnapshot.currentVersion,
+        windows: [WindowSnapshot]
+    ) {
+        self.createdAt = createdAt
+        self.version = version
+        self.windows = windows
+    }
+}
+
+/// One window in the persisted tree: an ordered list of panes. Core has no window
+/// layout model of its own, so a single window is the natural default; the app
+/// layer may group panes into several windows before persisting.
+public struct WindowSnapshot: Codable, Equatable, Sendable {
+    public let panes: [PaneSnapshot]
+    public init(panes: [PaneSnapshot]) { self.panes = panes }
+}
+
+/// One pane's restorable identity: **cwd + session identity** plus the child PID
+/// captured at snapshot time. The PID is used only to decide reopen-vs-closed on
+/// restore — never to re-attach — and the agent command is deliberately not stored.
+public struct PaneSnapshot: Codable, Equatable, Sendable {
+    public let sessionID: UUID
+    public let cwd: String
+    public let agentType: AgentType
+    public let flowTag: FlowTag
+    public let childPID: Int32?
+
+    public init(
+        sessionID: UUID,
+        cwd: String,
+        agentType: AgentType,
+        flowTag: FlowTag,
+        childPID: Int32?
+    ) {
+        self.sessionID = sessionID
+        self.cwd = cwd
+        self.agentType = agentType
+        self.flowTag = flowTag
+        self.childPID = childPID
+    }
+}
+
+/// How a pane came back on restore.
+public enum PaneLiveness: String, Codable, Equatable, Sendable {
+    /// A fresh shell/pane was re-opened at the pane's cwd — the normal case, and
+    /// the only case for a pane whose recorded process was still alive.
+    case reopened
+    /// The pane's underlying process was gone → restored closed/dead, not
+    /// live-frozen (US-003 edge case 3). No shell is re-opened for it.
+    case dead
+}
+
+/// The outcome of restoring one pane: its original identity, the resolved cwd
+/// (the home fallback when the original directory is gone), and whether it came
+/// back live-reopened or closed/dead.
+public struct RestoredPane: Equatable, Sendable {
+    public let snapshot: PaneSnapshot
+    public let cwd: String
+    public let cwdFellBackToHome: Bool
+    public let liveness: PaneLiveness
+
+    public init(
+        snapshot: PaneSnapshot,
+        cwd: String,
+        cwdFellBackToHome: Bool,
+        liveness: PaneLiveness
+    ) {
+        self.snapshot = snapshot
+        self.cwd = cwd
+        self.cwdFellBackToHome = cwdFellBackToHome
+        self.liveness = liveness
+    }
+}

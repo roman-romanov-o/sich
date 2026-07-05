@@ -1,6 +1,7 @@
 #include "pty_support.h"
 
 #include <unistd.h>
+#include <sys/ioctl.h>   // TIOCSWINSZ
 
 #if defined(__APPLE__)
 #include <util.h>   // forkpty() on macOS
@@ -25,4 +26,9 @@ int gl_spawn_in_pty(char *const argv[],
     }
     *child_out = pid;
     return master;
+}
+
+int gl_set_winsize(int fd, unsigned short rows, unsigned short cols) {
+    struct winsize ws = {.ws_row = rows, .ws_col = cols};
+    return ioctl(fd, TIOCSWINSZ, &ws);
 }

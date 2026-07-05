@@ -11,6 +11,12 @@ final class AttentionIndicator: NSView {
     /// Invoked when the operator activates a non-zero indicator (US-005 AC#2).
     var onActivate: (() -> Void)?
 
+    /// The last count handed to ``update(count:)``. The always-visible attention
+    /// badge is what US-005 asserts stays correct while drilled in, so this is the
+    /// deterministic seam a test reads to prove the board re-rendered on a live
+    /// change — no wall-clock latency (TC-INT-015).
+    private(set) var renderedCount = 0
+
     private let label = NSTextField(labelWithString: "")
 
     override init(frame frameRect: NSRect) {
@@ -40,6 +46,7 @@ final class AttentionIndicator: NSView {
     /// Re-render for a new count. Zero is the quiet state: muted text, no badge
     /// fill, not clickable — the explicit no-false-alarm read (US-005 AC#3).
     func update(count: Int) {
+        renderedCount = count
         if count == 0 {
             label.stringValue = "all quiet"
             label.textColor = BoardTheme.textFaint
@@ -47,7 +54,7 @@ final class AttentionIndicator: NSView {
         } else {
             label.stringValue = "⚠ \(count) waiting on you"
             label.textColor = NSColor.white
-            layer?.backgroundColor = BoardTheme.alert.cgColor
+            layer?.backgroundColor = BoardTheme.attentionBadge.cgColor  // white-on-fill clears AA
         }
     }
 

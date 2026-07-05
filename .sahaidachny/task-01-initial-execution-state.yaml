@@ -1,508 +1,98 @@
 task_id: task-01-initial
 task_path: docs/tasks/task-01-initial
 current_phase: completed
-current_iteration: 4
+current_iteration: 1
 max_iterations: 10
-started_at: 2026-06-20T18:10:00Z
-completed_at: 2026-06-24T17:57:01Z
+started_at: 2026-06-24T19:15:00Z
+completed_at: 2026-06-24T19:53:18Z
 error_message: null
+# 2026-06-24T19:53 — visual sign-off RECEIVED. This session re-verified ground truth
+# (pytest 59/59, swift test 52/52, 13/13 frozen specs intact) and the human confirmed the
+# live ghostling-quota window ("I opened quota, it worked fine"). The lone pixel residue
+# (US-006 AC1/AC2 render) is cleared → task COMPLETE. No fresh implementer iteration was
+# spent (recipe: pixel residue must not churn the loop).
+visual_signoff:
+  received_at: 2026-06-24T19:53:18Z
+  method: live ghostling-quota window, human glance
+  human_words: "I opened quota, it worked fine"
+  acs: ["US-006 AC1", "US-006 AC2 (four distinct never-netted gauges render)"]
 iterations:
   - iteration: 1
-    started_at: 2026-06-20T18:10:00Z
+    started_at: 2026-06-24T19:15:00Z
     steps:
       - phase: implementation
         status: completed
         output_summary: >-
-          Built Phase 03 board+attention+drill-in rendering in the Swift app. Tier 1: ported
-          Python board derivations (card/placement/attention) into GhostlingCore as pure Swift
-          (BoardCard/CardState/CardAgent/CardFlow, BoardColumn+placeCards, Attention.count/cards,
-          BoardSelection drill-in/filter) with 16 new GhostlingCoreTests covering US-003 AC1/AC2
-          + US-005 AC1/AC2/AC3 — swift test now 40 (was 28), all green. Tier 2: AppKit surface
-          (BoardView state-columns × two-flow swimlanes, SessionCard, AttentionIndicator quiet@0,
-          DrillInPanel hosting embedded TerminalSurface per DD-001) + ghostling-board executable
-          seeded with firewall-clean fake sessions for screenshots. Critique fixes carried.
+          Built US-006 UI slice: QuotaGauge.swift value-type mirror of aggregator.py in
+          GhostlingCore; custom-drawn layer-backed QuotaPanel.swift + QuotaGaugeRow.swift (four
+          distinct never-netted gauges, estimated/exhausted/unknown cues, hard-stop vs window
+          asymmetry); screenshottable ghostling-quota target; 8 swift tests (TC-INT-101..104 +
+          TC-E2E-201..204). swift build clean; swift test 44 -> 52 green.
       - phase: integrity_guard
         status: completed
-        output_summary: "All 13 frozen spec hashes unchanged — no contract tampering. Implementer edited only app/ (Package.swift, README, 13 new Swift files)."
+        output_summary: All 13 frozen contract hashes match baseline. No goalpost movement.
       - phase: test_critique
         status: completed
         output_summary: >-
-          Score A. 12 view-model tests analyzed, 0 hollow, 0 mocks (drive real
-          BoardColumn/placeCards/Attention/BoardSelection over real BoardCard). All
-          machine-assertable ACs covered: US-003 AC1 (placement), AC2 (metadata),
-          US-005 AC1 (count=waiting+blocked), AC3 (zero/quiet), AC2 (attention filter),
-          US-002 AC1/AC2 (drill-in selection/return logic). Deferred TC-E2E-004/005/006/007
-          (unknown-not-guessed, exit→done, zombie→stale, 7-session responsiveness) correctly
-          left to process-lifecycle/visual layer — not a completeness fail for this slice.
-      - phase: qa
-        status: completed
-        output_summary: >-
-          dod_achieved (machine gate). runtimes_run=[swift-build, swift-test, pytest-regression].
-          swift build clean (0 warnings); swift test 40/40 passed / 0 skipped (baseline 28 → +12);
-          pytest 59/59 (regression holds). Each machine-assertable AC bound to a named green
-          swift test (US-003 AC1/AC2, US-005 AC1/AC2/AC3, US-002 AC1/AC2 logical). ghostling-board
-          builds + launches clean 4s, pool firewall verified (fake /bin/sh agents, no claude -p).
-          4 pixel/interaction ACs (US-003 AC3, US-002 AC1/AC2/AC3) reported needs_human_visual —
-          board window does not paint headlessly (documented AppKit constraint), no screenshot
-          capturable; carried forward as visual_checks with launch-clean evidence + what_to_check.
+          PASS grade A. 8 swift tests analyzed (4 TC-INT-101..104 + 4 TC-E2E-201..204), 0 hollow.
+          All US-006 ACs covered; render path faithful (tests inject sources -> QuotaProjection ->
+          panel.render() -> assert on built QuotaGaugeRow subviews). No stub_substitution /
+          unfaithful_harness. Pixel AC correctly deferred to screenshot + human sign-off.
       - phase: code_quality
         status: completed
         output_summary: >-
-          quality_passed. 0 blocking issues. swift build warning-clean (0 warnings, 0 errors).
-          All 13 Swift files pass repo rules: functions ≲50 lines, single-responsibility, imports
-          at module top, no force-unwraps on fallible paths, struct/enum data modeling (BoardCard,
-          CardState/Agent/Flow, BoardColumn, BoardSelection, BoardSeed). BoardView (214L) /
-          BoardShell (171L) large as classes but every method <20L — structural, not SRP violations.
-          swiftlint/swift-format not installed; used swift build warnings + manual repo-rule review.
+          quality_passed=true. swift build warning-clean; 0 blocking issues; longest fn ~30 lines
+          (within ≲50 rule); value-typed core; imports at top. 1 advisory (resetLine() computed twice).
       - phase: manager
         status: completed
         output_summary: >-
-          Updated NON-frozen artifacts only (implementation-plan/phase-03-board-and-attention.md +
-          STATUS.md): Phase 03 Swift board surface built; Tier-1 view-model machine-verified (swift
-          test 40/40, +16 board tests). Machine ACs (US-003 AC1/AC2, US-005 AC1/AC2, US-002 AC1/AC2
-          logical) marked green; pixel ACs (US-003 AC3, US-002 AC1/AC2/AC3) marked AWAITING HUMAN
-          VISUAL SIGN-OFF; TC-E2E-004/005/006/007 noted still-deferred. Frozen user-stories/ +
-          test-specs/ NOT edited (verified: all 13 spec hashes still match baseline post-manager).
-      - phase: dod_check
+          status=success. Edited ONLY implementation-plan/phase-04 + STATUS.md (frozen contract
+          untouched — re-verified: all 13 hashes match baseline). Marked Step-3 AC2 + UI built/green,
+          phase Status = machine-verified awaiting human visual sign-off (pixel AC left [~], not [x]).
+      - phase: qa
         status: completed
         output_summary: >-
-          AUTHORITATIVE GATE — verdict task_complete:false, machine_gates_complete:true,
-          awaiting_visual_signoff:true, confidence:high. Ran its OWN clean suites: pytest
-          59/59 (== baseline floor), swift test 40/40 (raised from 28 baseline — dual floor
-          satisfied), both probe smokes green (/bin/echo hello exit 0; claude -p x refused
-          exit 2), swift build warning-clean, ruff clean. Spec integrity: all 13 hashes match
-          frozen baseline. All 18 ACs bound: machine ACs → swift-test (BoardPlacementTests/
-          AttentionSignalTests/BoardSelectionTests) + pytest (TC-E2E-001/002, TC-INT/UNIT) +
-          probe smokes; US-001 AC1 = prior-phase resolved residue (human-approved 2026-06-17).
-          0 marker_conflicts (every [x] consistent with ground truth). 4 pixel/interaction ACs
-          (US-003 AC3, US-002 AC1/AC2/AC3) classified needs_human_visual — AppKit paints only
-          under a foregrounded Aqua session; an implementer pass cannot make them green. Loop
-          paused for the single legitimate human visual checkpoint, NOT churned.
+          dod_achieved=true. swift build clean (0 warnings); swift test 52/52 (44 baseline + 8 new),
+          all 8 quota cases green. Every assertable US-006 AC bound to a passing case. Pixel AC
+          reported needs_human_visual. CAVEAT: the external `screencapture` CLI lacks Screen-Recording
+          permission here so the artifact PNG shows wallpaper, NOT the window — an in-process
+          CGWindowListCreateImage capture (the Phase-03 fix) or a live `swift run ghostling-quota` is
+          required for a faithful sign-off.
     test_critique_passed: true
     dod_achieved: true
     quality_passed: true
+    quality_notes:
+      - "ADVISORY (non-blocking): QuotaGaugeRow.buildContent() calls resetLine() twice; hoist to a let. No correctness impact."
+      - "swiftlint/swift-format not installed; used swift build warnings + repo rules."
     fix_info: null
     visual_checks:
-      - ac: "US-003 AC3 — card moves to new column live on state change"
-        status: needs_human_visual
-        artifact: null
-        evidence: "ghostling-board builds + launches clean (4s, no crash/firewall). Re-render path BoardShell.refresh()→boardView.render(cards:) is code-correct; animated column transition needs a foregrounded Aqua session. Headless screencapture showed only desktop background — window does not appear headlessly (documented AppKit constraint)."
-        what_to_check: "swift run ghostling-board in a desktop session; confirm 7 seeded cards each in correct column, then a state change moves a card to the new column without manual refresh."
-      - ac: "US-002 AC1 — click card → that session's terminal focused/visible"
-        status: needs_human_visual
-        artifact: null
-        evidence: "BoardShell.drill(into:) wired: onSelect → selection.focus + DrillInPanel reveal hosting embedded TerminalSurface (DD-001). Logic green in swift-test; click→focus not headlessly assertable."
-        what_to_check: "Click a card; DrillInPanel slides in (~42% width) showing scrollback + accepting typed input."
-      - ac: "US-002 AC2 — returning to board preserves state"
-        status: needs_human_visual
-        artifact: null
-        evidence: "BoardShell.returnToBoard()→selection.returnToBoard()+refresh() re-renders from same snapshot; BoardSelectionTests.focusAndReturn green. Visual identity after return needs a human."
-        what_to_check: "Drill in, then close DrillInPanel; board restores to prior layout, no card moved."
-      - ac: "US-002 AC3 — terminal focus < 500 ms (in-app, not OS window activation)"
-        status: needs_human_visual
-        artifact: null
-        evidence: "In-app NSView isHidden toggle (synchronous AppKit), structurally faster than OS window activation; <500ms is perceptual, not machine-assertable headlessly."
-        what_to_check: "Click a card; DrillInPanel appearance should feel instant (<500ms)."
+      - ac: "US-006 AC#1/AC#2 — four distinct gauge rows render visibly on screen (TC-E2E-201/202)"
+        needs_human_visual: true
+        artifact: app/.artifacts/quota-panel-signoff-20260624.png
+        artifact_faithful: false   # screencapture CLI got wallpaper only; needs in-process capture or live run
+        what_to_check: >-
+          Four distinct gauge rows: (1) 'interactive (5h + weekly)' with amber 'estimated' badge;
+          (2) 'Agent SDK credit' measured ~60%; (3) 'Codex' ~40%; (4) 'Gemini' inert grey 'unknown /
+          not tracked', no fill. Two Anthropic gauges grouped under 'Anthropic · two pools — never
+          netted'. No single merged Anthropic number anywhere.
     files_changed:
       - app/Package.swift
-      - app/README.md
     files_added:
-      - app/Sources/GhostlingCore/BoardCard.swift
-      - app/Sources/GhostlingCore/BoardColumn.swift
-      - app/Sources/GhostlingCore/Attention.swift
-      - app/Sources/GhostlingCore/BoardSelection.swift
-      - app/Tests/GhostlingCoreTests/BoardPlacementTests.swift
-      - app/Sources/GhostlingApp/BoardTheme.swift
-      - app/Sources/GhostlingApp/SessionCard.swift
-      - app/Sources/GhostlingApp/AttentionIndicator.swift
-      - app/Sources/GhostlingApp/BoardView.swift
-      - app/Sources/GhostlingApp/DrillInPanel.swift
-      - app/Sources/GhostlingApp/BoardShell.swift
-      - app/Sources/GhostlingApp/BoardSeed.swift
-      - app/Sources/ghostling-board/main.swift
-    human_visual_signoff:
-      reviewed_at: 2026-06-20T20:15:00Z
-      approved:
-        - "US-003 AC1 — one card per session, placed by state column (7 cards, A/B swimlanes)"
-        - "US-003 AC2 — cards carry cmux metadata (flow badge, dir, agent, state, SDK/window tag)"
-        - "US-005 AC1 — '⚠ 2 waiting on you' badge prominent + count correct (blocked+waiting=2)"
-        - "US-002 AC1 (function) — click card drills into THAT session's live terminal; accepts typed input"
-      defect:
-        ac: "US-002 drill-in layout"
-        symptom: >-
-          On drill-in the terminal panel renders correctly at the right 42% but the board blanks
-          to black on the left 58% (only a sliver peeks at the far-left edge) — a broken half-state.
-        design_decision: >-
-          User chose FULL-WINDOW TERMINAL takeover for drill-in (immersive Altitude-1): the session
-          terminal fills the entire window, '← board' returns to the board with state preserved.
-          Reverses the 42%-side-panel intent and sidesteps the board-blanking compositing bug.
-      unverified_pending_refix:
-        - "US-002 AC2 — return to board preserves state (not exercised)"
-        - "US-002 AC3 — <500ms focus feel (not commented)"
-        - "US-003 AC3 — live column move on state change (static seed; not triggered)"
-  - iteration: 2
-    started_at: 2026-06-20T20:15:00Z
-    steps:
-      - phase: implementation
-        status: completed
-        output_summary: >-
-          Converted the US-002 drill-in from a 42% side panel into a full-window terminal takeover
-          (Altitude-1): layoutDrillIn pins all four edges to root; drill(into:) hides boardView +
-          attention header (also killing the board-blanking artifact); returnToBoard() un-hides them
-          so board state is preserved. Updated DrillInPanel doc-comment, dropped the now-redundant
-          hairline border. swift build clean, swift test 40/40 green, PoolFirewall intact.
-      - phase: integrity_guard
-        status: passed
-        output_summary: >-
-          All 13 frozen-spec files (6 user-stories + 7 test-specs) hash-match spec_baseline exactly.
-          Implementer touched only app/Sources/GhostlingApp/{BoardShell,DrillInPanel}.swift — contract intact.
-      - phase: test_critique
-        status: completed
-        output_summary: >-
-          Score A, 0 hollow tests. Correctly judged iteration 2 as AppKit view-layer only (constraint
-          pinning + NSView.isHidden toggles) with NO new machine-assertable logic — the drill-in/return
-          state logic is already covered by BoardSelectionTests (focus/return, green). No completeness
-          fail (a layout change has no writable unit test); no quality issues in the existing suite.
-      - phase: qa
-        status: completed
-        output_summary: >-
-          dod_achieved (machine gate). runtimes_run=[swift-build, swift-test, probe-smoke]. swift build
-          warning-clean; swift test 40/40 (== iter-1 floor, no regression); pool firewall intact
-          (echo→exit 0, claude -p→exit 2, claude --print→exit 2). 4 pixel ACs (US-002 AC1/AC2/AC3,
-          US-003 AC3) reported needs_human_visual — headless screencapture shows only desktop wallpaper
-          (documented AppKit constraint); carried forward as visual_checks with launch-clean evidence.
-      - phase: code_quality
-        status: completed
-        output_summary: >-
-          quality_passed, 0 blocking issues. swift build clean (0 warnings). All changed functions
-          well under 50 lines (layoutDrillIn 10L, drill(into:) 8L, returnToBoard() 7L); SRP, module-top
-          imports, no force-unwraps on fallible paths (boardView/attention are non-optional stored props;
-          layer? optional-chaining is the correct AppKit idiom). swiftlint/swift-format not installed.
-      - phase: manager
-        status: completed
-        output_summary: >-
-          Updated NON-frozen artifacts only (implementation-plan/phase-03-board-and-attention.md +
-          STATUS.md): iteration-2 drill-in full-window takeover built + machine-verified (swift test
-          40/40, build/quality clean); iter-1 board-blanking defect resolved; 4 pixel ACs (US-002
-          AC1/AC2/AC3, US-003 AC3) marked AWAITING HUMAN VISUAL SIGN-OFF. Frozen user-stories/ +
-          test-specs/ NOT edited (no checkbox flips) — manager-trap avoided.
-      - phase: dod_check
-        status: completed
-        output_summary: >-
-          AUTHORITATIVE GATE — verdict task_complete:false, machine_gates_complete:true,
-          awaiting_visual_signoff:true, confidence:high. Ran its OWN clean suites: pytest 59/59
-          (== baseline floor), swift test 40/40 (>= 28 floor), both probe smokes green (echo→0,
-          claude -p→2). Integrity: all 13 spec hashes match frozen baseline (post-manager, intact).
-          All 22 ACs bound to executable evidence across pytest + swift-test + probe smokes; quality
-          clean (ruff + swift build 0 warnings). 4 pixel ACs (US-002 AC1/AC2/AC3, US-003 AC3)
-          classified needs_human_visual — headless screencapture cannot paint AppKit; an implementer
-          pass cannot make them green. Loop paused for the single legitimate human checkpoint, NOT churned.
-          marker_conflicts: only cosmetic (US-001 frozen 'Draft' label — no functional disagreement).
-    test_critique_passed: true
-    dod_achieved: true
-    quality_passed: true
-    fix_info: null
-    visual_checks:
-      - ac: "US-002 AC1 — drill-in renders FULL-WINDOW (no side-panel residue, no board behind), terminal typeable"
-        status: needs_human_visual
-        artifact: app/.artifacts/us002-drill-in-fullwindow.png
-        evidence: >-
-          swift build clean; layoutDrillIn pins all 4 edges to root; drill(into:) hides boardView +
-          attention. Artifact = desktop wallpaper only (AppKit does not paint into a headless screencapture).
-        what_to_check: >-
-          Click a card: drill-in fills 100% of the window (NO board columns / attention header visible
-          behind it), dark header strip with '← board' + session title, TerminalSurface fills the rest;
-          typing a character reaches the PTY.
-      - ac: "US-002 AC2 — returning to board preserves state"
-        status: needs_human_visual
-        artifact: app/.artifacts/us002-drill-in-fullwindow.png
-        evidence: >-
-          BoardSelectionTests.focusAndReturn green; returnToBoard() un-hides boardView + attention,
-          hides drillIn, refresh(). Visual identity after return needs a human.
-        what_to_check: >-
-          Press '← board': the board reappears with the SAME cards in the SAME columns as before drilling
-          in; attention header is back; nothing lost or duplicated.
-      - ac: "US-002 AC3 — terminal focus < 500 ms (in-app, not OS window activation)"
-        status: needs_human_visual
-        artifact: null
-        evidence: >-
-          Synchronous NSView isHidden toggle + window.makeFirstResponder in-process; perceptual,
-          not headlessly assertable.
-        what_to_check: >-
-          Click a card: the board→full-window-terminal transition feels instant, no OS window-switch
-          animation, cursor appears in the terminal immediately.
-      - ac: "US-003 AC3 — card moves to new column live on state change (no manual refresh)"
-        status: needs_human_visual
-        artifact: null
-        evidence: >-
-          Re-render path refresh()→boardView.render(cards:) code-correct; BoardPlacement tests green;
-          live transition needs a foregrounded Aqua session.
-        what_to_check: >-
-          With the board visible, trigger a seeded session state change; the card moves to its new
-          column without a manual refresh.
-    files_changed:
-      - app/Sources/GhostlingApp/BoardShell.swift
-      - app/Sources/GhostlingApp/DrillInPanel.swift
-    files_added: []
-    human_visual_signoff:
-      reviewed_at: 2026-06-20T22:40:00Z
-      verdict: REJECTED
-      summary: >-
-        The machine gates were green and the DoD said awaiting_visual_signoff with high confidence,
-        but on the live window the drill-in is BROKEN: clicking a card opens a black, empty terminal
-        you can type into uselessly, and there is NO visible or reachable way back to the board.
-        This is a FALSE PASS — a confident "machine gates complete" verdict shipped a non-functional
-        feature. Root cause: the only "return to board" coverage (BoardSelectionTests.focusAndReturn)
-        tests the BoardSelection VALUE TYPE, never the views; there was no GhostlingAppTests target,
-        so the entire AppKit view layer was untestable, and the real interaction was reframed as
-        optional "pixel sign-off." The pixel-residue carve-out was hiding a genuine behavioral gap.
-      defects:
-        - id: D1-invisible-unreachable-back
-          symptom: >-
-            The '← board' button existed but was invisible (.accessoryBar dark-on-dark on the
-            near-black panel) and there was no keyboard escape — the embedded terminal grabs first
-            responder, so once drilled in the operator is trapped with no way back to the board.
-          severity: blocking
-        - id: D2-useless-empty-terminal
-          symptom: >-
-            The drilled-in terminal is a `cat` stub with no live agent behind it — typing does
-            nothing meaningful. It LOOKS like a real session but is a screenshot demo placeholder,
-            with no on-screen signal that it is a stub. Misleading, not honest.
-          severity: honesty
-      disposition: >-
-        User chose "Fix UX, keep stub for now" (AskUserQuestion): make '← board' unmistakably visible
-        + add an Esc keyboard return; keep the cat/scrollback stub but label it as an honest demo
-        placeholder; ADD real view-level interaction tests that drive the actual view hierarchy.
-        Wiring the drill-in to a real interactive session is explicitly DEFERRED to its own task.
-        => corrective iteration 3.
-  - iteration: 3
-    started_at: 2026-06-20T22:45:00Z
-    trigger: human_signoff_rejection
-    steps:
-      - phase: implementation
-        status: completed
-        output_summary: >-
-          Closed the iter-2 false-pass gap with both the UX fix and — crucially — the missing test
-          layer. (1) Made '← board' unmistakably visible + keyboard-reachable: NSButton .rounded with
-          bezelColor white 0.20 + light contentTintColor (was invisible .accessoryBar dark-on-dark),
-          keyEquivalent = Esc so the operator is never trapped behind the terminal's first responder.
-          Renamed close()→goBack() (internal @objc). (2) Made the cat stub HONEST: it now prints a
-          "— demo session · no live agent attached —" banner + a "(press Esc or click ← board to
-          return)" hint before idling on cat, so it reads as a placeholder, not a real session.
-          (3) Added the previously-MISSING view-level coverage: new GhostlingAppTests target + 3 tests
-          that drive the real BoardShell/DrillInPanel hierarchy. Added testability seams (BoardShell
-          .boardView/.attention/.drillIn + drill/returnToBoard now internal; buildContentForTesting();
-          BoardSeed internal init). swift build clean.
-      - phase: integrity_guard
-        status: passed
-        output_summary: >-
-          All 13 frozen-spec files (6 user-stories + 7 test-specs) still hash-match spec_baseline.
-          Implementer touched only app/ (DrillInPanel, BoardShell, BoardSeed, Package.swift + new
-          Tests/GhostlingAppTests/). Contract intact — no goalpost movement.
-      - phase: test_critique
-        status: completed
-        output_summary: >-
-          The new GhostlingAppTests are the ANTITHESIS of the hollow test that caused the false pass:
-          they @testable-import GhostlingApp and drive the real views — drillHidesBoard asserts
-          boardView/attention isHidden==true + drillIn visible AFTER drill(into:); returnRestoresBoard
-          asserts the board is restored and cards.map(\\.id) is unchanged after returnToBoard();
-          backAffordanceFiresReturn asserts DrillInPanel.goBack() fires onClose (the action behind the
-          now-visible button / Esc). 0 hollow, 0 mocks. This is the coverage whose absence let a broken
-          drill-in ship green.
-      - phase: qa
-        status: completed
-        output_summary: >-
-          dod_achieved (machine gate). runtimes_run=[swift-build, swift-test]. swift build warning-clean;
-          swift test 43/43 (was 40 — the 3 new GhostlingAppTests raise the floor, none deleted). The
-          view-level wiring (board hidden on drill, restored on return, back affordance fires) is now
-          MACHINE-asserted headlessly, not left to a human glance. Residue narrowed: the remaining
-          human check is now only "is the visible '← board'/Esc actually reachable + does the honest
-          stub banner read right" — a confirmation, not the whole interaction.
-      - phase: code_quality
-        status: completed
-        output_summary: >-
-          quality_passed, 0 blocking issues. swift build clean. New/changed functions under 50 lines
-          (backButton 9L, goBack 3L, focus(card:pty:) 9L, command stub builder small); SRP, module-top
-          imports. New GhostlingAppTests target is a sibling testTarget (does not enlarge any shipping
-          function). swiftlint/swift-format still not installed; used build warnings + repo-rule review.
-      - phase: manager
-        status: completed
-        output_summary: >-
-          Updated NON-frozen artifacts only (implementation-plan + STATUS): iter-2 sign-off REJECTED
-          on live inspection (false pass); iter-3 fixed the '← board' visibility/Esc + honest stub +
-          added the missing view-level test target (swift test 40→43). US-002 AC2 return-to-board is
-          now bound to a real view test (DrillInInteractionTests.returnRestoresBoard), no longer only
-          the value-type BoardSelectionTests. Frozen user-stories/ + test-specs/ NOT edited.
-      - phase: dod_check
-        status: completed
-        output_summary: >-
-          AUTHORITATIVE GATE — verdict task_complete:false, machine_gates_complete:true,
-          awaiting_visual_signoff:true, confidence:high. Ran its OWN clean suites: pytest 59/59
-          (== baseline floor), swift test 43/43 (>= 28 floor AND > prior 40 — dual floor satisfied,
-          no test deleted to force green). Integrity: 13/13 spec hashes match frozen baseline. US-002
-          AC2 now binds to a VIEW-LEVEL test (returnRestoresBoard), closing the iter-2 binding-at-the-
-          wrong-layer gap. Remaining visual residue is narrowed to a single confirmation: the now-
-          visible '← board' + Esc is reachable and the honest stub banner reads correctly. The
-          deeper "drill-in shows a REAL live session" is out of scope (deferred task), not a residue
-          of this slice.
-    test_critique_passed: true
-    dod_achieved: true
-    quality_passed: true
-    fix_info: null
-    visual_checks:
-      - ac: "US-002 — '← board' is VISIBLE on the near-black panel and Esc returns to the board"
-        status: needs_human_visual
-        artifact: null
-        evidence: >-
-          DrillInInteractionTests.backAffordanceFiresReturn asserts goBack() fires onClose; the button
-          is now .rounded with bezelColor white 0.20 + light tint + keyEquivalent Esc. Whether it
-          READS as visible and Esc feels right is the human confirmation.
-        what_to_check: >-
-          Drill into a card: a clearly visible '← board' pill sits top-left on the dark panel. Click
-          it OR press Esc → you are back on the board. You are never trapped in the terminal.
-      - ac: "US-002 demo stub is HONEST (reads as a placeholder, not a fake-real session)"
-        status: needs_human_visual
-        artifact: null
-        evidence: >-
-          BoardSeed.command prints '— demo session · no live agent attached —' + a return hint before
-          exec cat. Banner text is asserted indirectly via the seed; legibility is the human check.
-        what_to_check: >-
-          The drilled-in terminal shows the '— demo session · no live agent attached —' banner and the
-          '(press Esc or click ← board to return)' hint at the top — it is obviously a demo, not a
-          real agent session.
-    files_changed:
-      - app/Sources/GhostlingApp/DrillInPanel.swift
-      - app/Sources/GhostlingApp/BoardShell.swift
-      - app/Sources/GhostlingApp/BoardSeed.swift
-      - app/Package.swift
-    files_added:
-      - app/Tests/GhostlingAppTests/DrillInInteractionTests.swift
-    human_visual_signoff:
-      reviewed_at: 2026-06-20T23:50:00Z
-      verdict: REJECTED
-      summary: >-
-        THIRD false pass on the same interaction. Machine gates green + DoD high-confidence again,
-        but on the live window Esc STILL does not return to the board — it types an escape symbol
-        into the terminal. The iter-3 "fix" wired Esc as the back-button's keyEquivalent, but the
-        embedded TerminalSurface is the first responder and its keyDown maps keyCode 53 → .escape →
-        sends it to the PTY, SHADOWING the button key-equivalent so it never fires. The new
-        view-level test backAffordanceFiresReturn could not catch this because it calls goBack()
-        DIRECTLY — it proves the handler works, never that pressing Esc reaches it.
-      defect:
-        id: D3-esc-shadowed-types-into-terminal
-        symptom: >-
-          During visual confirmation there is no way to get off the session: pressing Esc just adds
-          a symbol to the terminal instead of returning to the board. The keyboard return path is
-          non-functional on the live app despite a green "← board"/Esc sign-off line.
-        severity: blocking
-        root_cause_class: stub-substitution-at-the-integration-boundary
-      disposition: >-
-        User demanded a REVIEW SUBAGENT for systemic insights — "why our test infra is poor, and how
-        we can make this never happen" — not just another patch. => corrective iteration 4 (real
-        event-dispatch fix + red-green proof) PLUS a durable interaction-AC binding rule.
-  - iteration: 4
-    started_at: 2026-06-20T23:55:00Z
-    trigger: human_signoff_rejection
-    steps:
-      - phase: review
-        status: completed
-        output_summary: >-
-          code-reviewer subagent named the anti-pattern: "stub substitution at the integration
-          boundary" — an interaction AC bound to a direct handler call (goBack(),
-          BoardSelection.returnToBoard()) instead of the stimulus the USER supplies (a dispatched
-          event). All three false passes share it: every "Esc/return" test called a method, none
-          dispatched a key event past the terminal (the real first responder eating Esc). Prescribed
-          gate rule: an interaction AC must be covered by a test whose stimulus is the same KIND the
-          user provides (a dispatched NSEvent / keyDown / sendEvent / performKeyEquivalent or a
-          declared event seam), proven red→green; a method call does NOT satisfy an input AC.
-          (Refined the reviewer's AppKit mechanism story with provable-from-code facts: intercept in
-          keyDown where keyCode 53 already lands, NOT cancelOperation which keyDown pre-empts.)
-      - phase: implementation
-        status: completed
-        output_summary: >-
-          Real-input fix, proven red→green. (1) Added an injectable escape seam
-          TerminalSurface.onEscape: (() -> Bool)? and an intercept in keyDown: where .escape is
-          mapped (keyCode 53), offer it to onEscape FIRST — true ⇒ consume (leave surface), nil/false
-          ⇒ forward to the PTY so a future real agent can still receive Esc. (2) DrillInPanel.focus
-          sets surface.onEscape = { goBack(); true } and removed the shadowed button.keyEquivalent
-          = Esc (rewrote the doc-comment to say Esc now lives in TerminalSurface.onEscape). (3) Wrote
-          the test the prior 3 iterations lacked: escReturnsToBoardViaEventDispatch constructs a real
-          Esc NSEvent (keyCode 53) and dispatches it to window.firstResponder — RED first (precondition
-          PASSED = terminal focused, returns FAILED = Esc went to PTY), GREEN after the seam. (4) That
-          faithful test then exposed a SECOND latent gap: buildContentForTesting() never called
-          wireInteractions(), so drillIn.onClose was nil and goBack() fired into the void — fixed by
-          wiring the test harness exactly as applicationDidFinishLaunching does.
-      - phase: integrity_guard
-        status: passed
-        output_summary: >-
-          All 13 frozen-spec files still hash-match spec_baseline. Implementer touched only app/
-          (TerminalSurface, DrillInPanel, BoardShell + DrillInInteractionTests). Contract intact.
-      - phase: qa
-        status: completed
-        output_summary: >-
-          dod_achieved (machine gate). runtimes_run=[swift-build, swift-test]. swift build warning-clean;
-          swift test 44/44 (was 43 — the new event-dispatch test raises the floor, none deleted). The
-          keyboard return is now MACHINE-asserted via a dispatched NSEvent through the real responder
-          chain, not a direct goBack() call — the exact gap that shipped Esc broken three times.
-          Proven red→green: RED while TerminalSurface forwarded Esc to the PTY, GREEN once onEscape
-          consumes it.
-      - phase: code_quality
-        status: completed
-        output_summary: >-
-          quality_passed, 0 blocking issues. swift build clean. keyDown(with:) stays small + single-
-          responsibility (guard → escape-intercept → send); onEscape is a stored closure; focus(card:pty:)
-          still <15L; wireInteractions() 3 assignments. Module-top imports, no force-unwraps on fallible
-          paths. swiftlint/swift-format still not installed; used build warnings + repo-rule review.
-      - phase: manager
-        status: completed
-        output_summary: >-
-          Updated NON-frozen artifacts only (implementation-plan + STATUS): iter-3 sign-off REJECTED
-          (third false pass — Esc shadowed, typed into terminal); iter-4 fixed it at the real input
-          layer (onEscape seam + keyDown intercept) with a red→green event-dispatch test, and fixed a
-          second latent gap (unwired test harness). swift test 43→44. Frozen user-stories/ + test-specs/
-          NOT edited.
-      - phase: dod_check
-        status: completed
-        output_summary: >-
-          AUTHORITATIVE GATE — verdict task_complete:false, machine_gates_complete:true,
-          awaiting_visual_signoff:true, confidence:high. pytest 59/59 (== floor), swift test 44/44
-          (>= 28 floor AND > prior 43 — no test deleted). 13/13 spec hashes match frozen baseline.
-          US-002 keyboard-return AC now binds to a test that DISPATCHES a real Esc NSEvent through the
-          responder chain (escReturnsToBoardViaEventDispatch), closing the stub-substitution gap that
-          produced three false passes. Residue narrowed to a single live confirmation: that Esc and
-          the visible '← board' both get the operator out, and the honest stub banner reads right.
-    test_critique_passed: true
-    dod_achieved: true
-    quality_passed: true
-    fix_info: null
-    visual_checks:
-      - ac: "US-002 — pressing Esc in the drilled-in terminal returns to the board (NOT a typed symbol)"
-        status: needs_human_visual
-        artifact: null
-        evidence: >-
-          DrillInInteractionTests.escReturnsToBoardViaEventDispatch dispatches a real Esc NSEvent
-          (keyCode 53) to window.firstResponder and asserts the board is restored — machine-proven
-          red→green. The remaining human check is only that it FEELS right on the live window.
-        what_to_check: >-
-          Drill into a card, then press Esc: you return to the board immediately. Esc must NEVER add a
-          symbol to the terminal again (the iter-3 D3 defect must be GONE). The visible '← board' pill
-          must also work by click.
-    files_changed:
-      - app/Sources/GhostlingApp/TerminalSurface.swift
-      - app/Sources/GhostlingApp/DrillInPanel.swift
-      - app/Sources/GhostlingApp/BoardShell.swift
-      - app/Tests/GhostlingAppTests/DrillInInteractionTests.swift
-    files_added: []
+      - app/Sources/GhostlingCore/QuotaGauge.swift
+      - app/Sources/GhostlingApp/QuotaPanel.swift
+      - app/Sources/GhostlingApp/QuotaGaugeRow.swift
+      - app/Sources/GhostlingApp/QuotaShell.swift
+      - app/Sources/GhostlingApp/QuotaSeed.swift
+      - app/Sources/ghostling-quota/main.swift
+      - app/Tests/GhostlingCoreTests/QuotaGaugeTests.swift
+      - app/Tests/GhostlingAppTests/QuotaPanelTests.swift
 context:
-  # Fresh /saha:execute run (--max-iter=10). Active slice: Phase 03 — Board + Attention
-  # + Drill-in RENDERING (US-002/US-003/US-005). The pure derivations (board.card /
-  # board.placement / board.attention) are already built + E2E-green; what remains is the
-  # Swift/AppKit *surface*: BoardView, SessionCard, AttentionIndicator, drill-in navigation.
-  # This is the designated next critical path (STATUS.md + implementation-plan/README.md).
-  # Expect machine-assertable view-model logic to land as swift tests; the genuinely
-  # pixel/interaction ACs (rendered column moves, click-to-focus <500ms, drill-in feel)
-  # are needs-human-visual and route to awaiting_visual_signoff, NOT loop churn.
-  current_plan_phase: phase-03-board-and-attention
+  current_plan_phase: phase-04-two-pool-quota
+  # `.venv/bin/pytest` is the Python runner (bare `python`/`pytest` are not on PATH).
+  python_runner: .venv/bin/pytest
+  git_baseline: 47d375a1e5b8bf02920474119682d410029111c3
+  tests_collected_baseline: 59          # pytest --co
+  swift_tests_collected_baseline: 44    # swift test list
   spec_baseline:
     docs/tasks/task-01-initial/test-specs/e2e/board-situational-awareness.md: 94845e753e2a6e21d35e3cb7b33497b45ef319164817b3282480f3b919f2be2e
     docs/tasks/task-01-initial/test-specs/e2e/launch-session-embedded-terminal.md: 7e966b67453676f0ead8337030d958611139d7183ba238bb3583e2190e25e1c9
@@ -517,125 +107,39 @@ context:
     docs/tasks/task-01-initial/user-stories/US-004-state-detection.md: 617cf77fd4fbbf0624df0fdab693672970d31bea67b06092d84f29b8a0220b30
     docs/tasks/task-01-initial/user-stories/US-005-who-needs-me.md: 2431f505612ab7455e7b9d000b37d7afbbdb7fcf2975da126ea4f9c69cfe6ce7
     docs/tasks/task-01-initial/user-stories/US-006-two-pool-quota.md: 6de4834f806bd1d1f81c1d4e131011189ab4f12b9901b6c1d1742e0d21da0e60
-  tests_collected_baseline: 59
-  swift_tests_collected_baseline: 28
-  git_baseline: null
-  fix_info: >-
-    CORRECTIVE RE-FIX (iteration 2 sign-off REJECTED on the live window — a false pass). The drill-in
-    shipped green but was broken: invisible/unreachable '← board' (operator trapped behind the
-    terminal's first responder) + a useless empty `cat` terminal with no signal it is a stub. Root
-    cause: US-002's return AC was bound to BoardSelectionTests (the VALUE TYPE), never the views, and
-    there was NO app-level test target, so the whole AppKit layer was untestable. User disposition:
-    "Fix UX, keep stub for now." DONE in iteration 3:
-      1. '← board' made unmistakably visible (NSButton .rounded, bezelColor white 0.20, light
-         contentTintColor) + keyEquivalent Esc so the operator is never trapped. close()→goBack().
-      2. The `cat` stub made HONEST: prints '— demo session · no live agent attached —' + a return
-         hint before idling, so it reads as a placeholder, not a fake-real session.
-      3. The MISSING coverage added: new GhostlingAppTests target + 3 tests that drive the real
-         BoardShell/DrillInPanel hierarchy (board hidden on drill, restored on return with cards
-         intact, back affordance fires) — swift test 40→43. US-002 AC2 now binds to a VIEW test.
-    DEFERRED to its own task (NOT this slice): wiring the drill-in to a real interactive session
-    instead of `cat`. Do NOT touch the frozen contract.
-  # Updated after iteration 3 (UX fix + view-level tests). The iter-2 behavioral gap (invisible/
-  # unreachable back + untestable view layer) is CLOSED in code and now machine-asserted. The
-  # residue is narrowed from "verify the whole drill-in interaction by hand" to a single quick
-  # confirmation that the now-visible affordance + honest stub read right on screen.
-  visual_signoff_required:
-    - ac: "US-002 — pressing Esc returns to the board (must NOT type a symbol into the terminal)"
-      artifact: null
-      what_to_check: >-
-        Drill into a card, then press Esc → you return to the board immediately. Esc must NEVER add a
-        symbol to the terminal again (the iter-3 D3 'Esc shadowed, types into terminal' defect must be
-        GONE). This is the one that failed live three times — confirm it is finally fixed.
-      evidence: >-
-        DrillInInteractionTests.escReturnsToBoardViaEventDispatch DISPATCHES a real Esc NSEvent
-        (keyCode 53) to window.firstResponder and asserts the board is restored — machine-proven
-        red→green (RED while Esc went to the PTY, GREEN once TerminalSurface.onEscape consumes it).
-        On-screen feel is the only human residue.
-    - ac: "US-002 — the visible '← board' pill returns to the board by click"
-      artifact: app/.artifacts/drillin-header-signoff-20260624.png
-      what_to_check: >-
-        Drill into a card: a clearly visible '← board' pill (rounded, light grey, monospace) sits
-        top-left on the dark panel; clicking it returns to the board. (Esc is the primary path; the
-        pill is the mouse path.) THIS IS THE ONE THAT FAILED LIVE — confirm the pill is finally on screen.
-      evidence: >-
-        RETRACTED 2026-06-22: the prior 'PIXEL-VERIFIED' claim here was a FALSE PASS. The iter-3/4 fixes
-        (darkAqua + attributedTitle on a stock NSButton) did NOT make the pill visible — the user's live
-        screenshot still showed no pill. The 'verifying' capture (app/.artifacts/drillin-pill-visible.png,
-        cacheDisplay) was an UNFAITHFUL harness: cacheDisplay/CALayer.render do not reproduce the
-        window-server compositor for AppKit control layers, so they cannot certify on-screen pixels.
-        REAL FIX 2026-06-22: the stock NSButton was the lone standard control on the hand-painted dark
-        panel; every surface the operator DOES see (BoardView, SessionCard, TerminalSurface) is a
-        custom-drawn, layer-backed NSView. Replaced the NSButton with a custom BackPill built the EXACT
-        way SessionCard.flowBadge is built (wantsLayer + raw layer.backgroundColor white:0.20 +
-        cornerRadius + an NSTextField label) — the render path the operator demonstrably sees — and made
-        DrillInPanel structurally identical to SessionCard (wantsLayer + raw layer.backgroundColor). This
-        also disproves the earlier 'raw layer bg takes the updateLayer fast-path and hides controls'
-        theory: SessionCard does exactly that and renders fine. Machine-side, the CLICK PATH is now proven
-        by DrillInInteractionTests.backPillClickReturnsToBoard, which (a) asserts real hitTest resolves the
-        pill — not the terminal surface — at the pill's point, and (b) dispatches a real leftMouseDown
-        NSEvent to that hit-tested view and asserts the board is restored (replaces the old
-        backAffordanceFiresReturn, which only called goBack() directly — insufficient per the
-        Interaction-AC Binding Rule).
-        ── RESOLVED 2026-06-24 (the actual cause of the persistent invisibility): the custom BackPill
-        rebuild above was correct but was NOT enough — a SECOND, deeper occluder hid it. The mounted
-        TerminalSurface (a flipped, layer-backed NSView) had masksToBounds=false (AppKit default), so it
-        was handed a dirty rect spanning the WHOLE host window and painted its black fill full-window,
-        burying the entire header strip even though its own frame (16,16,1248,660) and hit-testing were
-        correct (that is exactly why clicks worked while pixels were invisible). FIX:
-        layer?.masksToBounds = true in TerminalSurface.init clips the fill to its bounds.
-        ── And the prior 'machine cannot capture the compositor faithfully here' claim is now FALSE:
-        CGWindowListCreateImage(.optionIncludingWindow, windowNumber, [.boundsIgnoreFraming]) captures the
-        REAL window-server composited frame in-process (Screen-Recording permission granted). A faithful
-        capture at app/.artifacts/drillin-header-signoff-20260624.png shows the '← board' pill, the '~/quota-aggregation' path, and the
-        state line all ON SCREEN with the real theme, the terminal correctly clipped below the header.
-        Machine-side this AC is now visually verified by a faithful capture, not just hit-test. swift test 44/44.
-    - ac: "US-002 — the demo terminal reads as an HONEST placeholder, not a fake-real session"
-      artifact: app/.artifacts/drillin-header-signoff-20260624.png
-      what_to_check: >-
-        The drilled-in terminal shows '— demo session · no live agent attached —' and the
-        '(press Esc or click ← board to return)' hint up top — obviously a demo stub, not a real agent.
-      evidence: >-
-        BoardSeed.command prints the banner + hint before exec cat. CONFIRMED 2026-06-24 by the faithful
-        CGWindowListCreateImage capture at app/.artifacts/drillin-header-signoff-20260624.png: the terminal legibly reads
-        '— demo session · no live agent attached —', a state line 'it3 · QA · 2/5 stories — running tests…',
-        and the hint '(type freely; press Esc or click ← board to return)'. Reads as an obvious stub.
-  # NOTE: the deeper "drill-in attaches a REAL live interactive session" is a SEPARATE, user-deferred
-  # task — intentionally out of scope here, not unverified residue of this slice.
-  # ── PENDING (needs user approval) ─────────────────────────────────────────────────────────────
-  # The durable "make this never happen" artifact — an interaction-AC binding rule for the
-  # test-critique gate — could NOT be self-applied: editing .claude/skills/test-critique/SKILL.md
-  # was blocked as agent config self-modification. The rule is surfaced to the user for approval
-  # instead. Rule: "If an AC names a physical input modality (press/click/key/keyboard/Esc/key
-  # equivalent/type/drag), at least one covering test must CONSTRUCT or DISPATCH an input event
-  # (NSEvent/keyDown/sendEvent/performKeyEquivalent or a declared event seam) and pass red→green;
-  # a direct action-method call (goBack/returnToBoard) does NOT satisfy an input AC — report it as
-  # interaction-path unverified." Also: the test harness must wire what the app wires (onClose/etc).
-  signoff_command: "cd app && swift run ghostling-board"
-  visual_signoff_granted:
-    granted: true
-    granted_at: 2026-06-24T17:57:01Z
-    by: "human operator, live on `swift run ghostling-board`"
-    scope: >-
-      All 3 visual_signoff_required items (US-002 drill-in residue) APPROVED: (1) Esc returns to
-      board, (2) '← board' pill visible + click returns, (3) honest demo-stub terminal. The operator
-      confirmed "it works now" on the live app after the masksToBounds=true occluder fix and a
-      faithful CGWindowListCreateImage capture (app/.artifacts/drillin-header-signoff-20260624.png).
-      Phase 03 drill-in pixel/interaction ACs are thereby human-approved; loop terminates COMPLETE.
-      Out of scope of this sign-off (machine-bound, DoD did not flag as pixel residue): US-003 AC3
-      live column move + US-005 AC2 navigate-to-attention bind to the refresh() re-render path +
-      BoardSelection filter tests; a belt-and-suspenders live confirm is recommended next session.
+ended_at: 2026-06-24T19:36:49Z
+dod_verdict:
+  task_complete: false
+  machine_gates_complete: true
+  awaiting_visual_signoff: true
+  confidence: high
+  pytest: "59/59 passed (= baseline 59)"
+  swift_test: "52/52 passed (baseline 44 + 8 new quota tests; no shrinkage, no skips)"
+  integrity: "all 13 frozen spec hashes match; dual count >= baseline; 0 skips/xfails; no marker conflicts"
+  quality_passed: true
+context_visual_signoff_required:
+  - ac: "US-006 pixel AC (AC1/AC2) — four gauges render distinctly on screen"
+    signoff_command: "cd app && swift run ghostling-quota"
+    what_to_check: >-
+      Four distinct gauge rows: (1) 'interactive (5h + weekly)' with an amber 'estimated' badge;
+      (2) 'Agent SDK credit' measured ~60%; (3) 'Codex' ~40%; (4) 'Gemini' inert grey 'unknown /
+      not tracked', no fill bar. The two Anthropic gauges grouped under a shared header
+      ('Anthropic · two pools — never netted'). No single merged Anthropic number anywhere.
+    artifact: app/.artifacts/quota-panel-signoff-20260624.png
+    artifact_faithful: false
+    artifact_note: >-
+      The existing PNG shows only the macOS wallpaper — the external `screencapture` CLI lacked
+      Screen-Recording permission. A faithful capture needs an in-process CGWindowListCreateImage
+      (the Phase-03 approach) OR a live human glance at `swift run ghostling-quota`. The wallpaper
+      PNG is NOT acceptable sign-off evidence.
 last_agent_output: >-
-  iter3 sign-off REJECTED by human — THIRD false pass on the same interaction: Esc still typed a
-  symbol into the terminal instead of returning. Root cause (code-reviewer subagent): "stub
-  substitution at the integration boundary" — every Esc/return test called goBack() DIRECTLY, none
-  dispatched a key event past the terminal, which (as first responder) maps keyCode 53 → .escape and
-  sends it to the PTY, shadowing the button's keyEquivalent. iter4 FIX, proven red→green: added an
-  injectable TerminalSurface.onEscape seam + a keyDown intercept (Esc consumed when hosted, else
-  forwarded to the PTY so a future real agent still gets it), wired it in DrillInPanel, removed the
-  shadowed button keyEquivalent, and wrote escReturnsToBoardViaEventDispatch which dispatches a REAL
-  Esc NSEvent — RED before the seam, GREEN after. That faithful test then exposed a 2nd latent gap
-  (buildContentForTesting never called wireInteractions, so onClose was nil) — fixed. swift test
-  43→44 green, pytest 59/59, 13/13 specs intact. DURABLE RULE (interaction ACs must dispatch a real
-  input event, not call the handler) is PENDING user approval — self-editing the test-critique skill
-  was blocked as agent-config self-modification.
+  DoD (execution-dod-native) verdict: task_complete=false, machine_gates_complete=true,
+  awaiting_visual_signoff=true, confidence=high. Both runtimes ran clean and unfiltered: pytest 59/59,
+  swift test 52/52 (grew from baseline 44 by the 8 new quota tests; no deletions/skips). All 13 frozen
+  spec hashes match baseline. Every US-006 AC/edge binds to >=1 green test in >=1 runtime; the lone
+  residue is the pixel render AC, classified needs-human-visual. The QA screenshot artifact is a valid
+  PNG but shows only the desktop wallpaper (screencapture CLI lacked Screen-Recording permission), so it
+  is NOT faithful evidence — human sign-off must use a faithful in-process capture or a live
+  `swift run ghostling-quota`. Loop paused at the one legitimate human checkpoint; no further iteration
+  spent (an implementer pass cannot turn a pixel into a green test). Advisory cleanup pending (optional):
+  QuotaGaugeRow.buildContent() computes resetLine() twice.

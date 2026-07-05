@@ -1,0 +1,181 @@
+task_id: task-04-live-detection
+task_path: docs/tasks/task-04-live-detection
+current_phase: completed
+current_iteration: 4
+max_iterations: 10
+started_at: 2026-07-02T12:41:21Z
+completed_at: 2026-07-02T16:39:15Z
+error_message: null
+iterations:
+  - iteration: 1
+    started_at: 2026-07-02T12:42:00Z
+    plan_phase: phase-01-event-driven-delivery
+    steps:
+      - phase: implementation
+        status: completed
+        output_summary: "FS-watch primary trigger (FileWatcher) + 3s Timer demoted to backstop; inode-keyed rotation-safe HookEventTail; producer size-bounded rotation in ghostling-forward.sh. TC-INT-001/002, TC-UNIT-003 (swift), TC-PROD-005 (pytest) green; swift 109/109."
+      - phase: integrity_guard
+        status: passed
+      - phase: test_critique
+        status: completed
+        output_summary: "Grade A (5.0/5.0), 7 tests analyzed, 0 hollow. TC-INT-002 fires via fireWatchForTesting seam (not direct poll). All 4 US-001 ACs bound."
+      - phase: qa
+        status: completed
+        output_summary: "dod_achieved:true. swift build clean (0 warn); swift test 109/109 (baseline 106, +3 bound); pytest TC-PROD-005 green; watcher-not-spawner grep clean. runtimes_run: swift-build, swift-test, pytest."
+      - phase: code_quality
+        status: completed
+        output_summary: "quality_passed:true, 0 blocking. swift build/test warning-clean, 6/6 filtered green; funcs <50 lines/SRP/no-force-unwrap; forwarder append-only + exit 0 (no spawn); ruff/ty/complexipy clean. ruff format auto-fixed 1 cosmetic line in test_forward_rotation.py. Noted swiftlint/swift-format + shellcheck unavailable."
+      - phase: manager
+        status: completed
+        output_summary: "Ticked phase-01 plan ACs + DoD items, Status→Complete (iteration 1). Left user-stories/ frozen (integrity preserved) and phase-02/03 Not Started. items_remaining: Phase 02 (US-002/005), Phase 03 (US-003/004)."
+      - phase: dod_check
+        status: completed
+        output_summary: "task_complete:false, machine_gates_complete:false, confidence:high. INTEGRITY PASSED (swift 116 total >=106 baseline: 109 Swift-Testing + 7 XCTest, 0 skipped; pytest 1 >=0; all 5 user-story hashes match). Coverage 4/16 bound+green (US-001 TC-INT-001/002, TC-UNIT-003, TC-PROD-005); 12 unbound = never-written (NOT deletions). 0 marker_conflicts. Continue -> Phase 02."
+    test_critique_passed: true
+    dod_achieved: true
+    quality_passed: true
+    fix_info: null
+    files_changed:
+      - app/Sources/GhostlingCore/HookEventTail.swift
+      - app/Sources/GhostlingApp/SessionsFeed.swift
+      - .claude/scripts/ghostling-forward.sh
+      - app/Tests/GhostlingAppTests/SessionsFeedTests.swift
+    files_added:
+      - app/Sources/GhostlingApp/FileWatcher.swift
+      - app/Tests/GhostlingCoreTests/HookEventTailTests.swift
+      - tests/unit/test_forward_rotation.py
+  - iteration: 2
+    started_at: 2026-07-02T13:30:00Z
+    plan_phase: phase-02-reconciler-correctness
+    steps:
+      - phase: implementation
+        status: completed
+        output_summary: "5/5 Phase-02 symbols green, full swift test 115 passed / 0 failed / 0 skipped. Pass 1 (agent a181b19e): TC-INT-010 ReconcilerTests.droppedStop_recoveredViaJSONL (JSONL fallback in SessionsFeed), TC-UNIT-012 HookSessionStoreTests.updatedAtTiebreak_freshWins (BoardCard.updatedAt + liveState/collapseByDir rank by newest via `staler`, activityRank tiebreak), TC-UNIT-013 HookNormalizerTests.permissionHook_setsAttention, TC-UNIT-014 HookSessionStoreTests.sessionEnd_closesNow_hardKillDecays (SignalKind.sessionEnd → .done). Pass 2 (agent a17134c0): TC-INT-015 BoardShellTests.applySessions_rendersWhileFocused — removed BoardShell:497 focus-guard so applySessions always refresh()es (focused terminal lives in hidden drillIn panel, untouched); added AttentionIndicator.renderedCount seam + rapidFocusBlur edge test. 115 >= 106 swift baseline; no deletions."
+      - phase: integrity_guard
+        status: passed
+      - phase: test_critique
+        status: completed
+        output_summary: "Grade A (5.0/5.0), 6 tests analyzed, 0 hollow. All 5 binding symbols real (TC-INT-010/012/013/014/015) + 1 edge bonus. Anti-flake verified: injected-clock timestamps for updatedAt tiebreak + sessionEnd/decay, renderedCount VALUE seam for re-render, real dropped-Stop JSONL recovery. Integration tests use real SessionsPoller→SessionsFeed→HookSessionStore chain. All 5 US-002/005 ACs bound."
+      - phase: qa
+        status: completed
+        output_summary: "dod_achieved:true. Clean swift build from full .build wipe (62 tasks, 0 warn/0 err); swift test 115/115, 0 skipped, no @Test(.disabled). All 5 bound symbols green AND wiring code-reviewed: SessionsFeed.normalize routes source:jsonl→JSONLNormalizer (real poll path), BoardShell :497 guard confirmed removed, staler() ranks updatedAt-first, .sessionEnd terminal(.done) vs 30s hard-kill backstop. watcher-not-spawner grep clean (no Process/launchPath/claude -p in 7 changed sources). No pixel ACs (renderedCount value-asserted). pytest untouched (no Python changed). runtimes_run: swift-build, swift-test."
+      - phase: code_quality
+        status: completed
+        output_summary: "quality_passed:true, 0 blocking, 1 info-only. swift build + build --build-tests warning-clean; changed hunks short/single-responsibility/imports-at-top/no-risky-force-unwrap. staler(), liveState, collapseByDir, normalize source-routing, renderedCount seam all clean. Info-only: pre-existing dominant()/applyBurst force-unwrap in HookSessionStore (safe by construction, outside this iteration's hunks). swiftlint/swift-format not installed (noted)."
+      - phase: manager
+        status: completed
+        output_summary: "Ticked phase-02-reconciler-correctness plan: all 5 Implementation-Step ACs + 3 DoD items [x], Status→Complete (iteration 2). Left phase-03 (US-003/004) Not Started. FROZEN CONTRACT RESPECTED — only implementation-plan edited; integrity re-check post-manager: all 5 user-story hashes unchanged. STATUS.md absent (none needed)."
+      - phase: dod_check
+        status: completed
+        output_summary: "task_complete:false, machine_gates_complete:false, awaiting_visual_signoff:false, confidence:high. INTEGRITY PASSED: all 5 user-story sha256 match spec_baseline byte-for-byte; swift 122 collected >=106 baseline (via `swift test list|grep -c /`), pytest 1 >=0; 0 bound tests skipped/xfailed. GREEN: 9/9 implemented rows green (pytest 1/1 TC-PROD-005; swift 8/8 TC-INT-001/002/010/015, TC-UNIT-003/012/013/014). COVERAGE 9/16 — 7 Phase-03 rows unbound because never written (grep confirms no SessionResumeTests/ShellIntegrationInstallTests/ShellIntegrationTests exist), matching phase-03 'Not Started' — NOT a deletion/regression. 0 marker_conflicts. Verdict: continue -> Phase 03 (iteration 3), not a failure."
+    test_critique_passed: true
+    dod_achieved: true
+    quality_passed: true
+    fix_info: null
+    files_changed:
+      - app/Sources/GhostlingCore/BoardCard.swift
+      - app/Sources/GhostlingCore/SignalEvent.swift
+      - app/Sources/GhostlingCore/HookNormalizer.swift
+      - app/Sources/GhostlingCore/HookSessionStore.swift
+      - app/Sources/GhostlingApp/SessionsFeed.swift
+      - app/Sources/GhostlingApp/BoardShell.swift
+      - app/Sources/GhostlingApp/AttentionIndicator.swift
+    files_added:
+      - app/Tests/GhostlingAppTests/ReconcilerTests.swift
+      - app/Tests/GhostlingAppTests/HookSessionStoreTests.swift
+      - app/Tests/GhostlingCoreTests/HookNormalizerTests.swift
+      - app/Tests/GhostlingAppTests/BoardShellTests.swift
+  - iteration: 3
+    started_at: 2026-07-02T14:15:00Z
+    plan_phase: phase-03-durable-surface
+    steps:
+      - phase: implementation
+        status: completed
+        output_summary: "7/7 Phase-03 symbols green across two sequential scoped implementer passes (avoids 65-tool ceiling + shared .build race). US-003 (agent aca85348, GhostlingCore): versioned Codable {createdAt,version,windows[]} snapshot storing cwd+session-identity per pane (NEVER agent argv), SessionSnapshotStore save/load with atomic current write + -previous rotate-on-successful-load fallback, SessionRestorer that re-opens ONLY a PoolFirewall-routed plain $SHELL (watcher invariant is STRUCTURAL — can't resurrect claude -p), reopen-vs-dead from injected liveness (kill(pid,0)), cwd-gone→home flagged. Bound TC-INT-020, TC-UNIT-021/022/025/026 — TC-UNIT-022 asserts via injected spawn-spy seam. US-004 (agent aa7a3eb3, GhostlingApp): ShellIntegrationInstaller mirrors HookInstaller/enable-board-hooks.sh with a begin/end marker block into an injectable rc (idempotent no-op re-install, non-zsh no-ops rc byte-unchanged), ShellIntegration.reportedCwd parses OSC 7 so cwd is REPORTED not ps-inferred. Bound TC-INT-023, TC-UNIT-024 (+1 non-zsh edge). Full swift test green 0 failed/0 skipped; swift test list 130 (>=122 floor, +8); pytest untouched (floor 1). No test deleted/skipped."
+      - phase: integrity_guard
+        status: passed
+      - phase: test_critique
+        status: completed
+        output_summary: "Grade A (5.0/5.0), 8 tests analyzed, 0 hollow. All 7 planned symbols present + bound (TC-INT-020/023, TC-UNIT-021/022/024/025/026) +1 non-zsh edge bonus. CRITICAL CHECKS PASSED: TC-UNIT-022 uses a REAL spawn spy (spyingRestorer captures every re-open, asserts spy fired AND no command contains 'claude -p'/'-p'/'--print'/name 'claude') — proves watcher invariant, not a hollow boolean. TC-INT-023 installs TWICE into a temp rc, asserts exactly one marker block + prior rc preserved. Anti-flake: injected clock (fixed 1_700_000_000), injected isAlive/directoryExists/home seams, UUID temp dirs, zero sleep/wall-clock. All US-003 AC1-4 + US-004 AC1-2 covered."
+      - phase: qa
+        status: completed
+        output_summary: "dod_achieved:true. swift build warning-clean (forced recompile of all 8 changed/added files, 0 warn). Full swift test 123/123 green; all 7 bound symbols green individually (SessionResumeTests 5/5, ShellIntegration 3/3). Monotonicity floor met: swift test list = 131 >= 122. WATCHER-NOT-SPAWNER verified two ways: grep -rnE 'claude -p|--print|launchPath|Process(' over the 3 restore-path files = ZERO matches; code-review confirms PaneSnapshot stores only sessionID/cwd/agentType/flowTag/childPID (never argv) and SessionRestorer.reopenShell always builds [shellPath,'-il'] via PoolFirewall.classify. No Python changed (pytest not a gate this iter). No pixel/visual ACs (durable-surface is pure logic). NOTE: 1 UNRELATED pre-existing flake CutoverTests.TC-E2E-301 (ps-based child-count race, green 4/5 full + 100% isolated) — NOT caused by this iteration's files; DoD should re-run it isolated, not churn. runtimes_run: swift-build, swift-test."
+      - phase: code_quality
+        status: completed
+        output_summary: "quality_passed:true, 0 blocking, 1 ignored. swift build + build-tests warning-clean on all 8 files (forced recompile). OSC-7 parser reportedCwd(fromOSC:) bounds-safe (hasPrefix/dropFirst/dropLast/hasSuffix clamp, never trap; guard-checked '7;' prefix) → malformed degrades to nil. Snapshot decodeUsable uses try? (no force-try) → graceful nil on corrupt/version-mismatch per TC-UNIT-021/025. reopenShell 5 lines/SRP; isProcessAlive = pid>0 && kill(pid,0)==0 (no re-attach). All new/changed funcs short/single-purpose/imports-at-top/no-risky-force-unwrap. Ignored (out of scope): pre-existing $0.baseAddress! at PTYSession.swift:233 in unrelated withCStrings helper. swiftlint/swift-format not installed (noted)."
+      - phase: manager
+        status: completed
+        output_summary: "status:success. Edited ONLY implementation-plan/phase-03-durable-surface.md: Status Not Started→Complete; ticked Step 1 ACs (3/3), Step 2 ACs (2/2), DoD items (2/2). user-stories/ + test-specs/ left FROZEN (untouched). Post-manager integrity guard re-ran: all 5 spec hashes match baseline exactly — contract intact. Phases 01/02 already complete from prior iterations."
+      - phase: dod_check
+        status: failed
+        output_summary: "task_complete:FALSE, machine_gates_complete:FALSE, awaiting_visual_signoff:FALSE, confidence:high. NOT an integrity violation (integrity.passed:true — 5/5 hashes match, dual floor met pytest 1>=0 & swift 130>=106, 0 bound skipped) and NOT visual residue → CONTINUE to iteration 4. GREEN gate PASSED (pytest 1/1, swift 130/130 across two fresh unfiltered full runs, no skip/xfail/disabled; TC-UNIT-022 watcher spawn-spy genuinely non-hollow; TC-E2E-301 flake did not fire). QUALITY passed. But COVERAGE gate FAILED 9/16: the 7 rows for US-003 (TC-INT-020, TC-UNIT-021/022/025/026) + US-004 (TC-INT-023, TC-UNIT-024) are green ONLY at isolated-unit level. DEAD CODE in shipped app: grep over BoardShell.swift (sole NSApplicationDelegate) + ghostling/main.swift (sole entry point) shows SessionSnapshotStore, SessionRestorer, ShellIntegrationInstaller, ShellIntegration.reportedCwd are NEVER called in production — only from test files. So quitting/launching the real ghostling binary persists/restores nothing and never captures cwd via OSC-7; US-003 AC1/AC2 + US-004 AC1/AC2 text is FALSE of the shipped product despite 7/7 green swift tests. Same false-pass class as interaction-ac-binding-rule (correct in isolation, never proven reachable), applied to app-lifecycle wiring. MARKER_CONFLICTS: (1) phase-03 plan ticked Complete but ground truth = unwired; (2) iter-3 qa/manager dod_achieved:true but QA's watcher-grep was scoped to spawn-safety, never checked reachability. Contrast US-001/002/005 which ARE wired (HookInstaller at BoardShell.swift:69, SessionsFeed updatedAt join, removed focusedCardID guard)."
+    test_critique_passed: true
+    dod_achieved: true
+    quality_passed: true
+    dod_complete: false
+    fix_info: null
+    files_changed:
+      - app/Sources/GhostlingCore/SessionRegistry.swift
+      - app/Sources/GhostlingCore/PTYSession.swift
+      - app/Sources/GhostlingCore/Session.swift
+    files_added:
+      - app/Sources/GhostlingCore/SessionSnapshot.swift
+      - app/Tests/GhostlingCoreTests/SessionResumeTests.swift
+      - app/Sources/GhostlingApp/ShellIntegration.swift
+      - app/Tests/GhostlingAppTests/ShellIntegrationInstallTests.swift
+      - app/Tests/GhostlingAppTests/ShellIntegrationTests.swift
+  - iteration: 4
+    started_at: 2026-07-02T13:35:00Z
+    plan_phase: phase-03-durable-surface
+    steps:
+      - phase: implementation
+        status: completed
+        output_summary: "WIRING FIX for DoD coverage gap (dead-code call sites), done as 2 SEQUENTIAL scoped implementers (same app/ .build → not parallel). Part A (BoardShell lifecycle): applicationWillTerminate → persistOnTerminate(store:) (before shell teardown, childPID still valid); applicationDidFinishLaunching → restoreOnLaunch(store:restorer:) (reload+re-open pre-quit tree before seedSessions, skipped under GHOSTLING_E2E) + installShellIntegration(...) alongside existing HookInstaller.install. Thin injectable delegate seams; openRestoredCard launches ONLY firewall-clean $SHELL -il (agentType .shell) — watcher invariant preserved. Moved SessionResumeTests GhostlingCoreTests→GhostlingAppTests (@MainActor @Suite(.serialized), @testable import GhostlingApp); TC-INT-020 drives persistOnTerminate→restoreOnLaunch round-trip (set-based, no positional flake); TC-UNIT-021/022/025/026 act through restoreOnLaunch seam (spawn spy proves no headless); TC-INT-023 drives BoardShell.installShellIntegration across two launches (idempotent, rc preserved verbatim, non-zsh no-op). Part B (PTY OSC-7 cwd): added PTYSession.onOutput observer + single ingest(_:) seam (pump/drainToEOF/pumpAvailable all route through it); Session.reportedCwd + reportCwd(_:); new ShellSignalReader.swift (OSC7CwdReader chunk-tolerant byte state machine + ShellSignalBridge.attachCwdReporting weak-session); BoardShell attaches at every launch site (launch/createSession + openRestoredCard). Reworked TC-UNIT-024 to push OSC-7 bytes through pty.ingest (split-across-reads + BEL cd + OSC-0-title-must-not-change cases), asserting session.reportedCwd — no direct parser call, no PTY spawn, no latency. swift build warning-clean; swift test 123 swift-testing green; collected floor: swift test list=130 >= 106."
+      - phase: integrity_guard
+        status: passed
+        output_summary: "Post-implementation: all 5 frozen spec hashes match baseline exactly (contract intact); swift collected 130 >= 106 floor — the 5 moved tests still collected, no deletion-to-green."
+      - phase: test_critique
+        status: completed
+        output_summary: "Grade A, 8 analyzed, 0 hollow, reachability_verified:TRUE. Confirms iter-4 closes the false-pass: all 7 bound tests now drive the PRODUCTION seams (persistOnTerminate/restoreOnLaunch/installShellIntegration/PTYSession.ingest), and code inspection of BoardShell.swift confirms the real delegate methods call them — applicationWillTerminate→persistOnTerminate(:115), applicationDidFinishLaunching→restorePreviousSessions→restoreOnLaunch(:62/:149) + installShellIntegration(:74); PTYSession.ingest wired via pump/drainToEOF/pumpAvailable + ShellSignalBridge.attachCwdReporting at launch(:269)/openRestoredCard(:192). GHOSTLING_E2E guard only skips restore under E2E (scripted board), NOT normal launch → AC intact. TC-UNIT-022 spawn-spy still proves no claude -p on restore. Deterministic (injected temp dirs/store/clock/spy, no wall-clock). 3 non-blocking notes: (1) tests call the delegate SEAMS directly (delegate-calls-seam verified by inspection, not by firing NSApplicationDelegate methods headlessly — acceptable seam+verify); (2) corrupt-fallback could assert -previous promotion more explicitly; (3) E2E-guard is by-design."
+      - phase: qa
+        status: completed
+        output_summary: "dod_achieved:TRUE. Clean full rebuild (rm -rf .build && swift build) warning-free. Full swift test 130/130 green (7 XCTest + 123 swift-testing), 0 fail/skip. All 7 bound symbols green individually via --filter (TC-INT-020/023, TC-UNIT-021/022/024/025/026). Collected floor 130 >= 106. WATCHER clean two ways: TC-UNIT-022 spawn-spy green + grep of restore path (BoardShell/SessionRegistry/SessionSnapshot) = zero Process(/launchPath/--print, only comment mentions of 'claude -p'; SessionRestorer.reopenShell hardcodes [shellPath,'-il'] via PoolFirewall.classify. REACHABILITY confirmed (the fix): applicationDidFinishLaunching→restorePreviousSessions→restoreOnLaunch + seedSessions→launch→ShellSignalBridge.attachCwdReporting + installShellIntegration; applicationWillTerminate→persistOnTerminate; TerminalSurface.startReading (30Hz loop, called from DrillInPanel + AppShell in production)→PTYSession.pumpAvailable→ingest→onOutput→OSC7CwdReader→session.reportCwd — whole US-004 chain LIVE, not dead code. pytest stays 1 collected (no Python changed; not a gate this iter). No pixel/visual ACs. runtimes_run: swift-build, swift-test, swift-test-filtered, grep-reachability."
+      - phase: code_quality
+        status: completed
+        output_summary: "quality_passed:TRUE, 0 blocking, 1 ignored. Clean full rebuild (rm -rf .build && swift build) zero warnings. New BoardShell seams (persistOnTerminate/restoreOnLaunch/installShellIntegration/openRestoredCard/makeLaunchRestorer) each 3-14 lines, single-purpose. OSC7CwdReader bounds-safe: capped 4096-byte buffer that resets on overflow, only append/removeAll, no unchecked subscript, String(decoding:as:) never traps. ShellSignalBridge.attachCwdReporting captures session WEAKLY (chain session→pty→onOutput→reader→weak session, no retain cycle). PTYSession.ingest introduces no force-unwrap/blocking call on read path. All imports at file top. Ignored (out of scope, pre-existing/unchanged): $0.baseAddress! in withCStringArgv PTYSession.swift:249. swiftlint/swift-format not installed (used compiler warnings + repo rules)."
+      - phase: manager
+        status: completed
+        output_summary: "status:success. Edited ONLY implementation-plan/phase-03-durable-surface.md — added a Notes line documenting the iter-4 wiring (persistOnTerminate/restoreOnLaunch/installShellIntegration + PTYSession.ingest→OSC7CwdReader) that resolves the iter-3 dead-code gap; nothing un-ticked. STATUS.md absent → NOT created (constraint respected). user-stories/ + test-specs/ left FROZEN. Post-manager integrity guard: all 5 spec hashes match baseline byte-for-byte — contract intact."
+      - phase: dod_check
+        status: completed
+        output_summary: "task_complete:TRUE, machine_gates_complete:TRUE, awaiting_visual_signoff:FALSE, confidence:high. AUTHORITATIVE PASS — loop COMPLETE. DoD independently re-read BoardShell.swift source (did NOT trust iter-4 summaries) and CONFIRMED the iter-3 dead-code gap is CLOSED: applicationWillTerminate→persistOnTerminate(store:) (:110-120); applicationDidFinishLaunching→restoreOnLaunch(store:restorer:)+installShellIntegration (:60-76); every launch site→ShellSignalBridge.attachCwdReporting sets pty.onOutput (:269/:192); PTYSession.ingest single funnel→onOutput (:63-139); real 30Hz TerminalSurface.onTick→pumpAvailable→ingest (TerminalSurface.swift:116, mounted by DrillInPanel in production). Genuine OS-lifecycle→logic chain, not dead code. COVERAGE 16/16 rows bound (test-specs/README.md), no pixel-only ACs. GREEN: fresh unfiltered pytest 1/1 + swift test 130/130 (123 swift-testing + 7 XCTest), 0 fail/skip; CutoverTests re-run isolated 5/5 (flake did not fire, unbound anyway). INTEGRITY: all 5 spec sha256 match baseline byte-for-byte; dual floor exceeded (pytest 1>=0, swift 130>=106); 5 moved SessionResumeTests present not deleted; TC-UNIT-024/TC-INT-023 drive production seams (pty.ingest / installShellIntegration) not leaf helpers; spawn-spy proves watcher-not-spawner on restore. QUALITY: iter-4 quality_passed:true (0 blocking). 0 marker_conflicts."
+    test_critique_passed: true
+    dod_achieved: true
+    quality_passed: true
+    dod_complete: true
+    fix_info: null
+    files_changed:
+      - app/Sources/GhostlingApp/BoardShell.swift
+      - app/Sources/GhostlingCore/PTYSession.swift
+      - app/Sources/GhostlingCore/Session.swift
+      - app/Tests/GhostlingAppTests/ShellIntegrationInstallTests.swift
+      - app/Tests/GhostlingAppTests/ShellIntegrationTests.swift
+      - "app/Tests/GhostlingCoreTests/SessionResumeTests.swift (deleted — moved to GhostlingAppTests)"
+    files_added:
+      - app/Tests/GhostlingAppTests/SessionResumeTests.swift
+      - app/Sources/GhostlingApp/ShellSignalReader.swift
+context:
+  current_plan_phase: phase-03-durable-surface
+  fix_info: "ITER-4 WIRING FIX (DoD coverage gate 9/16). US-003 + US-004 Swift logic is CORRECT and unit-green but DEAD CODE: SessionSnapshotStore, SessionRestorer, ShellIntegrationInstaller, ShellIntegration.reportedCwd are never called from BoardShell.swift (the sole NSApplicationDelegate) or ghostling/main.swift (sole entry point) — only from tests. The AC text is FALSE of the shipped app. DO NOT rewrite the logic; WIRE it into production and prove reachability from the REAL lifecycle trigger (interaction-ac-binding-rule: test by dispatching the real entry point, never by calling the leaf helper directly). Frozen contract: NEVER edit user-stories/ or test-specs/ — only app/Sources, app/Tests, .claude/scripts. Do NOT delete/skip any existing test (dual floor: swift>=106 collected, pytest>=0; current 130 swift). Keep the 7 bound TC symbols (TC-INT-020, TC-UNIT-021/022/025/026, TC-INT-023, TC-UNIT-024) — you may CHANGE THEIR BODIES to drive the real lifecycle, but the symbol names stay. Four production call sites to add: (1) BoardShell.applicationWillTerminate → persist snapshot: SessionSnapshotStore.applicationSupport().save(windows: registry.snapshotWindows()). (2) BoardShell.applicationDidFinishLaunching → SessionSnapshotStore.applicationSupport().load(), construct a real SessionRestorer, restore panes before/alongside the existing seedSessions(); watcher invariant MUST hold (restore re-opens plain [$SHELL,-il] via PoolFirewall.classify, never claude -p). (3) BoardShell.applicationDidFinishLaunching → add ShellIntegrationInstaller.install(...) alongside the existing HookInstaller.install(repoRoot:) call at ~BoardShell.swift:69. (4) Thread ShellIntegration.reportedCwd(fromOSC:) into the REAL PTY output loop (TerminalSurface.swift / PTYSession.swift) so a session's cwd is updated from live OSC-7 (ESC]7;file://.../path) bytes, not process-scan inferred. TEST REACHABILITY (rework existing bound symbols, keep names): TC-INT-020 quitWritesSnapshot_launchRestores must invoke the REAL applicationWillTerminate then applicationDidFinishLaunching (not SessionSnapshotStore.save/load directly) with an injected store/app-support dir, asserting the round-trip through the delegate; extend TC-UNIT-021/025/026 similarly where feasible (corrupt/version-mismatch/dead-process reached via the delegate load path). TC-INT-023 install_idempotent must prove applicationDidFinishLaunching triggers ShellIntegrationInstaller.install (idempotent 2nd launch, rc preserved). TC-UNIT-024 cwdReportedNotInferred must feed real OSC-7 bytes through the PTY read path and assert the session cwd updates (not call reportedCwd directly). If applicationDidFinishLaunching/WillTerminate are hard to drive headlessly, factor a thin injectable seam (e.g. restoreOnLaunch(store:restorer:) / persistOnTerminate(store:)) that the delegate method calls, and have the test drive the DELEGATE method — do not settle for calling the leaf store. Anti-flake: deterministic seams (injected store, injected app-support temp dir, injected clock, OSC-7 string bytes), never wall-clock latency (GridTextTests fromPTY precedent)."
+  fix_info_prev_iter3: "Phase 03 durable-surface (US-003 session-resume + US-004 shell-integration). Bind & green these 7 swift symbols (all NEW — grep confirms none exist yet). US-003 in GhostlingCore SessionRegistry.swift/PTYSession.swift — persist a Codable versioned snapshot {createdAt, version, windows[]} (window/pane = cwd + session identity) under Application Support on quit; restore on launch; write `current` and rotate to `-previous` on successful load. (1) TC-INT-020 SessionResumeTests.quitWritesSnapshot_launchRestores — round-trip: save snapshot, reload, restored panes match pre-quit cwd+identity. (2) TC-UNIT-021 SessionResumeTests.corruptCurrent_fallsBackToPrevious — corrupt/partial `current` → load `-previous`, never blank/crash. (3) TC-UNIT-022 SessionResumeTests.restore_neverSpawnsHeadless — WATCHER INVARIANT: restoring a pane that had an agent re-opens the shell/pane ONLY; assert NO `claude -p`/headless Process is spawned (assert via a spawn seam/spy, not wall-clock; grep the restore path for Process/launchPath/claude -p stays clean). (4) TC-UNIT-025 SessionResumeTests.versionMismatch_ignoredNotCrash — snapshot version != current → migrate-or-ignore, start clean, never crash. (5) TC-UNIT-026 SessionResumeTests.deadProcess_restoresAsClosed — underlying process dead → restore pane as closed/dead, not live-frozen; cwd-gone → fall back to home, flagged. US-004 in GhostlingApp HookInstaller.swift (+ a sibling installer) mirroring .claude/scripts/enable-board-hooks.sh — install ghostty-integration.zsh + xterm-ghostty terminfo idempotently, preserving the user's rc. (6) TC-INT-023 ShellIntegrationInstallTests.install_idempotent_preservesRc — install twice = no-op second time, no duplicate rc lines, existing rc content preserved; non-zsh degrades gracefully (skip, never break the shell). (7) TC-UNIT-024 ShellIntegrationTests.cwdReportedNotInferred — cwd is REPORTED semantically by the integration, not process-scan inferred. Anti-flake: assert via deterministic seams/injected state, never latency (GridTextTests fromPTY precedent). Do NOT delete/skip any existing test (dual floor: swift 122, pytest 1). Frozen contract: never edit user-stories/ or test-specs/ — only app/Sources, app/Tests, .claude/scripts."
+  visual_signoff_required: null
+  spec_baseline:
+    docs/tasks/task-04-live-detection/user-stories/US-001-event-driven-delivery.md: df21b3352857438a46cf8ad07e16d7afcc8fddedd1f07cb480658c5dbb461742
+    docs/tasks/task-04-live-detection/user-stories/US-002-reconciler-correctness.md: 9e7f18f87dabd7db51ac1314946050c3c2563e0e919b8d0e008a0eab3139ae5e
+    docs/tasks/task-04-live-detection/user-stories/US-003-session-resume.md: b020982ece212aac68cf86510583ff944ff5b1558ccd3354caac4b1abddb9296
+    docs/tasks/task-04-live-detection/user-stories/US-004-shell-integration-signal.md: a4d5b3681d4f7191936e12bdb47f61442aea8c684903c48c34a073fcc0b74af7
+    docs/tasks/task-04-live-detection/user-stories/US-005-live-refresh-while-drilled-in.md: 7e413b53ccd0b0c6b0629926a74278ef3b5862c90e5fe193a30965cc2744bee9
+  tests_collected_baseline: 0
+  swift_tests_collected_baseline: 106
+  git_baseline: 47d375a1e5b8bf02920474119682d410029111c3
+last_agent_output: null

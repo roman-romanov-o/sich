@@ -1,0 +1,88 @@
+schema_version: 1
+profile_id: ghostling-default-v1
+provenance: system_default
+field_overrides: []
+timezone_mode: device
+
+time:
+  detailed_horizon: next_workday
+  coarse_horizon_minutes: 10080
+  minimum_focus_minutes: 25
+  minimum_brief_minutes: 5
+  wrap_minutes: 5
+  meeting_buffer_before_minutes: 5
+  meeting_buffer_after_minutes: 5
+  continuity_lease_minutes: 25
+  qualifying_break_minutes: 10
+  unknown_recovery_checkin_minutes: 120
+  manual_preflight_ttl_minutes: 15
+  attention_evidence_ttl_minutes: 5
+  attention_sla_minutes: 15
+
+capacity:
+  review_debt_cap_minutes: 90
+  default_review_upper_minutes: 45
+  default_integration_upper_minutes: 15
+  default_post_verify_upper_minutes: 15
+  autonomous_concurrency_cap: 2
+  phase_a_autonomous_concurrency_cap: 1
+  minimum_reserve_fraction: 0.10
+  unknown_error_reserve_fraction: 0.25
+  attended_overrun_alpha: 0.10
+  unattended_overrun_alpha: 0.05
+  heavy_run_minutes: 60
+  heavy_run_constraint_fraction: 0.10
+
+route_risk:
+  attended_minimum_acceptable_probability: 0.60
+  unattended_minimum_acceptable_probability: 0.80
+  unattended_max_attention_probability: 0.10
+  maximum_p95_repair_review_minutes: 60
+  maximum_sunk_constraint_fraction: 0.10
+
+material_change:
+  absolute_minutes: 10
+  relative_fraction: 0.20
+
+search:
+  optional_chain_limit: 12
+  route_limit_per_chain: 3
+  expansion_limit: 10000
+  optional_slots:
+    priority: 6
+    oldest: 2
+    project_flow_representation: 2
+    short_gap: 2
+
+action_precedence:
+  - SHUT_DOWN
+  - REST
+  - RESPOND
+  - CONTINUE
+  - REVIEW
+  - RECONCILE_FAILURE
+  - SUGGEST_INTEGRATION
+  - POST_INTEGRATION_VERIFY
+  - SUGGEST_LAUNCH
+  - PLAN_SAHA
+  - PLAN_VERIFY
+  - PREPARE_WORKSPACE
+  - LAUNCH_PREFLIGHT
+  - SUGGEST_INTERACTIVE_START
+  - RECOVERY_CHECK_IN
+  - SMALL_ADMIN
+
+delivery:
+  default_mode: passive
+  maximum_notifications_per_hour: 2
+  boundary_bundles_per_boundary: 1
+  unknown_recovery_interrupt_allowed: false
+
+retention:
+  raw_observations_days: 30
+  decision_traces_days: 30
+  completed_attempts_days: 90
+
+fixed_point:
+  scale: 1000
+  overflow: saturate_int64

@@ -1,51 +1,18 @@
-[project]
-name = "mission-control"
-version = "0.1.0"
-description = "Agentic Coding Mission Control — Python sidecar (state detection + two-pool quota)"
-readme = "README.md"
-requires-python = ">=3.12,<3.15"
-dependencies = [
-    "pydantic>=2.9",
-]
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=8.3",
-    "ruff>=0.13",
-    "ty>=0.0.1a1",
-    "complexipy>=3",
-]
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/mission_control"]
-
-[tool.uv]
-package = true
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["src"]
-markers = [
-    "unit: pure-function unit tests",
-    "integration: component integration tests",
-    "e2e: end-to-end flows (fake-agent fixture; never spends quota)",
-]
-addopts = "-ra"
+# The Python mission-control sidecar was retired in the Phase-03 cutover
+# (task-03-native-core): the app is now a single native Swift binary that reads
+# quota in-process and tails the hook event file directly — no Python runtime,
+# no localhost sidecar, no HTTP wire (DD-001 / DD-002). The Swift package lives
+# in `app/`; build it with `cd app && swift build`, test with `swift test`.
+#
+# Only repo-level tooling config remains below (ruff for any stray scripts, and
+# the saha task runner). There is no Python package to build or install here.
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "C4", "RUF"]
-
-[tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"]
 
 [tool.saha]
 tasks_dir = "docs/tasks"

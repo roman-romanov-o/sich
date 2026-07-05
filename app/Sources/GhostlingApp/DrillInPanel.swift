@@ -83,6 +83,7 @@ final class DrillInPanel: NSView {
     // Interaction-AC Binding Rule: a click AC must be exercised by a dispatched
     // event, never by calling `goBack()` directly).
     let backPill = BackPill()
+    private let quotaField = NSTextField(labelWithString: "")
     private var surface: TerminalSurface?
 
     override init(frame frameRect: NSRect) {
@@ -103,9 +104,14 @@ final class DrillInPanel: NSView {
         header.translatesAutoresizingMaskIntoConstraints = false
         configureField(titleField, font: BoardTheme.title, color: BoardTheme.textPrimary)
         configureField(stateField, font: BoardTheme.monoSmall, color: BoardTheme.textMuted)
+        configureField(quotaField, font: BoardTheme.monoSmall, color: BoardTheme.textMuted)
         header.addArrangedSubview(backPill)
         header.addArrangedSubview(titleField)
         header.addArrangedSubview(stateField)
+        let spring = NSView()
+        spring.setContentHuggingPriority(.init(1), for: .horizontal)
+        header.addArrangedSubview(spring)
+        header.addArrangedSubview(quotaField)   // quota stays visible while drilled in
         addSubview(header)
         NSLayoutConstraint.activate([
             header.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -118,14 +124,14 @@ final class DrillInPanel: NSView {
     /// (US-002 AC#1). The previous surface is detached first so only the focused
     /// terminal is foreground-rendered (US-002 edge case #2 / TC-E2E-007).
     func focus(card: BoardCard, pty: PTYSession) {
-        titleField.stringValue = card.projectDir
-        stateField.stringValue = "\(card.sessionID) · \(card.agent.displayName) · \(card.state.rawValue)"
+        titleField.stringValue = card.title ?? BoardTheme.shortPath(card.projectDir)
+        stateField.stringValue = "\(BoardTheme.shortPath(card.projectDir)) · \(card.agent.displayName) · \(card.state.rawValue)"
         detachSurface()
         let surface = TerminalSurface(session: pty)
-        // The terminal is the first responder, so Esc arrives at its `keyDown`, not
-        // the button's `keyEquivalent`. Route Esc back to the board from there — the
-        // only place it deterministically lands.
-        surface.onEscape = { [weak self] in self?.goBack(); return true }
+        // Esc belongs to the child (Claude Code interrupt / edit), so "back to board"
+        // is ⌘[ — routed via the surface's `performKeyEquivalent`. The click pill is
+        // the other way back.
+        surface.onBack = { [weak self] in self?.goBack(); return true }
         mount(surface)
         surface.startReading()
         window?.makeFirstResponder(surface)   // ready for typed input
@@ -147,6 +153,21 @@ final class DrillInPanel: NSView {
         surface?.stopReading()
         surface?.removeFromSuperview()
         surface = nil
+    }
+
+    /// Compact quota readout for the header — the full panel is covered by the
+    /// takeover, so the operator keeps capacity awareness without leaving the task.
+    func updateQuota(_ gauges: [QuotaGauge]) {
+        quotaField.stringValue = gauges
+            .compactMap { g in g.remainingFraction.map { "\(g.pool) \(Int($0 * 100))%" } }
+            .joined(separator: " · ")
+    }
+
+    /// Show the end-of-session banner on the mounted surface (the child died while
+    /// drilled in) and reflect it in the header, so the terminal never reads as hung.
+    func markEnded(_ disposition: SessionDisposition) {
+        surface?.markEnded(disposition)
+        stateField.stringValue += " · \(disposition.shortLabel)"
     }
 
     /// Return to the board (US-002 AC#2). Internal so the interaction is driven by a

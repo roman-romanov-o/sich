@@ -21,4 +21,16 @@ int gl_spawn_in_pty(char *const argv[],
                     unsigned short cols,
                     pid_t *child_out);
 
+/**
+ * Resize the pty's window size (TIOCSWINSZ). The kernel delivers SIGWINCH to the
+ * child's foreground process group, so the child (shell, claude TUI) reflows to
+ * the new geometry — the fix for a child stuck thinking it is 80x24.
+ *
+ * @param fd   The pty master fd.
+ * @param rows New row count.
+ * @param cols New column count.
+ * @return 0 on success, -1 on ioctl failure.
+ */
+int gl_set_winsize(int fd, unsigned short rows, unsigned short cols);
+
 #endif /* GHOSTLING_PTY_SUPPORT_H */

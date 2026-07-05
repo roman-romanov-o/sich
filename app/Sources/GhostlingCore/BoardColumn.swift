@@ -1,8 +1,8 @@
 import Foundation
 
-/// The board's state columns — a faithful port of the Python `Column` enum
-/// (`src/mission_control/board/placement.py`): the six US-003 state-columns plus
-/// an explicit `unknown` for the not-positively-determined case (US-004 AC#3).
+/// The board's state columns — a faithful port of the (now-retired) Python `Column`
+/// enum: the six US-003 state-columns plus an explicit `unknown` for the
+/// not-positively-determined case (US-004 AC#3).
 ///
 /// `allCases` is the canonical left-to-right ordering the renderer draws. The
 /// HELM POC merges `waitingForInput`+`blocked` into one visual `⚠ attention`
@@ -35,6 +35,12 @@ public enum BoardColumn: String, Sendable, Equatable, CaseIterable {
     /// `⚠ waiting · blocked` header (US-005 made structural).
     public var isAttention: Bool {
         self == .waitingForInput || self == .blocked
+    }
+
+    /// The state a manual drop into this column sets — the inverse of
+    /// `init(state:)`. The rawValues are shared 1:1, so this is total and exact.
+    public var state: CardState {
+        CardState(rawValue: rawValue) ?? .unknown
     }
 }
 

@@ -38,20 +38,18 @@ let package = Package(
             name: "ghostling-probe",
             dependencies: ["GhostlingCore"]
         ),
-        // The launchable, screenshottable single-window shell pane.
+        // The one assembled product binary: board + quota side-panel + drill-in
+        // terminal in a single window (replaces the old per-surface app/board/quota
+        // prototype binaries). Two Anthropic pools stay never-netted; pool firewall
+        // refuses `claude -p`.
         .executableTarget(
-            name: "ghostling-app",
-            dependencies: ["GhostlingApp"]
-        ),
-        // The launchable, screenshottable Phase 03 mission-control board
-        // (state columns × two-flow swimlanes + attention count + drill-in).
-        .executableTarget(
-            name: "ghostling-board",
+            name: "ghostling",
             dependencies: ["GhostlingApp"]
         ),
         .testTarget(
             name: "GhostlingCoreTests",
-            dependencies: ["GhostlingCore"]
+            dependencies: ["GhostlingCore"],
+            resources: [.copy("Fixtures")]
         ),
         // AppKit interaction tests — drive the real view hierarchy (drill-in hides
         // the board; ‘← board’ restores it) so the US-002 wiring is covered by a

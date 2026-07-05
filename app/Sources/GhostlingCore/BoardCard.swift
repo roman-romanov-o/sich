@@ -1,8 +1,8 @@
 import Foundation
 
 /// The detected lifecycle state a board card is placed by — a faithful port of
-/// the Python detector's `SessionState` (`src/mission_control/detector/events.py`),
-/// which is the source of truth for the board columns (US-003 AC#1).
+/// the (now-retired) Python detector's `SessionState`, which was the source of
+/// truth for the board columns (US-003 AC#1).
 ///
 /// This is distinct from `GhostlingCore.SessionState` (the PTY *process* lifecycle:
 /// starting/running/exited/crashed). `CardState` is the *agent-detected* state the
@@ -26,7 +26,7 @@ public enum CardState: String, Sendable, Equatable, CaseIterable {
 }
 
 /// Which agentic-coding CLI drives a card's session (cmux metadata, US-003 AC#2).
-/// Mirrors the Python `Agent` enum (`src/mission_control/board/card.py`).
+/// Mirrors the (now-retired) Python `Agent` enum.
 public enum CardAgent: String, Sendable, Equatable, CaseIterable {
     case claude
     case codex
@@ -50,31 +50,67 @@ public enum CardFlow: String, Sendable, Equatable, CaseIterable {
 }
 
 /// One session's board card: identity + cmux metadata + current detected state
-/// (US-003 AC#2). A faithful Swift port of the Python `Card` model
-/// (`src/mission_control/board/card.py`) — pure data the board renders. Rendering,
-/// focus, and timing are the Swift app's job; this model only carries structure.
+/// (US-003 AC#2). A faithful Swift port of the (now-retired) Python `Card` model
+/// — pure data the board renders. Rendering, focus, and timing are the Swift app's
+/// job; this model only carries structure.
 public struct BoardCard: Identifiable, Sendable, Equatable {
     /// Stable identity, used for selection/drill-in routing.
     public let id: UUID
     public let sessionID: String
+    /// The human task title the operator gave this card at creation ("Fix login
+    /// redirect") — what the work *is*, not the terminal it runs in. `nil` for
+    /// hook-observed sessions we never named; the view falls back to the project
+    /// dir so an untitled card still reads.
+    public let title: String?
     public let projectDir: String
     public let agent: CardAgent
     public let flow: CardFlow
     public let state: CardState
+    /// When this card's state was last observed (from the reconciler's
+    /// `Entry.updatedAt`). The freshness key the board ranks by when several agent
+    /// sessions share one project dir, so a fresh `running` out-ranks a stale
+    /// `blocked`/`waiting` from a prior run (US-002 AC#2). Defaults to `.distantPast`
+    /// so cards built without an observation time all compare equal and fall back to
+    /// the activity-rank tiebreak (preserving the pre-freshness collapse behavior).
+    public let updatedAt: Date
+    /// For a hook-OBSERVED card only: the owned card's `id` (as a UUID string) this
+    /// session was spawned under, carried from the hook line's `ghostling_card_id`.
+    /// Lets the merge bind an observed session to its owned card deterministically,
+    /// even when several owned cards share one project dir. `nil` for owned cards
+    /// and for sessions started outside the app.
+    public let boundCardID: String?
 
     public init(
         id: UUID = UUID(),
         sessionID: String,
+        title: String? = nil,
         projectDir: String,
         agent: CardAgent,
         flow: CardFlow,
-        state: CardState
+        state: CardState,
+        updatedAt: Date = .distantPast,
+        boundCardID: String? = nil
     ) {
         self.id = id
         self.sessionID = sessionID
+        self.title = title
         self.projectDir = projectDir
         self.agent = agent
         self.flow = flow
         self.state = state
+        self.updatedAt = updatedAt
+        self.boundCardID = boundCardID
+    }
+
+    /// The same card in a new lifecycle state — identity, title, dir, agent, and flow
+    /// all preserved. Used when only a card's *state* changes (it moves columns): a
+    /// manual column drop, or an owned terminal adopting the detected state of the
+    /// agent running inside it. Keeps "what the card IS" intact while it moves.
+    public func with(state newState: CardState) -> BoardCard {
+        BoardCard(
+            id: id, sessionID: sessionID, title: title, projectDir: projectDir,
+            agent: agent, flow: flow, state: newState, updatedAt: updatedAt,
+            boundCardID: boundCardID
+        )
     }
 }

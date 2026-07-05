@@ -14,9 +14,15 @@ public final class PTYSession {
     public private(set) var masterFD: Int32 = -1
     public private(set) var childPID: pid_t = -1
 
+    /// Optional observer invoked with each chunk of raw child output as it is read,
+    /// right after it is fed to the emulator — the seam the app layer sniffs semantic
+    /// signals (OSC-7 cwd) off the live stream without re-reading the fd. Set by the
+    /// session's app-side owner; nil by default (a plain terminal, no sniffing).
+    public var onOutput: (([UInt8]) -> Void)?
+
     private let argv: [String]
-    private let rows: UInt16
-    private let cols: UInt16
+    private var rows: UInt16
+    private var cols: UInt16
 
     public init(command argv: [String], rows: UInt16 = 24, cols: UInt16 = 80) throws {
         self.pool = try PoolFirewall.classify(argv)  // firewall on the spawn path
@@ -38,6 +44,28 @@ public final class PTYSession {
         childPID = child
     }
 
+    /// Resize the pty (`TIOCSWINSZ` → SIGWINCH to the child's foreground group) AND
+    /// the emulator grid, so the child reflows to the visible window instead of
+    /// staying at its spawn-time 80×24. No-op when the cell geometry is unchanged,
+    /// so the surface can call this on every layout pass without SIGWINCH spam.
+    public func resize(rows: UInt16, cols: UInt16, cellWidthPx: UInt32, cellHeightPx: UInt32) {
+        guard rows > 0, cols > 0, rows != self.rows || cols != self.cols else { return }
+        self.rows = rows
+        self.cols = cols
+        if masterFD >= 0 { _ = gl_set_winsize(masterFD, rows, cols) }
+        terminal.resize(cols: cols, rows: rows, cellWidthPx: cellWidthPx, cellHeightPx: cellHeightPx)
+    }
+
+    /// The single ingestion path every read method funnels through: feed a chunk of
+    /// child output to the emulator, then notify ``onOutput`` with the same bytes. Also
+    /// the deterministic test seam — push bytes as if read from the child, no live fd
+    /// required — so a semantic sniffer sees exactly what the terminal renders.
+    public func ingest(_ bytes: [UInt8]) {
+        guard !bytes.isEmpty else { return }
+        terminal.write(bytes)
+        onOutput?(bytes)
+    }
+
     /// Read available output once and feed it to the terminal.
     /// Returns the number of bytes read, or 0 at EOF.
     @discardableResult
@@ -45,7 +73,7 @@ public final class PTYSession {
         var buf = [UInt8](repeating: 0, count: bufferSize)
         let n = buf.withUnsafeMutableBytes { read(masterFD, $0.baseAddress, bufferSize) }
         if n > 0 {
-            terminal.write(Array(buf[0..<n]))
+            ingest(Array(buf[0..<n]))
             return n
         }
         return 0
@@ -60,7 +88,7 @@ public final class PTYSession {
         while true {
             let n = buf.withUnsafeMutableBytes { read(masterFD, $0.baseAddress, bufferSize) }
             if n > 0 {
-                terminal.write(Array(buf[0..<n]))
+                ingest(Array(buf[0..<n]))
                 total += n
             } else if n == 0 {
                 break                       // Linux: slave closed
@@ -71,6 +99,43 @@ public final class PTYSession {
             }
         }
         return total
+    }
+
+    /// Put the master fd in non-blocking mode so a poll-driven reader (a run-loop
+    /// timer) can drain "whatever is ready" without ever stalling the main thread
+    /// when the child has produced nothing yet. Idempotent.
+    public func setNonBlocking() {
+        guard masterFD >= 0 else { return }
+        let flags = fcntl(masterFD, F_GETFL)
+        _ = fcntl(masterFD, F_SETFL, flags | O_NONBLOCK)
+    }
+
+    /// Outcome of one non-blocking drain: real bytes, nothing-ready-yet, or the
+    /// child is gone. Distinguishing `idle` from `eof` is the whole point — plain
+    /// ``pump()`` returns 0 for both, which a poll loop would misread as EOF.
+    public enum PumpResult: Equatable { case data(Int), idle, eof }
+
+    /// Drain everything available right now (non-blocking) into the terminal.
+    /// Requires ``setNonBlocking()`` first. `idle` = EAGAIN (child alive, quiet);
+    /// `eof` = slave closed (Linux `read==0`, macOS `EIO`) or a real read error.
+    public func pumpAvailable(bufferSize: Int = 4096) -> PumpResult {
+        var buf = [UInt8](repeating: 0, count: bufferSize)
+        var total = 0
+        while true {
+            let n = buf.withUnsafeMutableBytes { read(masterFD, $0.baseAddress, bufferSize) }
+            if n > 0 {
+                ingest(Array(buf[0..<n]))
+                total += n
+            } else if n == 0 {
+                return .eof                                  // Linux: slave closed
+            } else if errno == EINTR {
+                continue
+            } else if errno == EAGAIN || errno == EWOULDBLOCK {
+                return total > 0 ? .data(total) : .idle      // nothing more for now
+            } else {
+                return .eof                                  // macOS EIO at close, etc.
+            }
+        }
     }
 
     /// Write raw bytes to the child via the pty master (the keystroke path).
@@ -95,6 +160,11 @@ public final class PTYSession {
     }
 
     /// Reap the child and close the master fd. Safe to call once.
+    ///
+    /// The `waitpid` is **blocking** — only correct for a child that exits on its
+    /// own (a self-terminating command, or one already SIGKILLed). For a live
+    /// interactive `$SHELL -il` that never exits, call ``terminate()`` instead, or
+    /// this hangs forever waiting on a process that is still sitting at its prompt.
     public func finish() {
         if childPID > 0 {
             var status: Int32 = 0
@@ -105,6 +175,37 @@ public final class PTYSession {
             close(masterFD)
             masterFD = -1
         }
+    }
+
+    /// Kill the child (if still running) and tear down — the **non-blocking**
+    /// shutdown for a live interactive shell. Without this, quitting the app (or a
+    /// test's teardown) leaks the forked `$SHELL` and `finish()`'s blocking
+    /// `waitpid` hangs on a shell that is still at its prompt. SIGKILL then a
+    /// WNOHANG reap is enough: the master-fd close sends EOF, the kill is the
+    /// belt-and-suspenders for a shell ignoring its controlling-tty hangup.
+    public func terminate() {
+        if childPID > 0 {
+            kill(childPID, SIGKILL)
+            var status: Int32 = 0
+            // A short bounded reap loop — the kill is delivered synchronously, so
+            // the child is reaped within a couple of WNOHANG passes; never block.
+            for _ in 0..<100 where waitpid(childPID, &status, WNOHANG) == 0 {
+                usleep(1000)
+            }
+            childPID = -1
+        }
+        if masterFD >= 0 {
+            close(masterFD)
+            masterFD = -1
+        }
+    }
+
+    /// Whether a **recorded** child PID still refers to a live process — the
+    /// liveness check the restore path (US-003) uses to decide reopen-vs-closed.
+    /// This never re-attaches to the PID (the old pty is gone across a restart); it
+    /// only probes existence via `kill(pid, 0)`, so it spawns nothing.
+    public static func isProcessAlive(pid: Int32) -> Bool {
+        pid > 0 && kill(pid, 0) == 0
     }
 
     public enum SessionError: Error, Equatable {

@@ -1,0 +1,32 @@
+schema_version: 1
+manifest_set_id: ghostling-phase-a-routes-v1
+routes:
+  - route_id: codex-phase-a-v1
+    provider: openai
+    pool: codex
+    model_class: codex-cli-supported
+    launch_kind: user_copied_command
+    capabilities:
+      repository_edit: true
+      shell_tools: true
+      checkpoint_resume: true
+    data_policy:
+      user_approved_required: true
+      local_prompt_persistence: provider_defined
+    static_risk_class:
+      resumable: true
+      minimum_acceptable_output_probability: 0.80
+      maximum_unattended_attention_probability: 0.10
+      maximum_p95_repair_review_minutes: 60
+      maximum_sunk_constraint_fraction: 0.10
+    checkpoint:
+      format: route_native
+      portable_routes: []
+    required_evidence:
+      - measured_comparable_quota
+      - manual_launch_preflight
+      - manual_review_window
+    confidence:
+      evidence_quality: user_attested
+      feasibility_risk: conservative_static
+

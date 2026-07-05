@@ -1,0 +1,37 @@
+{
+  "scenarios": [
+    {
+      "session_id": "sess-normal",
+      "transitions": [
+        "running",
+        "waiting-for-input",
+        "running",
+        "waiting-for-input"
+      ],
+      "final_state": "waiting-for-input"
+    },
+    {
+      "session_id": "sess-dropped",
+      "transitions": [
+        "running",
+        "waiting-for-input"
+      ],
+      "final_state": "waiting-for-input"
+    },
+    {
+      "session_id": "sess-rapid",
+      "transitions": [
+        "running"
+      ],
+      "final_state": "running"
+    },
+    {
+      "session_id": "sess-silent",
+      "transitions": [
+        "running",
+        "unknown"
+      ],
+      "final_state": "unknown"
+    }
+  ]
+}

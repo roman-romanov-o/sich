@@ -1,0 +1,60 @@
+{
+  "sources": [
+    {
+      "pool": "interactive",
+      "provider": "anthropic",
+      "reading": {
+        "available": true,
+        "inferred": true,
+        "refill_kind": "rolling_window",
+        "remaining_amount": null,
+        "remaining_fraction": 0.9999575,
+        "reset": "2026-06-26T15:30:00Z",
+        "state": "active",
+        "unit": null
+      }
+    },
+    {
+      "pool": "agent_sdk_credit",
+      "provider": "anthropic",
+      "reading": {
+        "available": false,
+        "inferred": true,
+        "refill_kind": "unknown",
+        "remaining_amount": null,
+        "remaining_fraction": null,
+        "reset": null,
+        "state": "active",
+        "unit": null
+      }
+    },
+    {
+      "pool": "codex",
+      "provider": "codex",
+      "reading": {
+        "available": false,
+        "inferred": true,
+        "refill_kind": "unknown",
+        "remaining_amount": null,
+        "remaining_fraction": null,
+        "reset": null,
+        "state": "active",
+        "unit": null
+      }
+    },
+    {
+      "pool": "gemini",
+      "provider": "gemini",
+      "reading": {
+        "available": false,
+        "inferred": true,
+        "refill_kind": "unknown",
+        "remaining_amount": null,
+        "remaining_fraction": null,
+        "reset": null,
+        "state": "active",
+        "unit": null
+      }
+    }
+  ]
+}

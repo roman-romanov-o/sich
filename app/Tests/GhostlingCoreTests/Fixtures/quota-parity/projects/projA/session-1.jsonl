@@ -1,0 +1,6 @@
+{"type":"user","message":{"role":"user","content":"hi"},"timestamp":"2026-06-26T10:00:00Z"}
+{"type":"assistant","message":{"role":"assistant","usage":{"input_tokens":1000,"output_tokens":500,"cache_creation_input_tokens":2000,"cache_read_input_tokens":4000}},"timestamp":"2026-06-26T10:30:00Z"}
+{"type":"assistant","message":{"role":"assistant","usage":{"input_tokens":100,"output_tokens":200,"cache_creation_input_tokens":300,"cache_read_input_tokens":400}},"timestamp":"2026-06-26T11:45:00Z"}
+{"type":"assistant","message":{"role":"assistant"},"timestamp":"2026-06-26T11:46:00Z"}
+not-json-this-line-should-be-skipped {"usage":true
+{"type":"assistant","message":{"role":"assistant","usage":{"input_tokens":50,"output_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"timestamp":"2026-06-26T05:00:00Z"}

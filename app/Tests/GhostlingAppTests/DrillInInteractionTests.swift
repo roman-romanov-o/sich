@@ -112,22 +112,14 @@ struct DrillInInteractionTests {
         #expect(shell.attention.isHidden == false)
     }
 
-    /// The test the previous two iterations were missing. A handler-call test (the
-    /// old `backAffordanceFiresReturn`, which called `goBack()` *directly*) proves
-    /// the handler works, never that pressing Esc reaches it. That gap shipped a
-    /// drill-in where Esc typed an escape symbol into the terminal instead of
-    /// returning, three times, all green. (The click path is likewise driven by a
-    /// real event now — see `backPillClickReturnsToBoard`.)
-    ///
-    /// This drives the REAL input path: a real `Esc` `NSEvent` (keyCode 53)
-    /// delivered to the actual first responder after a real drill-in. It is RED
-    /// while `TerminalSurface` forwards Esc to the PTY, and only goes GREEN once
-    /// the surface offers Esc to its host. The one sliver it does not cover is
-    /// `NSWindow.sendEvent`'s own decision to route a keyDown to the first
-    /// responder (AppKit's behavior, not ours) — so it dispatches to
-    /// `window.firstResponder` directly, which is deterministic headlessly.
-    @Test("pressing Esc in the drilled-in terminal returns to the board (real key-event path, US-002 AC#2)")
-    func escReturnsToBoardViaEventDispatch() throws {
+    /// The keyboard path back (US-002 AC#2), driven by a REAL `⌘[` `NSEvent` through
+    /// the key-equivalent route — not a direct `goBack()` call. `⌘[` is the back
+    /// shortcut (the macOS "Back" idiom) precisely because plain `Esc` belongs to the
+    /// child agent; see `escFlowsToChildNotBoard`. Dispatched to the resolved first
+    /// responder directly, which is deterministic headlessly (AppKit's own window-level
+    /// routing is gated for an offscreen, non-key window — that gating is not ours).
+    @Test("pressing ⌘[ in the drilled-in terminal returns to the board (real key-event path, US-002 AC#2)")
+    func cmdBracketReturnsToBoardViaEventDispatch() throws {
         let shell = BoardShell(seeds: singleSeed())
         let root = shell.buildContentForTesting()
 
@@ -144,12 +136,44 @@ struct DrillInInteractionTests {
         shell.drill(into: card)
 
         // Precondition: drilling in actually focuses the embedded terminal. If this
-        // fails, the drill-in wiring itself is broken (a class of bug the old test
-        // could not see either).
+        // fails, the drill-in wiring itself is broken.
         let responder = try #require(window.firstResponder as? TerminalSurface)
 
-        // Act: a real Esc keypress, delivered the way AppKit delivers one — NOT a
-        // direct goBack() call.
+        // Act: a real ⌘[ keypress via the key-equivalent path — NOT a direct goBack().
+        let cmdBracket = try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
+            windowNumber: window.windowNumber, context: nil,
+            characters: "[", charactersIgnoringModifiers: "[",
+            isARepeat: false, keyCode: 33
+        ))
+        #expect(responder.performKeyEquivalent(with: cmdBracket) == true,
+            "the surface must claim ⌘[ as the back shortcut")
+
+        // Assert: ⌘[ returned to the board.
+        #expect(shell.drillIn.isHidden == true,
+            "⌘[ must return to the board")
+        #expect(shell.boardView.isHidden == false)
+        #expect(shell.attention.isHidden == false)
+    }
+
+    /// The reason the shortcut moved off Esc: a drilled-in interactive agent (Claude
+    /// Code's `Esc` interrupt / `Esc Esc` edit) needs Esc to reach the child, so plain
+    /// Esc must NOT bounce back to the board. RED if Esc is ever re-bound to back.
+    @Test("plain Esc flows to the child, it does NOT return to the board")
+    func escFlowsToChildNotBoard() throws {
+        let shell = BoardShell(seeds: singleSeed())
+        let root = shell.buildContentForTesting()
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1280, height: 720),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.contentView = root
+        root.layoutSubtreeIfNeeded()
+
+        let card = try #require(shell.cards.first)
+        shell.drill(into: card)
+        let responder = try #require(window.firstResponder as? TerminalSurface)
+
         let esc = try #require(NSEvent.keyEvent(
             with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
             windowNumber: window.windowNumber, context: nil,
@@ -158,11 +182,9 @@ struct DrillInInteractionTests {
         ))
         responder.keyDown(with: esc)
 
-        // Assert: Esc returned to the board. RED today (the terminal sends Esc to the
-        // PTY, board stays hidden); GREEN once the surface routes Esc back.
-        #expect(shell.drillIn.isHidden == true,
-            "Esc must return to the board, not type an escape symbol into the terminal")
-        #expect(shell.boardView.isHidden == false)
-        #expect(shell.attention.isHidden == false)
+        // Still drilled in: Esc went to the PTY, not to goBack().
+        #expect(shell.drillIn.isHidden == false,
+            "Esc must reach the child agent, not return to the board")
+        #expect(shell.boardView.isHidden == true)
     }
 }

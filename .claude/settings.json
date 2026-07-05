@@ -1,14 +1,84 @@
 {
-  "hooks": {
-    "SessionStart": [
+  "hooks" : {
+    "Notification" : [
       {
-        "matcher": "",
-        "hooks": [
+        "hooks" : [
           {
-            "type": "command",
-            "command": "bash .claude/scripts/welcome.sh"
+            "command" : "bash .claude\/scripts\/ghostling-forward.sh",
+            "type" : "command"
           }
-        ]
+        ],
+        "matcher" : ""
+      }
+    ],
+    "PostToolUse" : [
+      {
+        "hooks" : [
+          {
+            "command" : "bash .claude\/scripts\/ghostling-forward.sh",
+            "type" : "command"
+          }
+        ],
+        "matcher" : ""
+      }
+    ],
+    "PreToolUse" : [
+      {
+        "hooks" : [
+          {
+            "command" : "bash .claude\/scripts\/ghostling-forward.sh",
+            "type" : "command"
+          }
+        ],
+        "matcher" : ""
+      }
+    ],
+    "SessionEnd" : [
+      {
+        "hooks" : [
+          {
+            "command" : "bash .claude\/scripts\/ghostling-forward.sh",
+            "type" : "command"
+          }
+        ],
+        "matcher" : ""
+      }
+    ],
+    "SessionStart" : [
+      {
+        "hooks" : [
+          {
+            "command" : "bash .claude\/scripts\/welcome.sh",
+            "type" : "command"
+          },
+          {
+            "command" : "bash .claude\/scripts\/ghostling-forward.sh",
+            "type" : "command"
+          }
+        ],
+        "matcher" : ""
+      }
+    ],
+    "Stop" : [
+      {
+        "hooks" : [
+          {
+            "command" : "bash .claude\/scripts\/ghostling-forward.sh",
+            "type" : "command"
+          }
+        ],
+        "matcher" : ""
+      }
+    ],
+    "UserPromptSubmit" : [
+      {
+        "hooks" : [
+          {
+            "command" : "bash .claude\/scripts\/ghostling-forward.sh",
+            "type" : "command"
+          }
+        ],
+        "matcher" : ""
       }
     ]
   }

@@ -1,0 +1,136 @@
+import GhostlingCore
+import Testing
+
+@testable import GhostlingApp
+
+/// The board hosts two kinds of card at once: an **owned** session we launched in
+/// our own PTY (the live interactive terminal — drillable, you run `claude` in it)
+/// and **observed** sessions from hook POSTs we only watch (status-only, no PTY).
+/// These drive `BoardShell.applySessions` — the live `/sessions` merge — to prove
+/// the 3s poll does NOT wipe the real terminal, and that the watcher-not-spawner
+/// constraint reaches the board: a session we never spawned is not drillable.
+@MainActor
+struct BoardSessionMergeTests {
+    /// A light owned seed: the demo-stub PTY (a real `/bin/sh`, cheap to launch),
+    /// standing in for the live terminal whose PTY we own.
+    private func ownedShell() -> BoardShell {
+        let seed = BoardSeed(
+            sessionID: "live-terminal", projectDir: "/work",
+            agent: .claude, flow: .b, state: .idle, scrollback: "ready"
+        )
+        let shell = BoardShell(seeds: [seed])
+        shell.buildContentForTesting()
+        return shell
+    }
+
+    private func observed(_ id: String, _ state: CardState) -> BoardCard {
+        BoardCard(sessionID: id, projectDir: "/other", agent: .claude, flow: .b, state: state)
+    }
+
+    @Test func liveTerminalSurvivesTheSessionsPollAndStaysDrillable() {
+        let shell = ownedShell()
+
+        shell.applySessions([observed("sess-other", .running)])
+
+        // Owned terminal kept; observed session merged in (not a replace).
+        #expect(shell.cards.map(\.sessionID).sorted() == ["live-terminal", "sess-other"])
+
+        // Still drillable — it carries our PTY, so drilling hides the board.
+        let owned = shell.cards.first { $0.sessionID == "live-terminal" }!
+        shell.drill(into: owned)
+        #expect(shell.boardView.isHidden)
+    }
+
+    @Test func observedSessionIsStatusOnlyNeverDrillable() {
+        let shell = ownedShell()
+        shell.applySessions([observed("sess-other", .running)])
+
+        let other = shell.cards.first { $0.sessionID == "sess-other" }!
+        shell.drill(into: other)   // no PTY of ours → the drill guard no-ops
+        #expect(shell.boardView.isHidden == false)  // board stays; we never spawned it
+    }
+
+    @Test func anEmptyPollLeavesTheLiveTerminalStanding() {
+        let shell = ownedShell()
+        shell.applySessions([])   // sidecar up, no observed sessions yet
+        #expect(shell.cards.map(\.sessionID) == ["live-terminal"])
+    }
+
+    /// Running `claude` inside our owned `/work` terminal makes claude POST a hook
+    /// session under ITS OWN `session_id` (≠ our "live-terminal" id) but the SAME
+    /// `projectDir`. That session IS this terminal's agent: the owned card ADOPTS its
+    /// live state and MOVES columns with the model's output — without spawning a
+    /// second, drifting "claude-abc123" card.
+    @Test func ownedTerminalAdoptsTheLiveStateOfClaudeRunningInIt() {
+        let shell = ownedShell()   // owned card: id "live-terminal", dir "/work", state .idle
+
+        let claudeHook = BoardCard(sessionID: "claude-abc123", projectDir: "/work",
+                                   agent: .claude, flow: .b, state: .running)
+        shell.applySessions([claudeHook])
+
+        // Still ONE card, the owned one — not a second "claude-abc123" card.
+        #expect(shell.cards.map(\.sessionID) == ["live-terminal"])
+        // …and it MOVED: the owned card now shows claude's live state.
+        #expect(shell.cards.first?.state == .running)
+    }
+
+    /// The owned terminal tracks the agent through its whole lifecycle from the hook
+    /// stream: idle → running → waiting-for-input (which lights the attention signal —
+    /// our "needs you" notification) → done. One card throughout, PTY preserved (still
+    /// drillable). This is "cards move themselves based on the model's output".
+    @Test func ownedTerminalMovesAcrossColumnsAsTheModelWorks() {
+        let shell = ownedShell()
+        func claude(_ state: CardState) -> BoardCard {
+            BoardCard(sessionID: "claude-xyz", projectDir: "/work",
+                      agent: .claude, flow: .b, state: state)
+        }
+
+        shell.applySessions([claude(.running)])
+        #expect(shell.cards.first?.state == .running)
+
+        shell.applySessions([claude(.waitingForInput)])
+        #expect(shell.cards.first?.state == .waitingForInput)
+        #expect(Attention.count(shell.cards) == 1)   // the notification: this card needs you
+
+        shell.applySessions([claude(.done)])
+        #expect(shell.cards.first?.state == .done)
+
+        // One card the whole way through, still ours, still drillable.
+        #expect(shell.cards.count == 1)
+        shell.drill(into: shell.cards.first!)
+        #expect(shell.boardView.isHidden)
+    }
+
+    /// Several hook `session_id`s in ONE project dir that no owned card matches (e.g.
+    /// the app launched outside the repo so the live-terminal's dir differs) are the
+    /// SAME task: they collapse to a single status card in the column of their
+    /// most-live run — not scattered across columns as N cards. Regression: "tasks
+    /// appear in different categories."
+    @Test func manyObservedSessionsInOneDirCollapseToOneCard() {
+        let shell = ownedShell()      // owned card's dir is "/work"
+        let repo = "/elsewhere"       // a dir no owned card matches
+        func run(_ id: String, _ state: CardState) -> BoardCard {
+            BoardCard(sessionID: id, projectDir: repo, agent: .claude, flow: .b, state: state)
+        }
+        shell.applySessions([run("run-1", .done), run("run-2", .running), run("run-3", .idle)])
+
+        let extra = shell.cards.filter { $0.projectDir == repo }
+        #expect(extra.count == 1)                // one card for the project, not three
+        #expect(extra.first?.state == .running)  // shown in its most-live run's column
+    }
+
+    /// When two agent sessions have run in one terminal — an old finished run plus a
+    /// fresh active one — the owned card tracks what's live now (the active one), not
+    /// the stale `done`.
+    @Test func ownedTerminalTracksTheLiveRunNotAStaleFinishedOne() {
+        let shell = ownedShell()
+        let oldRun = BoardCard(sessionID: "claude-old", projectDir: "/work",
+                               agent: .claude, flow: .b, state: .done)
+        let freshRun = BoardCard(sessionID: "claude-new", projectDir: "/work",
+                                 agent: .claude, flow: .b, state: .running)
+        shell.applySessions([oldRun, freshRun])
+
+        #expect(shell.cards.map(\.sessionID) == ["live-terminal"])  // no duplicates
+        #expect(shell.cards.first?.state == .running)               // the live run wins
+    }
+}

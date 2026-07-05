@@ -1,0 +1,3 @@
+{"type":"assistant","message":{"role":"assistant","usage":{"input_tokens":700,"output_tokens":300,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"timestamp":"2026-06-22T09:00:00Z"}
+{"type":"assistant","message":{"role":"assistant","usage":{"input_tokens":9999,"output_tokens":9999,"cache_creation_input_tokens":9999,"cache_read_input_tokens":9999}},"timestamp":"2026-06-10T09:00:00Z"}
+{"type":"summary","summary":"older than 7d, also no usage anyway","timestamp":"2026-06-01T00:00:00Z"}
