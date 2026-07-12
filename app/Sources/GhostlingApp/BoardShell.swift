@@ -23,6 +23,9 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     let boardView = BoardView()
     let attention = AttentionIndicator()
     let drillIn = DrillInPanel()
+    let planningMode = PlanningModeView()
+    private(set) var sahaTaskChooser: SahaTaskChooserView?
+    private(set) var createPalette: CreateCardPalette?
     // The quota panel folded in as a right-side region — one assembled window
     // shows the board AND the four never-netted gauges (no separate binary).
     let quota = QuotaPanel()
@@ -32,12 +35,17 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     // Started only on the real launch path (not in tests).
     private var quotaPoller: NativeQuotaPoller?
     private var sessionsPoller: SessionsPoller?
+    private var turnDiffs: [TurnDiff] = []
     // The always-on pty drain (the fix for "work stops when I leave the task"): one
     // main-run-loop timer that reads EVERY owned session's pty each tick — not just
     // the drilled-in one — so an off-screen agent's child never blocks on a full
     // kernel buffer. Its own surface drains the drilled-in card, so the pump skips it.
     private var sessionPumpTimer: Timer?
-    private var drilledInCardID: UUID?
+    // Ctrl+Tab task-switch monitor — retained so it can be torn down; installed only
+    // on the real launch path, never the headless test build (tests drive cycleDrill
+    // and switchDirection directly, so no event-loop dependency).
+    private var taskSwitchMonitor: Any?
+    private(set) var drilledInCardID: UUID?
     // Pump ticks since launch — the reconcile pass piggybacks on the pump timer at
     // a ~1s cadence (one waitpid(WNOHANG) per live session; no extra timer).
     private var pumpTick = 0
@@ -52,7 +60,9 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
 
     private var selection = BoardSelection()
     private(set) var cards: [BoardCard] = []
+    private(set) var planningModeCardID: UUID?
     private var ptyByCard: [UUID: PTYSession] = [:]
+    var launchOverrideForTesting: ((BoardSeed) -> Session?)?
     // Repo root for the live-terminal cwd and the hook installer (resolved once).
     private let repoRoot = RepoLocator.repoRoot()
     // Monotonic suffix so each "+ new session" card gets a unique sessionID.
@@ -76,6 +86,8 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         restorePreviousSessions()
         seedSessions()
         makeWindow()
+        installMainMenu()
+        installTaskSwitchMonitor()
         wireInteractions()
         refresh()
         startSessionPump()
@@ -84,9 +96,44 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         // repo appear on the board — the app installs it (the agent can't). Launch
         // path only, never the headless test build.
         if let repoRoot { HookInstaller.install(repoRoot: repoRoot) }
+        // …and USER-level, so claude sessions in ANY project dir (task cards point at
+        // other repos too) emit hook lines — without this, a card whose repo lacks the
+        // forwarder never moves columns while its agent works.
+        HookInstaller.installGlobal()
         // US-004: install Ghostty shell-integration the same way (idempotent; non-zsh
         // and write failures degrade gracefully) so the shell reports cwd semantically.
         installShellIntegration(installRoot: Self.shellIntegrationRoot(), rc: Self.defaultZshrc())
+        // Capture seam: `GHOSTLING_OPEN_PALETTE=1` opens the ⌘N create palette on launch
+        // so a screenshot tool can grab the real composited chrome (not a CALayer render).
+        if ProcessInfo.processInfo.environment["GHOSTLING_OPEN_PALETTE"] != nil {
+            openCreatePalette()
+            // Capture the richest stage without keystroke automation: jump straight in.
+            let stage = ProcessInfo.processInfo.environment["GHOSTLING_PALETTE_STAGE"]
+            if let dir = recentProjectDirs().first {
+                if stage == "task" {
+                    let real = TaskFolderIndex().discover(in: URL(fileURLWithPath: dir, isDirectory: true))
+                    let folders = real.isEmpty ? Self.demoTaskFolders(dir) : real
+                    createPalette?.presentSahaTaskStage(projectDir: dir, folders: folders)
+                } else if stage == "harness" {
+                    createPalette?.presentHarnessStage(projectDir: dir)
+                }
+            }
+            if let n = window?.windowNumber { FileHandle.standardError.write(Data("GHOSTLING_WINDOW=\(n)\n".utf8)) }
+        }
+        // Capture seam: `GHOSTLING_OPEN_PLANNING=<taskFolder>` enters Planning Mode against
+        // a real task folder so a screenshot can verify the markdown doc pane renders.
+        if let folder = ProcessInfo.processInfo.environment["GHOSTLING_OPEN_PLANNING"] {
+            let dir = recentProjectDirs().first ?? folder
+            enterPlanningMode(BoardCard(
+                sessionID: "planning", projectDir: dir, agent: .claude,
+                flow: .a, state: .idle, taskFolder: folder))
+            // Capture seam: `GHOSTLING_OPEN_FILEREF=<ref>` drives straight into the file viewer
+            // so a screenshot can verify the "← doc" back affordance.
+            if let ref = ProcessInfo.processInfo.environment["GHOSTLING_OPEN_FILEREF"] {
+                planningMode.openFileRef(ref)
+            }
+            if let n = window?.windowNumber { FileHandle.standardError.write(Data("GHOSTLING_WINDOW=\(n)\n".utf8)) }
+        }
         maybeRunE2E()
     }
 
@@ -150,7 +197,13 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
             poller.start()
             self.quotaPoller = poller
         }
-        let sessionsPoller = SessionsPoller { [weak self] cards in self?.applySessions(cards) }
+        let sessionsPoller = SessionsPoller(
+            diffSink: { [weak self] diffs in
+                self?.turnDiffs = diffs
+                self?.drillIn.update(diffs: diffs)
+            },
+            sink: { [weak self] cards in self?.applySessions(cards) }
+        )
         sessionsPoller.start()
         self.sessionsPoller = sessionsPoller
     }
@@ -199,7 +252,8 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         pumpTick += 1
         if pumpTick % Int(pumpHz) == 0 { reconcileDeadSessions() }   // ~1s cadence
         var sawData = false
-        for (id, pty) in ptyByCard where id != drilledInCardID && pty.masterFD >= 0 {
+        for (id, pty) in ptyByCard
+        where id != drilledInCardID && id != planningModeCardID && pty.masterFD >= 0 {
             pty.setNonBlocking()          // idempotent
             drain: while true {
                 switch pty.pumpAvailable() {
@@ -308,6 +362,14 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
             agentType: .shell, flowTag: pane.snapshot.flowTag
         ) else { return }
         ShellSignalBridge.attachCwdReporting(to: session)   // US-004: live OSC-7 cwd
+        // A pane that was driving a Claude conversation comes back on that conversation,
+        // not as a bare shell: resume the pinned id we persisted. The restored session
+        // carries the ORIGINAL id forward (not its own fresh `id`), so the resume token
+        // survives an unbounded chain of restarts. Interactive `claude` only — firewall-clean.
+        if let claudeID = pane.snapshot.claudeSessionID, pane.liveness == .reopened {
+            session.recordClaudeSession(claudeID)
+            _ = session.pty.send(Array(Self.resumeClaudeCommand(sessionID: claudeID).utf8))
+        }
         let card = BoardCard(
             sessionID: pane.snapshot.sessionID.uuidString, projectDir: pane.cwd,
             agent: Self.cardAgent(for: pane.snapshot.agentType),
@@ -315,6 +377,21 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         )
         cards.append(card)
         ptyByCard[card.id] = session.pty
+    }
+
+    /// The keystrokes that start a NEW Claude conversation pinned to `sessionID`, so we
+    /// know the id up front and can resume it later. Lowercased to match Claude's own
+    /// transcript-id form (what `--resume` looks up).
+    static func startClaudeCommand(sessionID: UUID) -> String {
+        "claude --session-id \(sessionID.uuidString.lowercased())\n"
+    }
+
+    /// The keystrokes that RESUME the conversation `sessionID` on a restored pane. Falls
+    /// back to a fresh `claude` if the transcript is gone (resume exits non-zero), so a
+    /// restore never lands the operator on a dead shell; stderr is dropped so the expected
+    /// "no conversation" note doesn't flash before the fallback.
+    static func resumeClaudeCommand(sessionID: UUID) -> String {
+        "claude --resume \(sessionID.uuidString.lowercased()) 2>/dev/null || claude\n"
     }
 
     /// US-004: install Ghostty shell-integration idempotently (a no-op on the second
@@ -363,15 +440,36 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         return root
     }
 
+    /// Test seam (US-004 AC2): is this PTY session held by the pool-firewalled
+    /// registry? Lets a test prove the planning terminal is registered exactly once
+    /// through the normal path — no bypass, no second spawn.
+    func isRegistered(_ pty: PTYSession) -> Bool {
+        registry.all.contains { $0.pty === pty }
+    }
+
+    /// Test seam: open Planning Mode on a card through the exact production entry
+    /// (attaches the registered pty, hides the board) — the real gesture handlers call
+    /// this same method.
+    func enterPlanningModeForTesting(_ card: BoardCard) { enterPlanningMode(card) }
+
     // MARK: - Seeding
 
     private func seedSessions() {
         for seed in seeds {
             guard let session = launch(seed) else { continue }
+            let inferredTaskFolder: String?
+            if seed.flow == .a, seed.taskFolder == nil {
+                inferredTaskFolder = TaskFolderIndex().inferredFolder(
+                    in: URL(fileURLWithPath: seed.projectDir, isDirectory: true)
+                )?.path
+            } else {
+                inferredTaskFolder = seed.taskFolder
+            }
             let card = BoardCard(
                 id: seed.cardID.flatMap(UUID.init(uuidString:)) ?? UUID(),
                 sessionID: seed.sessionID, title: seed.title, projectDir: seed.projectDir,
-                agent: seed.agent, flow: seed.flow, state: seed.state
+                agent: seed.agent, flow: seed.flow, state: seed.state,
+                taskFolder: inferredTaskFolder
             )
             cards.append(card)
             ptyByCard[card.id] = session.pty
@@ -379,6 +477,9 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     }
 
     private func launch(_ seed: BoardSeed) -> Session? {
+        if let launchOverrideForTesting {
+            return launchOverrideForTesting(seed)
+        }
         guard let session = try? registry.launch(
             command: seed.command,
             projectDir: seed.projectDir,
@@ -391,6 +492,51 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
 
     // MARK: - Window
 
+    /// A minimal main menu so ⌘N opens the create palette (the design's shortcut) and
+    /// ⌘Q quits — `swift run` binaries start with no menu at all. ponytail: two items,
+    /// no nib; grows only if more shortcuts are actually wanted.
+    private func installMainMenu() {
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "New Task", action: #selector(newTaskMenuAction),
+                        keyEquivalent: "n").target = self
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Quit Ghostling", action: #selector(NSApplication.terminate(_:)),
+                        keyEquivalent: "q")
+        let appItem = NSMenuItem()
+        appItem.submenu = appMenu
+        let main = NSMenu()
+        main.addItem(appItem)
+        NSApp.mainMenu = main
+    }
+
+    @objc private func newTaskMenuAction() { openCreatePalette() }
+
+    /// Ctrl+Tab / Ctrl+Shift+Tab jumps straight between focused tasks. A local key
+    /// monitor is the single choke point that fires BEFORE the drilled-in terminal's
+    /// first responder swallows the key — unlike ⌘-combos, a Control-modified key isn't
+    /// reliably routed through `performKeyEquivalent`, and plain Tab belongs to the
+    /// child. Works identically from the board, drill-in, and planning mode.
+    private func installTaskSwitchMonitor() {
+        taskSwitchMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, let reverse = Self.switchDirection(for: event) else { return event }
+            self.cycleDrill(reverse: reverse)
+            return nil   // consume it — never let plain Tab reach the child
+        }
+    }
+
+    /// Decode a key event into a switch direction (`false` = next, `true` = previous),
+    /// or `nil` when it isn't the switch chord. Static + `NSEvent`-driven so a test can
+    /// dispatch a REAL Ctrl+Tab event through the same decode the monitor uses, per the
+    /// Interaction-AC Binding Rule — not by calling a handler.
+    static func switchDirection(for event: NSEvent) -> Bool? {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        // keyCode 48 = Tab. Control required; Command must be absent (⌘Tab is the OS
+        // app-switcher, not ours); Shift reverses.
+        guard event.keyCode == 48, flags.contains(.control), !flags.contains(.command)
+        else { return nil }
+        return flags.contains(.shift)
+    }
+
     private func makeWindow() {
         let window = NSWindow(
             // 1400×860: wide enough that all 5 columns + the quota panel fit on
@@ -400,6 +546,14 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
             backing: .buffered, defer: false
         )
         window.title = "Ghostling — mission control"
+        // Dissolve the stock grey title bar into the app's dark chrome: transparent bar
+        // filled with the canvas colour, no centred title text — leaves just the traffic
+        // lights over one continuous surface. (No fullSizeContentView: content still lays
+        // out below the bar, so nothing collides with the traffic lights.)
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.backgroundColor = BoardTheme.canvas
+        window.appearance = NSAppearance(named: .darkAqua)
         // The fixed 5-column board clips below ~1360pt with no scroll signal
         // (ColumnLayout's known ceiling) — stop the window from shrinking into it.
         window.contentMinSize = NSSize(width: 1360, height: 640)
@@ -423,7 +577,20 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         layout(boardView, in: root, header: false)
         drillIn.isHidden = true
         layoutDrillIn(in: root)
+        planningMode.isHidden = true
+        layoutFullWindow(planningMode, in: root)
         return root
+    }
+
+    private func layoutFullWindow(_ view: NSView, in root: NSView) {
+        view.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(view)
+        NSLayoutConstraint.activate([
+            view.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            view.topAnchor.constraint(equalTo: root.topAnchor),
+            view.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+        ])
     }
 
     /// The quota panel pinned to the trailing edge as a fixed-width column, from
@@ -488,71 +655,113 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         boardView.onMove = { [weak self] id, column in self?.move(cardID: id, to: column) }
         attention.onActivate = { [weak self] in self?.activateAttention() }
         drillIn.onClose = { [weak self] in self?.returnToBoard() }
+        planningMode.onReturn = { [weak self] in self?.returnToBoard() }
     }
 
-    /// The "+ new session" affordance: ask what the task IS (a human title) and
-    /// where it runs, then create the card. A card is a *task* the operator is
-    /// working on, not an anonymous `terminal-N` — naming it at birth is what makes
-    /// the board legible. Cancelling the prompt creates nothing.
-    func promptAndCreateSession() {
-        guard let task = promptForNewTask() else { return }
-        createSession(title: task.title.isEmpty ? nil : task.title, projectDir: task.dir,
-                      startClaude: task.startClaude)
-        rememberProjectDir(task.dir)
+    /// The "+ new session" affordance (⌘N): open the keyboard-first create palette —
+    /// project → harness → task — replacing the old NSAlert + bare chooser. A card is a
+    /// *task* the operator is working on, not an anonymous `terminal-N`; naming it at
+    /// birth is what makes the board legible. Cancelling creates nothing.
+    func promptAndCreateSession() { openCreatePalette() }
+
+    /// Mount ``CreateCardPalette`` full-window and wire its confirm closures to the
+    /// card-creation logic (which owns the pool firewall + saha binding invariants).
+    /// The palette is a dumb view; every side effect flows back through here.
+    func openCreatePalette() {
+        let palette = CreateCardPalette(recents: paletteRecents())
+        palette.browse = { [weak self] in Self.chooseFolder(relativeTo: self?.window) }
+        palette.discoverFolders = { dir in
+            TaskFolderIndex().discover(in: URL(fileURLWithPath: dir, isDirectory: true))
+        }
+        palette.onCancel = { [weak self] in self?.dismissCreatePalette() }
+        palette.confirmInteractive = { [weak self] title, dir, startClaude in
+            guard let self else { return }
+            self.createSession(title: title.isEmpty ? nil : title, projectDir: dir,
+                               startClaude: startClaude)
+            self.rememberProjectDir(dir)
+            self.dismissCreatePalette()
+        }
+        palette.confirmSahaNew = { [weak self] title, dir in
+            self?.completeSahaNew(title: title, dir: dir)
+        }
+        palette.confirmSahaExisting = { [weak self] folder, dir in
+            self?.completeSahaExisting(folder: folder, dir: dir)
+        }
+        createPalette?.removeFromSuperview()
+        createPalette = palette
+        guard let root = boardView.superview else { return }
+        layoutFullWindow(palette, in: root)
+        window?.makeFirstResponder(palette)
     }
 
-    /// A small native modal asking for the task title + project folder. The folder is
-    /// a list of recent folders as clickable rows (designer Approach A), with a
-    /// "Choose…" row opening the native `NSOpenPanel` — no path-typing. Returns the
-    /// trimmed values, or `nil` if cancelled.
-    /// ponytail: NSAlert + a custom accessory keeps the stdlib modal shell (Esc to
-    /// cancel, ↵ to create) while swapping just the folder control the operator disliked.
-    private func promptForNewTask() -> (title: String, dir: String, startClaude: Bool)? {
-        let recents = recentProjectDirs()
-        let alert = NSAlert()
-        alert.messageText = "New task"
-        alert.informativeText = "Name the work, then pick where it runs."
-        alert.addButton(withTitle: "Create task")
-        alert.addButton(withTitle: "Cancel")
-        let titleField = NSTextField()
-        titleField.placeholderString = "e.g. Fix the login redirect"
-        let picker = FolderPickerView(recentDirs: recents)
-        picker.onBrowse = { [weak alert] in Self.chooseFolder(relativeTo: alert?.window) }
-        // Interactive `claude` typed into the login shell — the same keystrokes the
-        // operator would type; never `claude -p` (pool firewall untouched).
-        let startClaude = NSButton(checkboxWithTitle: "Start claude in it", target: nil, action: nil)
-        startClaude.state = .on
-        alert.accessoryView = makeTaskAccessory(titleField: titleField, picker: picker,
-                                                startClaude: startClaude)
-        alert.window.initialFirstResponder = titleField
-        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
-        let title = titleField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (title, picker.selectedDir.isEmpty ? (recents.first ?? "") : picker.selectedDir,
-                startClaude.state == .on)
+    /// saha "Create new" from the palette: scaffold + bind + enter planning. Returns an
+    /// error string for the palette to show, or nil on success (planning is now up).
+    private func completeSahaNew(title: String, dir: String) -> String? {
+        do {
+            guard let card = try createSahaSession(
+                title: title,
+                projectDirectory: URL(fileURLWithPath: dir, isDirectory: true),
+                script: sahaInitScript(),
+                scaffolder: TaskScaffolder(runner: FoundationTaskScaffoldRunner())
+            ) else { return "Could not launch the planning terminal." }
+            rememberProjectDir(dir)
+            dismissCreatePalette()
+            _ = card
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
     }
 
-    /// Stack the captioned title field over the folder picker, sized to fit so NSAlert
-    /// lays it out cleanly.
-    private func makeTaskAccessory(
-        titleField: NSTextField, picker: FolderPickerView, startClaude: NSButton
-    ) -> NSView {
-        titleField.widthAnchor.constraint(equalToConstant: 360).isActive = true
-        picker.widthAnchor.constraint(equalToConstant: 360).isActive = true
-        let stack = NSStackView(views: [
-            accessoryCaption("Task"), titleField,
-            accessoryCaption("Project folder"), picker,
-            startClaude,
-        ])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 5
-        stack.setCustomSpacing(11, after: titleField)
-        stack.layoutSubtreeIfNeeded()
-        stack.frame = NSRect(origin: .zero, size: stack.fittingSize)
-        return stack
+    /// saha "bind existing folder" from the palette: bind + enter planning.
+    private func completeSahaExisting(folder: URL, dir: String) -> String? {
+        guard let card = createSahaExisting(
+            folder: folder, projectDirectory: URL(fileURLWithPath: dir, isDirectory: true)
+        ) else { return "Could not launch the planning terminal." }
+        rememberProjectDir(dir)
+        dismissCreatePalette()
+        _ = card
+        return nil
     }
 
-    /// The native macOS folder chooser, run as a nested modal over the alert.
+    func dismissCreatePalette() {
+        createPalette?.removeFromSuperview()
+        createPalette = nil
+        window?.makeFirstResponder(boardView)
+    }
+
+    /// Recent project dirs as palette rows, each tagged with how many owned (live-pty)
+    /// cards currently run in it — the "N active cards" the design shows.
+    private func paletteRecents() -> [PaletteProject] {
+        var active: [String: Int] = [:]
+        for card in cards where ptyByCard[card.id] != nil {
+            active[Self.normDir(card.projectDir), default: 0] += 1
+        }
+        return recentProjectDirs().map {
+            PaletteProject(path: $0, activeCards: active[Self.normDir($0)] ?? 0)
+        }
+    }
+
+    /// Fixture folders so a capture of the task stage shows the full bind-list (progress
+    /// bars + "Create new") even in a repo with no `docs/tasks`. Capture-seam only.
+    private static func demoTaskFolders(_ dir: String) -> [TaskFolderSummary] {
+        let base = URL(fileURLWithPath: dir, isDirectory: true).appendingPathComponent("docs/tasks")
+        return [
+            TaskFolderSummary(url: base.appendingPathComponent("task-08-native-saha-planning"),
+                              title: "task-08-native-saha-planning", progress: .known(completed: 6, total: 8)),
+            TaskFolderSummary(url: base.appendingPathComponent("task-05-turn-diffs"),
+                              title: "task-05-turn-diffs", progress: .known(completed: 4, total: 4)),
+        ]
+    }
+
+    /// The bundled task-folder scaffolder (`.claude/scripts/init_task.sh`), resolved
+    /// relative to the repo root. ponytail: one known script path, no lookup config.
+    private func sahaInitScript() -> URL {
+        let base = repoRoot ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        return base.appendingPathComponent(".claude/scripts/init_task.sh")
+    }
+
+    /// The native macOS folder chooser, run as a nested modal over the palette.
     /// ponytail: nested modal is fine for a one-shot picker; AppKit stacks them.
     private static func chooseFolder(relativeTo window: NSWindow?) -> String? {
         let panel = NSOpenPanel()
@@ -562,13 +771,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         panel.prompt = "Use folder"
         panel.message = "Choose the project folder for this task"
         return panel.runModal() == .OK ? panel.url?.path : nil
-    }
-
-    private func accessoryCaption(_ text: String) -> NSTextField {
-        let label = NSTextField(labelWithString: text)
-        label.font = BoardTheme.monoSmall
-        label.textColor = BoardTheme.textMuted
-        return label
     }
 
     /// Recently-used project dirs, most-recent first, with the repo root guaranteed
@@ -597,7 +799,14 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     /// chosen folder; drill in and run `claude`) under the given task title and drop
     /// it on the board. Firewall-clean: a login shell, never `claude -p`. The model
     /// mutation is split from the prompt so a test can drive it without a modal.
-    func createSession(title: String? = nil, projectDir: String? = nil, startClaude: Bool = false) {
+    @discardableResult
+    func createSession(
+        title: String? = nil,
+        projectDir: String? = nil,
+        startClaude: Bool = false,
+        flow: CardFlow = .b,
+        taskFolder: String? = nil
+    ) -> BoardCard? {
         sessionCounter += 1
         let chosen = (projectDir?.isEmpty == false) ? projectDir : nil
         let dir = chosen.map { ($0 as NSString).expandingTildeInPath }
@@ -610,21 +819,132 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
             projectDir: dir, sessionID: sessionSlug(title), title: title,
             cardID: cardID.uuidString
         )
-        guard let session = launch(seed) else { return }
+        guard let session = launch(seed) else { return nil }
         let card = BoardCard(
             id: cardID,
             sessionID: seed.sessionID, title: seed.title, projectDir: seed.projectDir,
-            agent: seed.agent, flow: seed.flow, state: seed.state
+            agent: seed.agent, flow: flow, state: seed.state,
+            taskFolder: taskFolder
         )
         cards.append(card)
         ptyByCard[card.id] = session.pty
         if startClaude {
-            // Type `claude⏎` into the fresh login shell for the operator — the tty
-            // input buffer holds it until the shell finishes initialising. Interactive
+            // Type the start-claude line into the fresh login shell for the operator — the
+            // tty input buffer holds it until the shell finishes initialising. Interactive
             // pool only; the firewall against `claude -p` is untouched.
-            _ = session.pty.send(Array("claude\n".utf8))
+            //
+            // We OWN the conversation id: pin claude to our session UUID with `--session-id`
+            // rather than let it mint its own. That id is then persisted per pane (see
+            // `snapshotWindows`), so on the next app launch `openRestoredCard` resumes the
+            // exact conversation — no hook-log scraping, and correct even when several task
+            // cards share one repo dir. `--session-id` is fresh here (this UUID has no prior
+            // transcript), so claude accepts it.
+            session.recordClaudeSession(session.id)
+            _ = session.pty.send(Array(Self.startClaudeCommand(sessionID: session.id).utf8))
         }
         refresh()
+        return card
+    }
+
+    @discardableResult
+    func createSahaSession(
+        title: String,
+        projectDirectory: URL,
+        script: URL,
+        scaffolder: any TaskFolderScaffolding
+    ) throws -> BoardCard? {
+        let taskFolder = try scaffolder.create(
+            title: title, projectDirectory: projectDirectory, script: script
+        )
+        guard let card = createSession(
+            title: title,
+            projectDir: projectDirectory.path,
+            startClaude: true,   // saha steps are Claude Code slash-commands — they need claude, not a bare shell
+            flow: .a,
+            taskFolder: taskFolder.path
+        ) else { return nil }
+        enterPlanningMode(card)
+        return card
+    }
+
+    /// Bind a saha card to an ALREADY-scaffolded task folder (the "existing folder"
+    /// path) and drop straight into planning. Shared by the create palette and the
+    /// legacy chooser so the flow-.a binding invariants live in one place.
+    @discardableResult
+    func createSahaExisting(folder: URL, projectDirectory: URL) -> BoardCard? {
+        guard let card = createSession(
+            title: folder.lastPathComponent,
+            projectDir: projectDirectory.path,
+            startClaude: true,   // saha steps are Claude Code slash-commands — they need claude, not a bare shell
+            flow: .a,
+            taskFolder: folder.path
+        ) else { return nil }
+        enterPlanningMode(card)
+        return card
+    }
+
+    /// Presents the real saha folder chooser and wires both choices to card
+    /// insertion. A failed scaffold or terminal launch leaves the board unchanged.
+    /// ponytail: retained as the invariant harness for the saha binding rules
+    /// (TC-E2E-001b et al.); the production create entry is ``CreateCardPalette``.
+    func beginSahaCreation(
+        projectDirectory: URL,
+        script: URL,
+        scaffolder: any TaskFolderScaffolding
+    ) {
+        let folders = TaskFolderIndex().discover(in: projectDirectory)
+        let chooser = SahaTaskChooserView(folders: folders)
+        chooser.bindFolderURLs(folders)
+        chooser.onChooseExisting = { [weak self, weak chooser] folder in
+            guard let self else { return }
+            guard let card = self.createSahaExisting(folder: folder, projectDirectory: projectDirectory) else {
+                chooser?.show(error: "Could not launch the planning terminal.")
+                return
+            }
+            chooser?.removeFromSuperview()
+            self.sahaTaskChooser = nil
+            _ = card
+        }
+        chooser.onCreateNew = { [weak self, weak chooser] title in
+            guard let self else { return }
+            do {
+                guard let card = try self.createSahaSession(
+                    title: title,
+                    projectDirectory: projectDirectory,
+                    script: script,
+                    scaffolder: scaffolder
+                ) else {
+                    chooser?.show(error: "Could not launch the planning terminal.")
+                    return
+                }
+                chooser?.removeFromSuperview()
+                self.sahaTaskChooser = nil
+                self.enterPlanningMode(card)
+            } catch {
+                chooser?.show(error: error.localizedDescription)
+            }
+        }
+        sahaTaskChooser?.removeFromSuperview()
+        sahaTaskChooser = chooser
+        guard let root = boardView.superview else { return }
+        layoutFullWindow(chooser, in: root)
+    }
+
+    private func enterPlanningMode(_ card: BoardCard) {
+        planningModeCardID = card.id
+        boardView.isHidden = true
+        attention.isHidden = true
+        quota.isHidden = true
+        drillIn.isHidden = true
+        planningMode.show(card: card)
+        // Mount the card's already-registered interactive session as the planning
+        // terminal (US-004 AC2) — reused, never a new spawn. Its surface now owns the
+        // fd, so the background pump must skip it (one reader per fd).
+        if let pty = ptyByCard[card.id] { planningMode.attach(session: pty) }
+        planningMode.isHidden = false
+        if let surface = planningMode.terminalSurface {
+            window?.makeFirstResponder(surface)
+        }
     }
 
     /// A stable, readable session id derived from the task title ("Fix login" →
@@ -657,6 +977,13 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     /// is the only thing on screen.
     func drill(into card: BoardCard) {
         guard let pty = ptyByCard[card.id] else { return }
+        // A saha planning card re-opens the planning cockpit it was born in, not the
+        // bare terminal takeover — otherwise leaving planning mode strands the operator
+        // on the board with no way back into the pipeline/review (the "can't re-enter" bug).
+        if card.flow == .a, card.taskFolder != nil {
+            enterPlanningMode(card)
+            return
+        }
         selection.focus(card.id)
         drilledInCardID = card.id   // its surface owns the fd now; the pump skips it
         boardView.isHidden = true
@@ -664,6 +991,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         quota.isHidden = true
         drillIn.isHidden = false
         drillIn.focus(card: card, pty: pty)
+        drillIn.update(diffs: turnDiffs)
         drillIn.updateQuota(QuotaProjection.gauges(from: quotaSources))
     }
 
@@ -679,8 +1007,53 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         attention.isHidden = false
         quota.isHidden = false
         drillIn.isHidden = true
+        // Release the planning terminal's view (the pump resumes draining its fd) but
+        // keep the session registered, same as drill-in (TC-E2E-014).
+        planningMode.detachSurface()
+        planningMode.isHidden = true
+        planningModeCardID = nil
         refresh()
         window?.makeFirstResponder(boardView)   // keyboard nav resumes on the board
+    }
+
+    /// Ctrl+Tab: jump from the focused task straight to the next drillable one WITHOUT
+    /// bouncing off the board — the whole point is to skip "quit to board → open next".
+    /// Cycles owned cards in board order (Ctrl+Shift+Tab reverses), wrapping around. A
+    /// no-op with fewer than two candidates. From the board (nothing focused) it drills
+    /// into the first/last card, so the chord also works as "jump into a task".
+    func cycleDrill(reverse: Bool) {
+        let drillable = cards.filter { ptyByCard[$0.id] != nil }
+        let current = drilledInCardID ?? planningModeCardID
+        guard let target = Self.nextCard(in: drillable, after: current, reverse: reverse),
+              target.id != current else { return }
+        // Hand the target a clean single-reader slate: detach whichever focus surface is
+        // live now (drill-in OR planning) so a cross-mode switch never strands a second
+        // off-screen reader on one fd or a stale *ModeCardID. `drill(into:)` rebuilds
+        // the target's own surface; the pump resumes draining the card we just left.
+        teardownFocusForSwitch()
+        drill(into: target)
+    }
+
+    /// The next card to focus when cycling `after` the current one. From the board
+    /// (`current == nil`) that's the first (or last, reversed) card; otherwise it steps
+    /// one position with wraparound. Static + pure so the ordering is unit-testable.
+    static func nextCard(in cards: [BoardCard], after current: UUID?, reverse: Bool) -> BoardCard? {
+        guard !cards.isEmpty else { return nil }
+        guard let current, let idx = cards.firstIndex(where: { $0.id == current }) else {
+            return reverse ? cards.last : cards.first
+        }
+        let step = reverse ? -1 : 1
+        return cards[(idx + step + cards.count) % cards.count]
+    }
+
+    /// Detach the live focus surface (drill-in and/or planning) without un-hiding the
+    /// board, so a Ctrl+Tab switch flows one task straight into the next. Idempotent.
+    private func teardownFocusForSwitch() {
+        drillIn.detachSurface()
+        drilledInCardID = nil
+        planningMode.detachSurface()
+        planningMode.isHidden = true
+        planningModeCardID = nil
     }
 
     /// US-005 AC#2: activating the indicator filters the board to waiting/blocked.
@@ -701,6 +1074,10 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         alertIfAttentionRose(to: count)
         boardView.render(cards: selection.visibleCards(from: cards))
         quota.render(gauges: QuotaProjection.gauges(from: quotaSources))
+        // Keep the drill-in's status pill / waiting banner tracking the live state.
+        if let id = drilledInCardID, let card = cards.first(where: { $0.id == id }) {
+            drillIn.update(state: card.state)
+        }
     }
 
     /// OS-level nudge when a session newly starts waiting on the operator while
@@ -745,7 +1122,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     /// and never yanks the board out from under an active drill-in.
     func applySessions(_ observed: [BoardCard]) {
         let owned = cards.filter { ptyByCard[$0.id] != nil }
-        let ownedIDs = Set(owned.map(\.sessionID))
         // Dirs occupied by EXACTLY ONE owned card. Only there is "the agent in this dir
         // is THIS card's agent" a safe inference; a repo dir shared by several task
         // cards is ambiguous — cwd can't say which task an observed session belongs to,
@@ -766,23 +1142,14 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
             return liveState(forDir: card.projectDir, id: card.sessionID, joinByDir: byDir, in: observed)
                 .map(card.with(state:)) ?? card
         }
-        // Sessions we never spawned, collapsed to ONE card per project dir: a project
-        // that has had several hook session_ids (a fresh run plus finished ones) is the
-        // SAME task and shows in the column of its most-live run. Excludes exact owned
-        // ids, bound sessions, and ANY session in a dir some owned card occupies —
-        // in an ambiguously-owned dir we can't attribute the session to a task, and
-        // surfacing it as its own card reads as an unclickable duplicate of the task
-        // card (operator-reported). ponytail: this hides a genuinely-other-terminal
-        // agent working in a dir you also have task cards in; give observed cards a
-        // distinct "observed" look instead of suppressing, if that visibility matters.
-        let ownedDirs = Set(dirCount.keys)
-        let ownedCardIDs = Set(owned.map(\.id.uuidString))
-        let extra = Self.collapseByDir(observed.filter {
-            !ownedIDs.contains($0.sessionID)
-                && !ownedDirs.contains(Self.normDir($0.projectDir))
-                && !($0.boundCardID.map(ownedCardIDs.contains) ?? false)
-        })
-        let merged = adopted + extra
+        // Board shows ONLY sessions we created here (owned cards). Claude sessions in
+        // OTHER terminals still stream hook events — that's how `adopted` above moves an
+        // owned card's column — but we never surface an external session as its own card
+        // (they were un-openable: no PTY to drill into, e.g. the hidden `usage-probe`).
+        // ponytail: drop the observed-but-unowned cards entirely. If a live overview of
+        // other-terminal agents is ever wanted, re-add a collapsed, clearly-"observed",
+        // read-only lane instead of mixing them in with drillable task cards.
+        let merged = adopted
         let signature = merged.map { "\($0.sessionID)|\($0.state.rawValue)|\($0.projectDir)" }
         guard signature != lastSessionsSignature else { return }
         lastSessionsSignature = signature
@@ -830,21 +1197,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     /// doesn't split one project into two cards.
     private static func normDir(_ dir: String) -> String {
         (dir as NSString).standardizingPath
-    }
-
-    /// Collapse cards to ONE per project dir, keeping the freshest-then-most-live card
-    /// (the same `staler` freshness order used for owned cards, applied
-    /// observed-to-observed). Stable: each dir keeps its first-seen slot in the result.
-    private static func collapseByDir(_ cards: [BoardCard]) -> [BoardCard] {
-        var best: [String: BoardCard] = [:]
-        var order: [String] = []
-        for card in cards {
-            let key = normDir(card.projectDir)
-            if best[key] == nil { order.append(key) }
-            if let cur = best[key], !staler(cur, card) { continue }  // keep cur unless card is fresher
-            best[key] = card
-        }
-        return order.compactMap { best[$0] }
     }
 
     /// How "live right now" a state is, for picking among several agent sessions that
