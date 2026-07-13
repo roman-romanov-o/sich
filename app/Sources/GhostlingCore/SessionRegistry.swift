@@ -86,7 +86,8 @@ public final class SessionRegistry {
                 cwd: session.projectDir,
                 agentType: session.agentType,
                 flowTag: session.flowTag,
-                childPID: session.pty.childPID > 0 ? session.pty.childPID : nil
+                childPID: session.pty.childPID > 0 ? session.pty.childPID : nil,
+                claudeSessionID: session.claudeSessionID
             )
         }
         return panes.isEmpty ? [] : [WindowSnapshot(panes: panes)]

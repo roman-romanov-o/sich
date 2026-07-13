@@ -41,6 +41,18 @@ struct KeyEncoderTests {
         #expect(KeyEncoder.bytes(for: key) == expected)
     }
 
+    @Test("modified arrows / deletes encode to readline editing sequences", arguments: [
+        (KeyInput.wordLeft, [UInt8]([0x1B, 0x62])),   // ESC b
+        (KeyInput.wordRight, [0x1B, 0x66]),           // ESC f
+        (KeyInput.lineStart, [0x01]),                 // ⌃A
+        (KeyInput.lineEnd, [0x05]),                   // ⌃E
+        (KeyInput.deleteWord, [0x1B, 0x7F]),          // ESC DEL
+        (KeyInput.deleteLine, [0x15]),                // ⌃U
+    ])
+    func editingKeys(_ key: KeyInput, _ expected: [UInt8]) {
+        #expect(KeyEncoder.bytes(for: key) == expected)
+    }
+
     @Test("control / whitespace keys encode to their single bytes")
     func singleByteKeys() {
         #expect(KeyEncoder.bytes(for: .tab) == [0x09])

@@ -32,8 +32,8 @@ struct BoardSessionMergeTests {
 
         shell.applySessions([observed("sess-other", .running)])
 
-        // Owned terminal kept; observed session merged in (not a replace).
-        #expect(shell.cards.map(\.sessionID).sorted() == ["live-terminal", "sess-other"])
+        // Owned terminal kept; the external session is NOT surfaced as a card.
+        #expect(shell.cards.map(\.sessionID) == ["live-terminal"])
 
         // Still drillable — it carries our PTY, so drilling hides the board.
         let owned = shell.cards.first { $0.sessionID == "live-terminal" }!
@@ -41,13 +41,12 @@ struct BoardSessionMergeTests {
         #expect(shell.boardView.isHidden)
     }
 
-    @Test func observedSessionIsStatusOnlyNeverDrillable() {
+    /// A session in another terminal (no owned card matches its dir) is ignored: the
+    /// board shows only what we created here, so there is never an un-openable card.
+    @Test func externalSessionIsNotSurfacedOnTheBoard() {
         let shell = ownedShell()
         shell.applySessions([observed("sess-other", .running)])
-
-        let other = shell.cards.first { $0.sessionID == "sess-other" }!
-        shell.drill(into: other)   // no PTY of ours → the drill guard no-ops
-        #expect(shell.boardView.isHidden == false)  // board stays; we never spawned it
+        #expect(!shell.cards.contains { $0.sessionID == "sess-other" })
     }
 
     @Test func anEmptyPollLeavesTheLiveTerminalStanding() {
@@ -101,12 +100,10 @@ struct BoardSessionMergeTests {
         #expect(shell.boardView.isHidden)
     }
 
-    /// Several hook `session_id`s in ONE project dir that no owned card matches (e.g.
-    /// the app launched outside the repo so the live-terminal's dir differs) are the
-    /// SAME task: they collapse to a single status card in the column of their
-    /// most-live run — not scattered across columns as N cards. Regression: "tasks
-    /// appear in different categories."
-    @Test func manyObservedSessionsInOneDirCollapseToOneCard() {
+    /// Hook sessions in a dir that no owned card matches belong to some other terminal
+    /// — none of them are surfaced. The board is owned-cards-only, so external activity
+    /// never adds cards you can't open.
+    @Test func externalSessionsInAnUnownedDirAddNoCards() {
         let shell = ownedShell()      // owned card's dir is "/work"
         let repo = "/elsewhere"       // a dir no owned card matches
         func run(_ id: String, _ state: CardState) -> BoardCard {
@@ -114,9 +111,8 @@ struct BoardSessionMergeTests {
         }
         shell.applySessions([run("run-1", .done), run("run-2", .running), run("run-3", .idle)])
 
-        let extra = shell.cards.filter { $0.projectDir == repo }
-        #expect(extra.count == 1)                // one card for the project, not three
-        #expect(extra.first?.state == .running)  // shown in its most-live run's column
+        #expect(shell.cards.filter { $0.projectDir == repo }.isEmpty)
+        #expect(shell.cards.map(\.sessionID) == ["live-terminal"])  // only what we own
     }
 
     /// When two agent sessions have run in one terminal — an old finished run plus a

@@ -20,6 +20,12 @@ public final class PTYSession {
     /// session's app-side owner; nil by default (a plain terminal, no sniffing).
     public var onOutput: (([UInt8]) -> Void)?
 
+    /// Input-side twin of ``onOutput``: invoked with each chunk written to the child
+    /// (keystrokes, pastes) right before the pty write. The deterministic seam an
+    /// interaction test uses to assert "this real event put these bytes on the wire"
+    /// without racing a live child's tty echo. nil by default.
+    public var onInput: (([UInt8]) -> Void)?
+
     private let argv: [String]
     private var rows: UInt16
     private var cols: UInt16
@@ -56,13 +62,42 @@ public final class PTYSession {
         terminal.resize(cols: cols, rows: rows, cellWidthPx: cellWidthPx, cellHeightPx: cellHeightPx)
     }
 
+    /// While true, bytes read from the pty are buffered instead of fed to the
+    /// emulator, so the on-screen grid stays still under a mouse selection —
+    /// selection coordinates are viewport-relative, and live output shifting the
+    /// grid beneath them is exactly the "selection is broken" defect. The pty
+    /// keeps draining (the child never blocks on a full tty buffer, per the
+    /// back-pressure lesson), and semantic sniffers (`onOutput`) still see every
+    /// byte live. Clearing the flag flushes the held bytes into the emulator.
+    public var holdOutput = false {
+        didSet { if !holdOutput { flushHeldOutput() } }
+    }
+
+    /// Bytes buffered while ``holdOutput`` is set — the surface watches this to
+    /// force-release a selection the user forgot about before the buffer balloons.
+    public private(set) var heldByteCount = 0
+
+    private var heldBytes: [UInt8] = []
+
+    private func flushHeldOutput() {
+        guard !heldBytes.isEmpty else { return }
+        terminal.write(heldBytes)
+        heldBytes = []
+        heldByteCount = 0
+    }
+
     /// The single ingestion path every read method funnels through: feed a chunk of
     /// child output to the emulator, then notify ``onOutput`` with the same bytes. Also
     /// the deterministic test seam — push bytes as if read from the child, no live fd
     /// required — so a semantic sniffer sees exactly what the terminal renders.
     public func ingest(_ bytes: [UInt8]) {
         guard !bytes.isEmpty else { return }
-        terminal.write(bytes)
+        if holdOutput {
+            heldBytes += bytes
+            heldByteCount = heldBytes.count
+        } else {
+            terminal.write(bytes)
+        }
         onOutput?(bytes)
     }
 
@@ -143,6 +178,7 @@ public final class PTYSession {
     @discardableResult
     public func send(_ bytes: [UInt8]) -> Int {
         guard masterFD >= 0, !bytes.isEmpty else { return 0 }
+        onInput?(bytes)
         return bytes.withUnsafeBytes { write(masterFD, $0.baseAddress, bytes.count) }
     }
 

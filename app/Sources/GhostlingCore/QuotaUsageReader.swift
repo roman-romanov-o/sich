@@ -72,6 +72,30 @@ public enum QuotaUsageReader {
         return [interactiveSource(now: truncatedNow, events: events)] + nonLocalSources
     }
 
+    /// Display-only split for the quota table: unlike the routing gauge above,
+    /// this exposes the 5h and weekly constraints separately so the UI does not
+    /// fake a second Claude column.
+    public static func interactiveDisplaySources(
+        now: Date, projectsDir: URL = defaultProjectsDir
+    ) -> [QuotaSourceInput] {
+        let truncatedNow = Date(timeIntervalSince1970: now.timeIntervalSince1970.rounded(.towardZero))
+        let events = readUsageEvents(now: truncatedNow, projectsDir: projectsDir)
+        let windowUsed = activeWindowUsage(events, now: truncatedNow)
+        let weeklyUsed = events.reduce(0.0) { $0 + $1.amount }
+        return [
+            splitSource(pool: "interactive_5h",
+                        remaining: fraction(windowCap() - windowUsed, cap: windowCap()),
+                        reset: windowReset(events, now: truncatedNow),
+                        refill: .rollingWindow,
+                        inferred: true),
+            splitSource(pool: "interactive_weekly",
+                        remaining: fraction(weeklyCap() - weeklyUsed, cap: weeklyCap()),
+                        reset: nil,
+                        refill: .weekly,
+                        inferred: true),
+        ]
+    }
+
     /// The three non-locally-observable pools, always `unknown` (never 0, never
     /// 100%). Constant — exposed so the live-endpoint path can prepend the real
     /// interactive reading without re-walking the JSONL just to rebuild these.
@@ -117,6 +141,22 @@ public enum QuotaUsageReader {
         QuotaSourceInput(
             provider: provider, pool: pool,
             reading: QuotaSourceReading(available: false, inferred: true)
+        )
+    }
+
+    private static func splitSource(
+        pool: String, remaining: Double, reset: Date?, refill: QuotaRefillKind, inferred: Bool
+    ) -> QuotaSourceInput {
+        QuotaSourceInput(
+            provider: "anthropic", pool: pool,
+            reading: QuotaSourceReading(
+                available: true,
+                inferred: inferred,
+                remainingFraction: remaining,
+                reset: reset,
+                refillKind: refill,
+                state: remaining <= 0.0 ? .exhausted : .active
+            )
         )
     }
 

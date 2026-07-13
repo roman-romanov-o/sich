@@ -1,13 +1,13 @@
 import AppKit
 import GhostlingCore
 
-/// The mission-control board surface (US-003): state columns × two-flow
-/// swimlanes, in the Deep Slate palette. Columns are the lifecycle states (with
-/// `waiting`+`blocked` merged under one `⚠ attention` header); rows split Flow-A
-/// (saha) / Flow-B (interactive).
+/// The mission-control board surface (US-003), in the Mission Control v5 layout:
+/// four full-height, equal-width columns — QUEUE / WORKING / NEEDS YOU / DONE —
+/// instead of raw state columns × flow swimlanes. Flow is card
+/// metadata now ("autonomous" vs "terminal · Claude Code"), not a lane.
 ///
 /// It is a projection of a `[BoardCard]` snapshot: ``render(cards:)`` lays the
-/// cards out by `(column, flow)`. Live column moves come from the host re-calling
+/// cards out by attention group. Live column moves come from the host re-calling
 /// `render`. Three callbacks bubble up: ``onSelect`` (drill-in, US-002),
 /// ``onCreate`` (the "+ new session" affordance), and ``onMove`` (a card dragged
 /// to a new column → manual state change).
@@ -19,21 +19,62 @@ final class BoardView: NSView {
     var onCreate: (() -> Void)?
     /// A card was dropped on a column — the host moves it (manual state change).
     var onMove: ((UUID, BoardColumn) -> Void)?
+    /// A card's "Rename Task…" context item was picked — the host prompts + renames.
+    var onRename: ((BoardCard) -> Void)?
 
-    private let columns: [BoardColumn] = [
-        .idle, .running, .waitingForInput, .runningTests, .done,
-    ]
-    private let flows: [CardFlow] = [.a, .b]
+    /// The v5 column groups, left→right.
+    enum ColumnGroup: CaseIterable {
+        case queue, working, needsYou, done
 
-    private let headerStack = NSStackView()
-    private let gridStack = NSStackView()
-    private var cells: [CellKey: BoardCell] = [:]
-    /// Cards in render order (Flow-A row left→right, then Flow-B) — the linear
-    /// path arrow keys walk. Rebuilt on every render; focus is re-found by id.
+        /// Every `CardState` lands in exactly one group — total, so no card can
+        /// silently vanish from the board (the `.unknown` regression).
+        static func group(for state: CardState) -> ColumnGroup {
+            switch state {
+            case .waitingForInput, .blocked: return .needsYou
+            case .running, .runningTests: return .working
+            case .idle, .unknown: return .queue
+            case .done: return .done
+            }
+        }
+
+        var title: String {
+            switch self {
+            case .needsYou: return "NEEDS YOU"
+            case .working: return "WORKING"
+            case .queue: return "QUEUE"
+            case .done: return "DONE"
+            }
+        }
+
+        /// The state a manual drop into this group sets, expressed as the
+        /// representative `BoardColumn` (the host's `onMove` contract).
+        var dropColumn: BoardColumn {
+            switch self {
+            case .needsYou: return .waitingForInput
+            case .working: return .running
+            case .queue: return .idle
+            case .done: return .done
+            }
+        }
+
+        /// The pulsing status dot next to the header — only the live columns get one.
+        @MainActor var dotColor: NSColor? {
+            switch self {
+            case .needsYou: return BoardTheme.attention
+            case .working: return BoardTheme.stateColor(.running)
+            case .queue, .done: return nil
+            }
+        }
+    }
+
+    private let groups = ColumnGroup.allCases
+    private var cells: [ColumnGroup: BoardCell] = [:]
+    /// Cards in render order (QUEUE column top→bottom, then WORKING, …) — the
+    /// linear path arrow keys walk. Rebuilt on every render; focus re-found by id.
     private var orderedCards: [SessionCard] = []
     private var focusedCardID: UUID?
-    /// Per-column count badges, updated on every render (live work-in-progress).
-    private var countLabels: [BoardColumn: NSTextField] = [:]
+    /// Per-column count captions, updated on every render.
+    private var countLabels: [ColumnGroup: NSTextField] = [:]
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -44,154 +85,170 @@ final class BoardView: NSView {
 
     required init?(coder: NSCoder) { nil }
 
-    // MARK: - Scaffold (built once)
+    // MARK: - Scaffold (built once): four equal columns filling the surface
 
     private func buildScaffold() {
-        let root = NSStackView()
-        root.orientation = .vertical
-        root.alignment = .leading
-        root.spacing = 8
-        root.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(root)
+        var previous: NSView?
+        for group in groups {
+            let column = makeColumn(group)
+            column.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(column)
+            NSLayoutConstraint.activate([
+                column.topAnchor.constraint(equalTo: topAnchor),
+                column.bottomAnchor.constraint(equalTo: bottomAnchor),
+                column.leadingAnchor.constraint(
+                    equalTo: previous?.trailingAnchor ?? leadingAnchor),
+            ])
+            if let previous {
+                column.widthAnchor.constraint(equalTo: previous.widthAnchor).isActive = true
+            }
+            previous = column
+        }
+        previous?.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
+    }
+
+    private func makeColumn(_ group: ColumnGroup) -> NSView {
+        let column = NSView()
+        column.wantsLayer = true
+        if group == .needsYou {
+            column.layer?.backgroundColor = BoardTheme.needsYouColumn.cgColor
+        }
+        if group != .done { addRightHairline(to: column) }
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 10
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        column.addSubview(stack)
         NSLayoutConstraint.activate([
-            root.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            root.topAnchor.constraint(equalTo: topAnchor, constant: 12),
-            root.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -16),
+            stack.topAnchor.constraint(equalTo: column.topAnchor, constant: 12),
+            stack.leadingAnchor.constraint(equalTo: column.leadingAnchor, constant: 20),
+            stack.trailingAnchor.constraint(equalTo: column.trailingAnchor, constant: -20),
+            stack.bottomAnchor.constraint(equalTo: column.bottomAnchor),
         ])
-        configureHeader()
-        configureGrid()
-        root.addArrangedSubview(headerStack)
-        root.addArrangedSubview(gridStack)
+
+        let header = columnHeader(group)
+        stack.addArrangedSubview(header)
+        header.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        if group == .queue { stack.addArrangedSubview(createButton()) }
+
+        let cell = BoardCell(column: group.dropColumn)
+        cell.onDrop = { [weak self] id, col in self?.onMove?(id, col) }
+        cells[group] = cell
+        stack.addArrangedSubview(cell)
+        cell.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        // The cell stretches to the column bottom so the whole column is a drop target.
+        cell.bottomAnchor.constraint(equalTo: column.bottomAnchor, constant: -20).isActive = true
+        return column
     }
 
-    private func configureHeader() {
-        headerStack.orientation = .horizontal
-        headerStack.alignment = .bottom
-        headerStack.spacing = ColumnLayout.gap
-        headerStack.addArrangedSubview(createButton())
-        for column in columns { headerStack.addArrangedSubview(columnHeader(column)) }
+    private func columnHeader(_ group: ColumnGroup) -> NSView {
+        let row = NSStackView()
+        row.spacing = 8
+        if let dotColor = group.dotColor { row.addArrangedSubview(pulsingDot(dotColor)) }
+        let titleColor: NSColor =
+            group == .needsYou ? BoardTheme.attention
+            : group == .done ? BoardTheme.textMuted : BoardTheme.textPrimary
+        row.addArrangedSubview(label(
+            group.title, font: BoardTheme.columnTitle, color: titleColor))
+        row.addArrangedSubview(NSView())   // flexible spacer
+        let count = label("", font: BoardTheme.monoBold, color: BoardTheme.textMuted)
+        countLabels[group] = count
+        row.addArrangedSubview(count)
+        return row
     }
 
-    private func configureGrid() {
-        gridStack.orientation = .vertical
-        gridStack.spacing = 12
-        for flow in flows { gridStack.addArrangedSubview(swimlaneRow(flow)) }
+    private func pulsingDot(_ color: NSColor) -> NSView {
+        let dot = NSView()
+        dot.wantsLayer = true
+        dot.layer?.backgroundColor = color.cgColor
+        dot.layer?.cornerRadius = 3.5
+        dot.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            dot.widthAnchor.constraint(equalToConstant: 7),
+            dot.heightAnchor.constraint(equalToConstant: 7),
+        ])
+        let pulse = CABasicAnimation(keyPath: "opacity")
+        pulse.fromValue = 1.0
+        pulse.toValue = 0.35
+        pulse.duration = 0.9
+        pulse.autoreverses = true
+        pulse.repeatCount = .infinity
+        dot.layer?.add(pulse, forKey: "pulse")
+        return dot
     }
 
-    // MARK: - Header + swimlane construction
-
-    /// The "+ new session" affordance, sized to the lane-label gutter so the
-    /// columns still line up under their headers.
+    /// The "+ new session" affordance, styled as a quiet pill at the top of QUEUE
+    /// (where new work conceptually enters the board).
     private func createButton() -> NSView {
         let button = NSButton(title: "+ new session", target: self, action: #selector(createTapped))
         button.bezelStyle = .rounded
         button.controlSize = .small
         button.contentTintColor = BoardTheme.brand
         button.font = BoardTheme.monoBold
-        button.widthAnchor.constraint(equalToConstant: ColumnLayout.laneLabel).isActive = true
         return button
     }
 
     @objc private func createTapped() { onCreate?() }
 
-    private func columnHeader(_ column: BoardColumn) -> NSView {
-        let amber = column.isAttention
-        let title = label(
-            columnTitle(column),
-            font: BoardTheme.monoBold,
-            color: amber ? BoardTheme.attention : BoardTheme.textMuted
-        )
-        let count = countBadge()
-        countLabels[column] = count
-        let box = NSView()
-        box.wantsLayer = true
-        let row = NSStackView(views: [title, count])
-        row.spacing = 6
-        row.translatesAutoresizingMaskIntoConstraints = false
-        box.addSubview(row)
+    private func addRightHairline(to column: NSView) {
+        let line = NSView()
+        line.wantsLayer = true
+        line.layer?.backgroundColor = BoardTheme.hairline.cgColor
+        line.translatesAutoresizingMaskIntoConstraints = false
+        column.addSubview(line)
         NSLayoutConstraint.activate([
-            box.widthAnchor.constraint(equalToConstant: ColumnLayout.column),
-            row.leadingAnchor.constraint(equalTo: box.leadingAnchor),
-            row.topAnchor.constraint(equalTo: box.topAnchor),
-            row.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -6),
+            line.trailingAnchor.constraint(equalTo: column.trailingAnchor),
+            line.topAnchor.constraint(equalTo: column.topAnchor),
+            line.bottomAnchor.constraint(equalTo: column.bottomAnchor),
+            line.widthAnchor.constraint(equalToConstant: 1),
         ])
-        addUnderline(to: box, amber: amber)
-        return box
-    }
-
-    private func swimlaneRow(_ flow: CardFlow) -> NSView {
-        let row = NSStackView()
-        row.orientation = .horizontal
-        row.alignment = .top
-        row.spacing = ColumnLayout.gap
-        row.addArrangedSubview(laneLabel(flow))
-        for column in columns {
-            let cell = makeCell(column: column)
-            cells[CellKey(column: column, flow: flow)] = cell
-            row.addArrangedSubview(cell)
-        }
-        return row
-    }
-
-    private func laneLabel(_ flow: CardFlow) -> NSView {
-        let stack = NSStackView()
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 2
-        let big = label(flow.rawValue, font: BoardTheme.monoBold, color: BoardTheme.flowColor(flow))
-        let sub = label(
-            flow == .a ? "saha · autonomous" : "interactive · human-launched",
-            font: BoardTheme.monoSmall, color: BoardTheme.textFaint
-        )
-        // "interactive · human-launched" is wider than the gutter at any sane
-        // width, so wrap it to two lines instead of truncating to "interactive · hu…".
-        sub.maximumNumberOfLines = 2
-        sub.lineBreakMode = .byWordWrapping
-        sub.preferredMaxLayoutWidth = ColumnLayout.laneLabel
-        stack.addArrangedSubview(big)
-        stack.addArrangedSubview(sub)
-        stack.widthAnchor.constraint(equalToConstant: ColumnLayout.laneLabel).isActive = true
-        return stack
-    }
-
-    private func makeCell(column: BoardColumn) -> BoardCell {
-        let cell = BoardCell(column: column)
-        cell.onDrop = { [weak self] id, col in self?.onMove?(id, col) }
-        cell.widthAnchor.constraint(equalToConstant: ColumnLayout.column).isActive = true
-        cell.heightAnchor.constraint(greaterThanOrEqualToConstant: 24).isActive = true
-        return cell
     }
 
     // MARK: - Render (called on every state change → live column moves)
 
-    /// Project a card snapshot onto the grid. Clearing + repopulating each cell is
-    /// the live-column-move mechanism (US-003 AC#3).
+    /// Project a card snapshot onto the columns. Clearing + repopulating each cell
+    /// is the live-column-move mechanism (US-003 AC#3).
     func render(cards: [BoardCard]) {
         for cell in cells.values {
             cell.arrangedSubviews.forEach { $0.removeFromSuperview() }
         }
-        var counts: [BoardColumn: Int] = [:]
-        var placed: [(flow: Int, col: Int, view: SessionCard)] = []
-        for card in cards {
-            let column = renderColumn(for: card.state)
-            counts[column, default: 0] += 1
-            guard let cell = cells[CellKey(column: column, flow: card.flow)] else { continue }
+        var counts: [ColumnGroup: Int] = [:]
+        var placed: [(group: Int, order: Int, view: SessionCard)] = []
+        for (order, card) in cards.enumerated() {
+            let group = ColumnGroup.group(for: card.state)
+            counts[group, default: 0] += 1
+            guard let cell = cells[group] else { continue }
             let view = cardView(card)
             cell.addArrangedSubview(view)
-            placed.append((flows.firstIndex(of: card.flow) ?? 0,
-                           columns.firstIndex(of: column) ?? 0, view))
+            view.widthAnchor.constraint(equalTo: cell.widthAnchor).isActive = true
+            placed.append((groups.firstIndex(of: group) ?? 0, order, view))
         }
-        // Visual order: Flow-A lane left→right, then Flow-B — the arrow-key path.
-        orderedCards = placed.sorted { ($0.flow, $0.col) < ($1.flow, $1.col) }.map(\.view)
+        // A clear filler at the end of each cell absorbs the column's slack height
+        // so cards pack at the top (the cell itself is stretched full-height to be
+        // a whole-column drop target).
+        for cell in cells.values {
+            let filler = NSView()
+            filler.setContentHuggingPriority(.init(1), for: .vertical)
+            cell.addArrangedSubview(filler)
+        }
+        // Keyboard order follows the model snapshot order. Visual placement still
+        // happens by column above, but arrow-key traversal stays stable across live
+        // state moves so focus does not jump when a card changes columns.
+        orderedCards = placed.sorted { $0.order < $1.order }.map(\.view)
         restoreKeyboardFocus()
-        for (column, badge) in countLabels {
-            let n = counts[column] ?? 0
-            badge.stringValue = n == 0 ? "" : "\(n)"
+        for group in groups {
+            countLabels[group]?.stringValue = countCaption(group, count: counts[group] ?? 0)
         }
-        // A faint placeholder in any empty (column, flow) cell so a blank lane reads
-        // as "nothing here" rather than a broken/missing column.
-        for cell in cells.values where cell.arrangedSubviews.isEmpty {
-            cell.addArrangedSubview(emptyPlaceholder())
+    }
+
+    private func countCaption(_ group: ColumnGroup, count: Int) -> String {
+        switch group {
+        case .needsYou: return count == 0 ? "" : "\(count)"
+        case .working: return count == 0 ? "" : "\(count)"
+        case .queue: return count == 0 ? "" : "\(count)"
+        case .done: return count == 0 ? "" : "\(count)"
         }
     }
 
@@ -210,8 +267,8 @@ final class BoardView: NSView {
         }
     }
 
-    // ponytail: linear focus path (flow lane, then column) — a true 2D grid walk
-    // (↑↓ jump between lanes) can come if the board grows enough cards to need it.
+    // ponytail: linear focus path (column by column) — a true 2D grid walk can
+    // come if the board grows enough cards to need it.
     private func moveFocus(_ step: Int) {
         guard !orderedCards.isEmpty else { return }
         let current = orderedCards.firstIndex { $0.card.id == focusedCardID }
@@ -240,53 +297,14 @@ final class BoardView: NSView {
         }
     }
 
-    private func emptyPlaceholder() -> NSView {
-        label("·", font: BoardTheme.mono, color: BoardTheme.textFaint)
-    }
-
-    private func renderColumn(for state: CardState) -> BoardColumn {
-        switch state {
-        case .blocked: return .waitingForInput   // merged under the ⚠ attention header
-        // ponytail: a session that went silent (agent quit with no Stop/SessionEnd
-        // hook, then the 30s stale sweep) decays to .unknown. Land it back in `idle`
-        // so the card stays VISIBLE — mapping to a `.unknown` column, which the 5-col
-        // grid has no cell for, made `render` silently `continue` past it and the card
-        // vanished from the board ("task just disappeared"). No dedicated unknown
-        // column: a 6th column clips the fixed layout — add one (with horizontal
-        // scroll) if "went-silent" ever needs its own lane.
-        case .unknown: return .idle
-        default: return BoardColumn(state: state)
-        }
-    }
+    /// Test seam: the cell backing one column group (column-move repro tests).
+    func cellForTesting(_ group: ColumnGroup) -> BoardCell? { cells[group] }
 
     private func cardView(_ card: BoardCard) -> SessionCard {
         let view = SessionCard(card: card)
         view.onSelect = { [weak self] in self?.onSelect?($0) }
+        view.onRename = { [weak self] in self?.onRename?($0) }
         return view
-    }
-
-    // MARK: - Small builders
-
-    private func columnTitle(_ column: BoardColumn) -> String {
-        column == .waitingForInput ? "⚠ waiting · blocked" : column.rawValue
-    }
-
-    private func countBadge() -> NSTextField {
-        label("", font: BoardTheme.monoSmall, color: BoardTheme.textFaint)
-    }
-
-    private func addUnderline(to box: NSView, amber: Bool) {
-        let line = NSView()
-        line.wantsLayer = true
-        line.layer?.backgroundColor = (amber ? BoardTheme.attention : BoardTheme.hairline).cgColor
-        line.translatesAutoresizingMaskIntoConstraints = false
-        box.addSubview(line)
-        NSLayoutConstraint.activate([
-            line.leadingAnchor.constraint(equalTo: box.leadingAnchor),
-            line.trailingAnchor.constraint(equalTo: box.trailingAnchor),
-            line.bottomAnchor.constraint(equalTo: box.bottomAnchor),
-            line.heightAnchor.constraint(equalToConstant: 1),
-        ])
     }
 
     private func label(_ text: String, font: NSFont, color: NSColor) -> NSTextField {
@@ -299,10 +317,10 @@ final class BoardView: NSView {
     }
 }
 
-/// One board cell — a `(column, flow)` intersection that also accepts a dragged
-/// card (NSDraggingDestination). On drop it reports the card id + its own column
-/// to ``onDrop`` so the host performs the manual state change. A brand-tinted
-/// ring while a drag hovers makes the drop target legible.
+/// One board column's card container that also accepts a dragged card
+/// (NSDraggingDestination). On drop it reports the card id + its representative
+/// column to ``onDrop`` so the host performs the manual state change. A
+/// brand-tinted ring while a drag hovers makes the drop target legible.
 @MainActor
 final class BoardCell: NSStackView {
     static let cardType = NSPasteboard.PasteboardType("com.ghostling.card")
@@ -315,10 +333,11 @@ final class BoardCell: NSStackView {
         super.init(frame: .zero)
         orientation = .vertical
         alignment = .leading
-        spacing = 8
+        spacing = 10
+        distribution = .fill
+        registerForDraggedTypes([Self.cardType])
         wantsLayer = true
         layer?.cornerRadius = 8
-        registerForDraggedTypes([Self.cardType])
     }
 
     required init?(coder: NSCoder) { nil }
@@ -344,22 +363,4 @@ final class BoardCell: NSStackView {
         layer?.borderWidth = 0
         layer?.backgroundColor = nil
     }
-}
-
-/// Fixed geometry for the board grid — column width, lane-label gutter, gaps.
-/// Sized so all 5 columns + the lane gutter fit the default 1400×860 window
-/// (board frame ≈1016pt; content 116 + 5×170 + 5×10 = 1006pt). ponytail: fixed
-/// widths with a known ceiling — if the window is dragged narrower than ~1360
-/// the "done" column clips with no scroll signal; upgrade to a horizontal
-/// NSScrollView when multi-monitor/narrow-window support actually matters.
-private enum ColumnLayout {
-    static let column: CGFloat = 170
-    static let laneLabel: CGFloat = 116
-    static let gap: CGFloat = 10
-}
-
-/// Key for a single board cell — one (column, flow) intersection.
-private struct CellKey: Hashable {
-    let column: BoardColumn
-    let flow: CardFlow
 }

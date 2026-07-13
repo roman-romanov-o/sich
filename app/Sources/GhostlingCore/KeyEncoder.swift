@@ -14,6 +14,16 @@ public enum KeyInput: Sendable, Equatable {
     case down
     case right
     case left
+    /// ⌃/⌥ + ←/→ — jump one word (readline `ESC b` / `ESC f`).
+    case wordLeft
+    case wordRight
+    /// ⌘ + ←/→ — jump to line start/end (⌃A / ⌃E).
+    case lineStart
+    case lineEnd
+    /// ⌃/⌥ + ⌫ — delete the word before the cursor (readline `ESC DEL`).
+    case deleteWord
+    /// ⌘ + ⌫ — kill the line before the cursor (⌃U).
+    case deleteLine
     /// A Control-modified letter, e.g. `.control("c")` → ⌃C (0x03).
     case control(Character)
 }
@@ -34,6 +44,12 @@ public enum KeyEncoder {
         case .down: return csi("B")
         case .right: return csi("C")
         case .left: return csi("D")
+        case .wordLeft: return [0x1B, 0x62]        // ESC b
+        case .wordRight: return [0x1B, 0x66]       // ESC f
+        case .lineStart: return [0x01]             // ⌃A
+        case .lineEnd: return [0x05]               // ⌃E
+        case .deleteWord: return [0x1B, 0x7F]      // ESC DEL
+        case .deleteLine: return [0x15]            // ⌃U
         case .control(let c): return controlBytes(for: c)
         }
     }

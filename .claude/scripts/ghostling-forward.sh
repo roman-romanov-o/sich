@@ -31,6 +31,94 @@ if [ -n "$GHOSTLING_CARD_ID" ]; then
     esac
 fi
 printf '%s\n' "$line" >> "$file" 2>/dev/null
+
+# Per-turn review data. Claude's hook payload is inspected with macOS' bundled
+# plutil; git runs in the repo that owns the hook, so remote sessions ship the
+# resulting unified diff as data and the board never needs their filesystem.
+event=$(printf '%s' "$line" | /usr/bin/plutil -extract hook_event_name raw -o - - 2>/dev/null)
+session=$(printf '%s' "$line" | /usr/bin/plutil -extract session_id raw -o - - 2>/dev/null)
+cwd=$(printf '%s' "$line" | /usr/bin/plutil -extract cwd raw -o - - 2>/dev/null)
+if [ -n "$session" ] && [ -n "$cwd" ] && git -C "$cwd" rev-parse --git-dir >/dev/null 2>&1; then
+    safe_session=$(printf '%s' "$session" | tr -cd '[:alnum:]_.-')
+    state_dir="${GHOSTLING_DIFF_STATE_DIR:-$HOME/.ghostling/turn-diffs}/$safe_session"
+    mkdir -p "$state_dir" 2>/dev/null
+
+    # Add intent-to-add entries only while taking the snapshot/diff so untracked
+    # text appears in unified output without staging or otherwise changing the
+    # operator's index.
+    snapshot_with_untracked() {
+        git_dir=$(git -C "$cwd" rev-parse --git-dir 2>/dev/null) || return
+        case "$git_dir" in /*) index="$git_dir/index" ;; *) index="$cwd/$git_dir/index" ;; esac
+        backup="$state_dir/index.$$"
+        had_index=0
+        if [ -f "$index" ]; then cp "$index" "$backup" 2>/dev/null && had_index=1; fi
+        git -C "$cwd" add -N -A >/dev/null 2>&1
+        "$@"
+        result=$?
+        if [ "$had_index" -eq 1 ]; then mv "$backup" "$index" 2>/dev/null
+        else rm -f "$index" "$backup" 2>/dev/null
+        fi
+        return "$result"
+    }
+
+    if [ "$event" = "UserPromptSubmit" ]; then
+        iteration=$(cat "$state_dir/iteration" 2>/dev/null)
+        iteration=$((${iteration:-0} + 1))
+        printf '%s' "$iteration" > "$state_dir/iteration"
+        snapshot_with_untracked sh -c \
+            'base=$(git -C "$1" stash create "ghostling-turn-$2"); \
+             if [ -z "$base" ]; then base=$(git -C "$1" rev-parse HEAD 2>/dev/null); fi; \
+             printf "%s" "$base" > "$3"' \
+            sh "$cwd" "$iteration" "$state_dir/checkpoint"
+        if [ "$iteration" -eq 1 ]; then
+            cp "$state_dir/checkpoint" "$state_dir/session-checkpoint" 2>/dev/null
+        fi
+    elif [ "$event" = "Stop" ] && [ -s "$state_dir/checkpoint" ]; then
+        checkpoint=$(cat "$state_dir/checkpoint")
+        iteration=$(cat "$state_dir/iteration" 2>/dev/null)
+        diff_path="$state_dir/diff.$$"
+        snapshot_with_untracked sh -c \
+            'git -C "$1" diff --no-ext-diff --binary "$2" > "$3"' \
+            sh "$cwd" "$checkpoint" "$diff_path"
+        if [ -s "$diff_path" ]; then
+            # Keep one append atomic and bound pathological generated/binary turns.
+            max_diff_bytes="${GHOSTLING_DIFF_MAX_BYTES:-1572864}"
+            diff_size=$(wc -c < "$diff_path" 2>/dev/null | tr -d '[:space:]')
+            if [ "${diff_size:-0}" -gt "$max_diff_bytes" ]; then
+                head -c "$max_diff_bytes" "$diff_path" > "$diff_path.trim"
+                printf '\n\\ No newline: diff truncated by Ghostling at %s bytes\n' \
+                    "$max_diff_bytes" >> "$diff_path.trim"
+                mv "$diff_path.trim" "$diff_path"
+            fi
+            diff_b64=$(/usr/bin/base64 < "$diff_path" | tr -d '\n')
+            session_b64=""
+            if [ -s "$state_dir/session-checkpoint" ]; then
+                session_checkpoint=$(cat "$state_dir/session-checkpoint")
+                session_path="$state_dir/session-diff.$$"
+                snapshot_with_untracked sh -c \
+                    'git -C "$1" diff --no-ext-diff --binary "$2" > "$3"' \
+                    sh "$cwd" "$session_checkpoint" "$session_path"
+                session_size=$(wc -c < "$session_path" 2>/dev/null | tr -d '[:space:]')
+                if [ "${session_size:-0}" -gt "$max_diff_bytes" ]; then
+                    head -c "$max_diff_bytes" "$session_path" > "$session_path.trim"
+                    mv "$session_path.trim" "$session_path"
+                fi
+                session_b64=$(/usr/bin/base64 < "$session_path" | tr -d '\n')
+                rm -f "$session_path"
+            fi
+            cwd_b64=$(printf '%s' "$cwd" | /usr/bin/base64 | tr -d '\n')
+            card_field=""
+            if [ -n "$GHOSTLING_CARD_ID" ]; then
+                card_field=",\"ghostling_card_id\":\"$GHOSTLING_CARD_ID\""
+            fi
+            printf '{"ghostling_event_type":"turn_diff","session_id":"%s","iteration":%s,"timestamp":%s,"cwd_base64":"%s","diff_base64":"%s","session_diff_base64":"%s"%s}\n' \
+                "$safe_session" "${iteration:-0}" "$(date +%s)" "$cwd_b64" "$diff_b64" "$session_b64" "$card_field" \
+                >> "$file" 2>/dev/null
+        fi
+        rm -f "$diff_path"
+    fi
+fi
+
 size=$(wc -c < "$file" 2>/dev/null | tr -d '[:space:]')
 if [ "${size:-0}" -gt "$max_bytes" ] 2>/dev/null; then
     mv -f "$file" "$file.1" 2>/dev/null

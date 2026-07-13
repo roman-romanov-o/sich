@@ -79,6 +79,9 @@ public struct BoardCard: Identifiable, Sendable, Equatable {
     /// even when several owned cards share one project dir. `nil` for owned cards
     /// and for sessions started outside the app.
     public let boundCardID: String?
+    /// Authoritative task artifact folder for saha-flow cards. This is captured at
+    /// creation time; it is never recomputed from the project's shared current-task.
+    public let taskFolder: String?
 
     public init(
         id: UUID = UUID(),
@@ -89,7 +92,8 @@ public struct BoardCard: Identifiable, Sendable, Equatable {
         flow: CardFlow,
         state: CardState,
         updatedAt: Date = .distantPast,
-        boundCardID: String? = nil
+        boundCardID: String? = nil,
+        taskFolder: String? = nil
     ) {
         self.id = id
         self.sessionID = sessionID
@@ -100,6 +104,9 @@ public struct BoardCard: Identifiable, Sendable, Equatable {
         self.state = state
         self.updatedAt = updatedAt
         self.boundCardID = boundCardID
+        self.taskFolder = taskFolder.map {
+            ($0 as NSString).standardizingPath
+        }
     }
 
     /// The same card in a new lifecycle state — identity, title, dir, agent, and flow
@@ -110,7 +117,20 @@ public struct BoardCard: Identifiable, Sendable, Equatable {
         BoardCard(
             id: id, sessionID: sessionID, title: title, projectDir: projectDir,
             agent: agent, flow: flow, state: newState, updatedAt: updatedAt,
-            boundCardID: boundCardID
+            boundCardID: boundCardID, taskFolder: taskFolder
+        )
+    }
+
+    /// The same card renamed — everything else (identity, dir, state, PTY binding
+    /// via `id`) preserved, so renaming a live task never disturbs its session.
+    /// An empty or whitespace-only name clears the title back to the dir fallback.
+    public func with(title newTitle: String?) -> BoardCard {
+        let trimmed = newTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return BoardCard(
+            id: id, sessionID: sessionID,
+            title: (trimmed?.isEmpty ?? true) ? nil : trimmed,
+            projectDir: projectDir, agent: agent, flow: flow, state: state,
+            updatedAt: updatedAt, boundCardID: boundCardID, taskFolder: taskFolder
         )
     }
 }

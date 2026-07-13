@@ -46,6 +46,12 @@ public final class Session: Identifiable {
     /// from the launch-time ``projectDir`` — updated live off the PTY stream as the
     /// operator `cd`s inside the session, never derived from a process scan.
     public private(set) var reportedCwd: String?
+    /// The Claude conversation id this session was launched to drive (we pin it with
+    /// `claude --session-id <uuid>` so we OWN the id up front, never scrape it), or nil
+    /// for a bare shell. Persisted per pane so a restart resumes the exact conversation
+    /// with `claude --resume <uuid>` — and it survives across restarts unchanged (a
+    /// restored session keeps the ORIGINAL id, not its own new ``id``).
+    public private(set) var claudeSessionID: UUID?
 
     public init(
         id: UUID = UUID(),
@@ -72,5 +78,11 @@ public final class Session: Identifiable {
     /// Public so the app-side output bridge can update it as `cd`s arrive.
     public func reportCwd(_ path: String) {
         reportedCwd = path
+    }
+
+    /// Bind the Claude conversation id this session drives, so a later snapshot can
+    /// persist it and a restart can `claude --resume` it.
+    public func recordClaudeSession(_ id: UUID) {
+        claudeSessionID = id
     }
 }

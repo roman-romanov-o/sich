@@ -41,7 +41,8 @@ enum SessionsFeed {
     /// lands once.
     static func normalize(_ lines: [Data], arrival: Date) -> [SignalEvent] {
         lines.compactMap { line in
-            isJSONL(line)
+            guard TurnDiffNormalizer.normalize(line, arrival: arrival) == nil else { return nil }
+            return isJSONL(line)
                 ? JSONLNormalizer.normalize(line, arrival: arrival)
                 : HookNormalizer.normalize(line, arrival: arrival)
         }
@@ -80,18 +81,22 @@ public final class SessionsPoller {
     private let store: HookSessionStore
     private let backstopInterval: TimeInterval
     private let sink: ([BoardCard]) -> Void
+    private let diffSink: ([TurnDiff]) -> Void
+    private var diffsBySession: [String: [TurnDiff]] = [:]
     private var timer: Timer?
     private var watcher: FileWatcher?
 
     public init(
         eventsFile: URL = SessionsPoller.defaultEventsFile,
         interval: TimeInterval = 3,
+        diffSink: @escaping ([TurnDiff]) -> Void = { _ in },
         sink: @escaping ([BoardCard]) -> Void
     ) {
         self.eventsFile = eventsFile
         self.tail = HookEventTail(file: eventsFile)
         self.store = HookSessionStore()
         self.backstopInterval = interval
+        self.diffSink = diffSink
         self.sink = sink
     }
 
@@ -146,9 +151,21 @@ public final class SessionsPoller {
 
     private func poll() {
         let now = Date()
-        let events = SessionsFeed.normalize(tail.poll(), arrival: now)
+        let lines = tail.poll()
+        for diff in lines.compactMap({ TurnDiffNormalizer.normalize($0, arrival: now) }) {
+            var turns = diffsBySession[diff.sessionID, default: []]
+            if let index = turns.firstIndex(where: { $0.iteration == diff.iteration }) {
+                turns[index] = diff
+            } else {
+                turns.append(diff)
+                turns.sort { $0.iteration < $1.iteration }
+            }
+            diffsBySession[diff.sessionID] = turns
+        }
+        let events = SessionsFeed.normalize(lines, arrival: now)
         store.ingest(events)
         store.sweepStale(now: now)
+        diffSink(diffsBySession.values.flatMap { $0 })
         sink(SessionsFeed.cards(from: store.entries))
     }
 

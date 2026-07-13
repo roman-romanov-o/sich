@@ -29,11 +29,13 @@ public struct BoardSeed: Sendable {
     /// `GHOSTLING_CARD_ID` (identity binding). The card built for this seed must
     /// reuse it, or the binding points at nothing.
     let cardID: String?
+    let taskFolder: String?
 
     init(
         sessionID: String, title: String? = nil, projectDir: String, agent: CardAgent,
         flow: CardFlow, state: CardState, scrollback: String,
-        commandOverride: [String]? = nil, cardID: String? = nil
+        commandOverride: [String]? = nil, cardID: String? = nil,
+        taskFolder: String? = nil
     ) {
         self.sessionID = sessionID
         self.title = title
@@ -44,6 +46,7 @@ public struct BoardSeed: Sendable {
         self.scrollback = scrollback
         self.commandOverride = commandOverride
         self.cardID = cardID
+        self.taskFolder = taskFolder
     }
 
     /// The argv to launch: a real interactive session if one was supplied, else the

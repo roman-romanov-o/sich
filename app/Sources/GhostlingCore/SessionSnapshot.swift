@@ -44,19 +44,28 @@ public struct PaneSnapshot: Codable, Equatable, Sendable {
     public let agentType: AgentType
     public let flowTag: FlowTag
     public let childPID: Int32?
+    /// The Claude conversation id the pane was driving, if any — the resume token a
+    /// restart replays with `claude --resume <uuid>`. Optional (decodes to nil from a
+    /// pre-resume v1 snapshot, so no version bump is needed) and nil for a bare shell:
+    /// this is the ONE thing beyond cwd we persist so a restore can pick a conversation
+    /// back up. It is still not the agent *command* — the watcher invariant holds; we
+    /// only re-attach an interactive conversation the operator already started.
+    public let claudeSessionID: UUID?
 
     public init(
         sessionID: UUID,
         cwd: String,
         agentType: AgentType,
         flowTag: FlowTag,
-        childPID: Int32?
+        childPID: Int32?,
+        claudeSessionID: UUID? = nil
     ) {
         self.sessionID = sessionID
         self.cwd = cwd
         self.agentType = agentType
         self.flowTag = flowTag
         self.childPID = childPID
+        self.claudeSessionID = claudeSessionID
     }
 }
 

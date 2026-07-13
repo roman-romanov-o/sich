@@ -260,7 +260,7 @@ final class DrillInPanel: NSView {
         focusedCard = card
         closeDiff()
         titleField.stringValue = card.title ?? BoardTheme.shortPath(card.projectDir)
-        dirField.stringValue = BoardTheme.shortPath(card.projectDir)
+        dirField.stringValue = BoardTheme.projectLabel(card.projectDir)
         tagField.stringValue = "libghostty · \(card.agent.displayName.lowercased())"
         update(state: card.state)
         detachSurface()

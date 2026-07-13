@@ -81,15 +81,31 @@ public final class NativeQuotaPoller {
     ///  3. the JSONL token-count estimate, the honest floor when the probe has no
     ///     fresh reading yet (first ~2 ticks after launch, or claude not installed).
     static func liveOrEstimate(projectsDir: URL) async -> [QuotaSourceInput] {
+        var sources: [QuotaSourceInput]
         if ProcessInfo.processInfo.environment["GHOSTLING_LIVE_USAGE"] != nil,
            let data = await UsageEndpointReader.fetch(),
            let live = UsageEndpointReader.interactiveSource(from: data) {
-            return [live] + QuotaUsageReader.nonLocalSources
+            sources = [live]
+                + (UsageEndpointReader.interactiveDisplaySources(from: data) ?? [])
+                + QuotaUsageReader.nonLocalSources
+        } else if let panel = await ClaudeUsageProbe.shared.current() {
+            sources = [ClaudeUsagePanel.interactiveSource(from: panel)]
+                + ClaudeUsagePanel.interactiveDisplaySources(from: panel)
+                + QuotaUsageReader.nonLocalSources
+        } else {
+            let now = Date()
+            sources = QuotaUsageReader.read(now: now, projectsDir: projectsDir)
+                + QuotaUsageReader.interactiveDisplaySources(now: now, projectsDir: projectsDir)
         }
-        if let panel = await ClaudeUsageProbe.shared.current() {
-            return [ClaudeUsagePanel.interactiveSource(from: panel)] + QuotaUsageReader.nonLocalSources
+        // Codex persists its own rate-limit telemetry on disk — swap the unknown
+        // codex slot for the measured reading whenever a snapshot exists.
+        if let codex = CodexUsageReader.source() {
+            sources = sources.map { $0.provider == "codex" ? codex : $0 }
+            if let display = CodexUsageReader.displaySources() {
+                sources += display
+            }
         }
-        return QuotaUsageReader.read(now: Date(), projectsDir: projectsDir)
+        return sources
     }
 }
 

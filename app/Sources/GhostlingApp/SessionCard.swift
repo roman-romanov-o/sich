@@ -1,9 +1,9 @@
 import AppKit
 import GhostlingCore
 
-/// A cmux-style board card (US-003 AC#2): a coloured state rail, flow badge,
-/// project dir, agent (with a colour dot), and the current detected state —
-/// rendered in the Deep Slate palette. Single responsibility: present one
+/// A Mission Control v5 board card (US-003 AC#2): faint project line, big task
+/// title with an age stamp, and a dim meta footer naming the flow + agent. Done
+/// cards collapse to a compact ✓ row. Single responsibility: present one
 /// ``BoardCard``, report clicks for drill-in (US-002 AC#1), and act as the drag
 /// source for a manual column move. Board logic stays in `GhostlingCore`.
 @MainActor
@@ -11,6 +11,9 @@ final class SessionCard: NSView, NSDraggingSource {
     let card: BoardCard
     /// Invoked on click — the board wires this to drill into the session (US-002).
     var onSelect: ((BoardCard) -> Void)?
+    /// Invoked from the right-click "Rename Task…" item — the board bubbles this
+    /// to the host, which prompts for the new title and mutates the card.
+    var onRename: ((BoardCard) -> Void)?
 
     private let stack = NSStackView()
     /// Distinguishes a click (drill-in) from a drag (column move): a drag sets
@@ -22,7 +25,6 @@ final class SessionCard: NSView, NSDraggingSource {
         super.init(frame: .zero)
         wantsLayer = true
         configureLayer()
-        addStateRail()
         buildContent()
     }
 
@@ -31,13 +33,29 @@ final class SessionCard: NSView, NSDraggingSource {
     // MARK: - Appearance
 
     private func configureLayer() {
-        layer?.backgroundColor = BoardTheme.cardFill.cgColor
-        layer?.cornerRadius = 8
+        layer?.cornerRadius = 10
         layer?.borderWidth = 1
-        // A waiting/blocked card gets a stronger edge in its state colour — the
-        // structural "this one needs you" cue; a normal card keeps the slate stroke.
-        let needsYou = card.state.needsAttention
-        layer?.borderColor = (needsYou ? BoardTheme.stateColor(card.state) : BoardTheme.cardStroke).cgColor
+        layer?.shadowOpacity = 0
+        switch card.state {
+        case .waitingForInput:
+            // The freshest attention style: warm fill, full amber edge + soft ring.
+            layer?.backgroundColor = BoardTheme.needsYouCard.cgColor
+            layer?.borderColor = BoardTheme.attention.cgColor
+            layer?.masksToBounds = false
+            layer?.shadowColor = BoardTheme.attention.cgColor
+            layer?.shadowRadius = 4
+            layer?.shadowOpacity = 0.25
+            layer?.shadowOffset = .zero
+        case .blocked:
+            layer?.backgroundColor = BoardTheme.needsYouCard.cgColor
+            layer?.borderColor = BoardTheme.needsYouStroke.cgColor
+        case .done:
+            layer?.backgroundColor = BoardTheme.cardFill.cgColor
+            layer?.borderColor = BoardTheme.doneStroke.cgColor
+        default:
+            layer?.backgroundColor = BoardTheme.cardFill.cgColor
+            layer?.borderColor = BoardTheme.cardStroke.cgColor
+        }
     }
 
     /// Keyboard-focus ring (arrow-key board navigation): a brand-coloured 2pt
@@ -47,189 +65,108 @@ final class SessionCard: NSView, NSDraggingSource {
             layer?.borderWidth = 2
             layer?.borderColor = BoardTheme.brand.cgColor
         } else {
+            layer?.borderWidth = 1
             configureLayer()
         }
     }
 
-    /// The 4px left rail in the card's state colour — the at-a-glance lifecycle
-    /// cue; attention states get a soft glow so they pull the eye.
-    private func addStateRail() {
-        let rail = NSView()
-        rail.wantsLayer = true
-        let color = BoardTheme.stateColor(card.state)
-        rail.layer?.backgroundColor = color.cgColor
-        rail.layer?.maskedCorners = [.layerMinXMinYCorner, .layerMinXMaxYCorner]
-        rail.layer?.cornerRadius = 8
-        if card.state.needsAttention {
-            rail.layer?.masksToBounds = false
-            rail.layer?.shadowColor = color.cgColor
-            rail.layer?.shadowRadius = 5
-            rail.layer?.shadowOpacity = 0.8
-            rail.layer?.shadowOffset = .zero
-        }
-        rail.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(rail)
-        NSLayoutConstraint.activate([
-            rail.leadingAnchor.constraint(equalTo: leadingAnchor),
-            rail.topAnchor.constraint(equalTo: topAnchor),
-            rail.bottomAnchor.constraint(equalTo: bottomAnchor),
-            rail.widthAnchor.constraint(equalToConstant: 4),
-        ])
-    }
+    // MARK: - Content
 
     private func buildContent() {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 4
-        stack.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),  // clear the rail
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             stack.topAnchor.constraint(equalTo: topAnchor),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
-        stack.addArrangedSubview(headerRow())
-        stack.addArrangedSubview(titleLabel())
-        if let subtitle = projectSubtitle() { stack.addArrangedSubview(subtitle) }
-        stack.addArrangedSubview(footerRow())
-        if let note = attentionNote() { stack.addArrangedSubview(note) }
-    }
-
-    /// The card headline — the human task title the operator named this work
-    /// ("Fix login redirect"), so the card reads as a *task*, not a raw terminal.
-    /// Falls back to the project-dir leaf for an untitled (hook-observed) session.
-    /// Wraps to two lines then truncates, since a real title rarely fits one.
-    private func titleLabel() -> NSTextField {
-        let text = card.title ?? BoardTheme.shortPath(card.projectDir)
-        let field = label(text, font: BoardTheme.title, color: BoardTheme.textPrimary)
-        field.maximumNumberOfLines = 2
-        field.lineBreakMode = .byTruncatingTail
-        field.cell?.wraps = true
-        field.cell?.truncatesLastVisibleLine = true
-        field.preferredMaxLayoutWidth = 142   // card content width (170 − rail − insets)
-        return field
-    }
-
-    /// The faint context line under a titled card: which project the work lives in.
-    /// Only shown when a title gave the headline meaning — for an untitled card the
-    /// project dir is already the headline, so repeating it would be noise.
-    private func projectSubtitle() -> NSTextField? {
-        guard card.title != nil else { return nil }
-        return label("◇ \(BoardTheme.shortPath(card.projectDir))", font: BoardTheme.monoSmall, color: BoardTheme.textFaint)
-    }
-
-    /// `[A] · saha/task-04            ⠿` — flow badge + session id, with a faint,
-    /// always-visible drag grip on the right so the card's draggability (manual
-    /// column move) is discoverable, not a hidden gesture.
-    private func headerRow() -> NSView {
-        let row = NSStackView()
-        row.spacing = 6
-        row.addArrangedSubview(flowBadge())
-        row.addArrangedSubview(label(card.sessionID, font: BoardTheme.mono, color: BoardTheme.textMuted))
-        row.addArrangedSubview(NSView())   // flexible spacer
-        row.addArrangedSubview(stateChip())
-        let grip = label("⠿", font: BoardTheme.monoBold, color: BoardTheme.textFaint)
-        grip.alphaValue = 0.55
-        grip.toolTip = "drag to another column to move this card"
-        row.addArrangedSubview(grip)
-        return row
-    }
-
-    /// `● Claude Code            [SDK]` — agent dot + name left, the pool chip right.
-    private func footerRow() -> NSView {
-        let row = NSStackView()
-        row.spacing = 6
-        row.addArrangedSubview(agentDot())
-        row.addArrangedSubview(label(card.agent.displayName, font: BoardTheme.monoSmall, color: BoardTheme.textMuted))
-        row.addArrangedSubview(NSView())   // flexible spacer
-        row.addArrangedSubview(poolChip())
-        return row
-    }
-
-    /// Which Anthropic pool this card's work burns, as a tinted chip in the flow
-    /// colour (Flow-A → violet "SDK" / Flow-B → teal "window") — so pool burn is
-    /// legible on every card, not just a faint right-aligned word (US-006: pool is
-    /// first-class on the card). ponytail: the `iter·phase` detail the designer also
-    /// wants on Flow-A is a new card data dimension (task-02-estimation); the
-    /// scrollback already carries it until the model field lands.
-    private func poolChip() -> NSView {
-        let color = BoardTheme.flowColor(card.flow)
-        let chip = ChipLabel(text: card.flow == .a ? "SDK" : "window")
-        chip.font = BoardTheme.monoSmall
-        chip.textColor = color
-        chip.alignment = .center
-        chip.wantsLayer = true
-        chip.layer?.backgroundColor = color.withAlphaComponent(0.16).cgColor
-        chip.layer?.cornerRadius = 3
-        return chip
-    }
-
-    /// A small tinted chip naming the card's lifecycle state in its state colour —
-    /// so every card is self-describing at a glance, not only the attention ones
-    /// (the 4px rail alone is a weak signal for idle/running/done).
-    private func stateChip() -> NSView {
-        let color = BoardTheme.stateColor(card.state)
-        let chip = ChipLabel(text: stateChipLabel)
-        chip.font = BoardTheme.monoSmall
-        chip.textColor = color
-        chip.alignment = .center
-        chip.wantsLayer = true
-        chip.layer?.backgroundColor = color.withAlphaComponent(0.16).cgColor
-        chip.layer?.cornerRadius = 3
-        return chip
-    }
-
-    /// Short, card-sized label for each state (the rawValue `waiting-for-input` is
-    /// too wide for a chip).
-    private var stateChipLabel: String {
-        switch card.state {
-        case .idle: return "idle"
-        case .running: return "running"
-        case .waitingForInput: return "waiting"
-        case .runningTests: return "tests"
-        case .blocked: return "blocked"
-        case .done: return "done"
-        case .unknown: return "?"
+        if card.state == .done {
+            buildDoneRow()
+        } else {
+            buildFullCard()
         }
     }
 
-    private func flowBadge() -> NSView {
-        let badge = label(card.flow.rawValue, font: BoardTheme.monoBold, color: BoardTheme.textPrimary)
-        badge.wantsLayer = true
-        badge.layer?.backgroundColor = BoardTheme.flowColor(card.flow).withAlphaComponent(0.22).cgColor
-        badge.layer?.cornerRadius = 3
-        badge.alignment = .center
-        badge.widthAnchor.constraint(equalToConstant: 16).isActive = true
-        return badge
+    /// The full card face: project → title + age → meta.
+    private func buildFullCard() {
+        stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
+        stack.addArrangedSubview(repoChip())
+        let title = titleRow()
+        stack.addArrangedSubview(title)
+        title.widthAnchor.constraint(
+            equalTo: stack.widthAnchor, constant: -28).isActive = true
+        let meta = label(metaText, font: BoardTheme.sansTiny, color: BoardTheme.textDim)
+        stack.setCustomSpacing(8, after: title)
+        stack.addArrangedSubview(meta)
     }
 
-    /// A small dot in the agent's colour (Claude amber / Codex green / Gemini blue).
-    private func agentDot() -> NSView {
-        let dot = NSView()
-        dot.wantsLayer = true
-        dot.layer?.backgroundColor = BoardTheme.agentColor(card.agent).cgColor
-        dot.layer?.cornerRadius = 3
-        dot.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            dot.widthAnchor.constraint(equalToConstant: 6),
-            dot.heightAnchor.constraint(equalToConstant: 6),
-        ])
-        return dot
-    }
-
-    /// The card-level "blocked — needs a decision" / "waiting on you" line, only
-    /// shown for attention states (US-005, made structural per the POC).
-    private func attentionNote() -> NSView? {
-        switch card.state {
-        case .blocked:
-            return label("⊘ blocked — needs a decision", font: BoardTheme.monoSmall, color: BoardTheme.stateColor(.blocked))
-        case .waitingForInput:
-            return label("⌖ waiting on you", font: BoardTheme.monoSmall, color: BoardTheme.attention)
-        default:
-            return nil
+    /// A DONE card is a compact row: ✓ + title over project, age on the right.
+    private func buildDoneRow() {
+        stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
+        let row = NSStackView()
+        row.spacing = 10
+        row.alignment = .centerY
+        row.addArrangedSubview(label("✓", font: BoardTheme.mono, color: BoardTheme.stateColor(.done)))
+        let text = NSStackView()
+        text.orientation = .vertical
+        text.alignment = .leading
+        text.spacing = 2
+            text.addArrangedSubview(label(
+                card.title ?? BoardTheme.shortPath(card.projectDir),
+                font: NSFont.systemFont(ofSize: 13, weight: .medium), color: BoardTheme.textMuted))
+        if card.title != nil {
+            text.addArrangedSubview(repoText(font: BoardTheme.sansTiny))
         }
+        row.addArrangedSubview(text)
+        row.addArrangedSubview(NSView())   // flexible spacer
+        row.addArrangedSubview(label(ageText, font: BoardTheme.monoSmall, color: BoardTheme.textDim))
+        stack.addArrangedSubview(row)
+        row.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28).isActive = true
+    }
+
+    /// The card headline — the human task title ("Fix login redirect") with the
+    /// age stamp right-aligned. Falls back to the project-dir leaf for an
+    /// untitled (hook-observed) session.
+    private func titleRow() -> NSView {
+        let row = NSStackView()
+        row.alignment = .firstBaseline
+        row.spacing = 8
+        let title = label(
+            card.title ?? BoardTheme.shortPath(card.projectDir),
+            font: BoardTheme.cardTitle, color: BoardTheme.textPrimary)
+        title.maximumNumberOfLines = 2
+        title.lineBreakMode = .byTruncatingTail
+        title.cell?.wraps = true
+        title.cell?.truncatesLastVisibleLine = true
+        row.addArrangedSubview(title)
+        row.addArrangedSubview(NSView())   // flexible spacer
+        let ageColor: NSColor = card.state.needsAttention
+            ? (card.state == .blocked ? BoardTheme.alert : BoardTheme.attention)
+            : BoardTheme.textFaint
+        let age = label(ageText, font: BoardTheme.mono, color: ageColor)
+        row.addArrangedSubview(age)
+        return row
+    }
+
+    /// The dim footer: flow + agent, e.g. "terminal · Claude Code" / "autonomous ·
+    /// Claude Code". This is where the two-flow cue lives now (no more lane rows).
+    private var metaText: String {
+        let flow = card.flow == .a ? "autonomous" : "terminal"
+        return "\(flow) · \(card.agent.displayName)"
+    }
+
+    /// Compact "12m" / "1h 04m" age from the card's last observation; empty when
+    /// the card carries no observation time (`.distantPast`).
+    private var ageText: String {
+        guard card.updatedAt > .distantPast else { return "" }
+        let minutes = max(0, Int(Date().timeIntervalSince(card.updatedAt)) / 60)
+        if minutes < 1 { return "now" }
+        if minutes < 60 { return "\(minutes)m" }
+        return "\(minutes / 60)h \(String(format: "%02d", minutes % 60))m"
     }
 
     private func label(_ text: String, font: NSFont, color: NSColor) -> NSTextField {
@@ -242,7 +179,34 @@ final class SessionCard: NSView, NSDraggingSource {
         return field
     }
 
-    // MARK: - Drill-in (click) + drag (move)
+    private func repoText(font: NSFont) -> NSTextField {
+        label(BoardTheme.projectLabel(card.projectDir), font: font, color: BoardTheme.repoColor(card.projectDir))
+    }
+
+    private func repoChip() -> NSTextField {
+        let chip = ChipLabel(text: BoardTheme.projectLabel(card.projectDir))
+        chip.font = BoardTheme.sansSmall
+        let color = BoardTheme.repoColor(card.projectDir)
+        chip.textColor = color
+        chip.wantsLayer = true
+        chip.layer?.backgroundColor = color.withAlphaComponent(0.12).cgColor
+        chip.layer?.borderColor = color.withAlphaComponent(0.34).cgColor
+        chip.layer?.borderWidth = 1
+        chip.layer?.cornerRadius = 5
+        return chip
+    }
+
+    // MARK: - Drill-in (click) + drag (move) + rename (right-click)
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = NSMenu()
+        let item = NSMenuItem(title: "Rename Task…", action: #selector(renameTapped), keyEquivalent: "")
+        item.target = self
+        menu.addItem(item)
+        return menu
+    }
+
+    @objc private func renameTapped() { onRename?(card) }
 
     override func mouseDown(with event: NSEvent) { didDrag = false }
 
@@ -275,9 +239,9 @@ final class SessionCard: NSView, NSDraggingSource {
 }
 
 /// A layer-backed text field that pads its text into a small rounded chip — the
-/// same "the label draws its own fill" render path as the flow badge and the back
-/// pill. A container `NSView` with a *child* label does NOT paint reliably on this
-/// hand-painted dark UI (the iter-4 invisible-pill defect), so the chip IS the label.
+/// same "the label draws its own fill" render path as the back pill. A container
+/// `NSView` with a *child* label does NOT paint reliably on this hand-painted
+/// dark UI (the iter-4 invisible-pill defect), so the chip IS the label.
 @MainActor
 final class ChipLabel: NSTextField {
     init(text: String) {

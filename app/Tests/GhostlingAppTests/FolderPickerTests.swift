@@ -21,4 +21,28 @@ final class FolderPickerTests: XCTestCase {
         let picker = FolderPickerView(recentDirs: ["/work/alpha", "/work/beta"])
         XCTAssertEqual(picker.selectedDir, "/work/alpha")
     }
+
+    /// A `git worktree` checkout's `.git` is a *file* pointing at
+    /// `<main-repo>/.git/worktrees/<name>`, not a directory containing `HEAD`
+    /// directly. The branch chip must follow that indirection instead of
+    /// silently reading nil.
+    func testRecentFolderResolvesBranchThroughWorktreeGitFile() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FolderPickerTests-\(UUID().uuidString)", isDirectory: true)
+        let worktreeGitDir = root.appendingPathComponent("main/.git/worktrees/task-05", isDirectory: true)
+        let worktreeCheckout = root.appendingPathComponent("worktrees/task-05", isDirectory: true)
+        try FileManager.default.createDirectory(at: worktreeGitDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: worktreeCheckout, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try "ref: refs/heads/task-05-feature\n".write(
+            to: worktreeGitDir.appendingPathComponent("HEAD"), atomically: true, encoding: .utf8
+        )
+        try "gitdir: \(worktreeGitDir.path)\n".write(
+            to: worktreeCheckout.appendingPathComponent(".git"), atomically: true, encoding: .utf8
+        )
+
+        let folder = RecentFolder(path: worktreeCheckout.path)
+        XCTAssertEqual(folder.branch, "task-05-feature")
+    }
 }

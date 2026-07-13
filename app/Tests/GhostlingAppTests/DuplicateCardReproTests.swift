@@ -15,13 +15,14 @@ struct DuplicateCardReproTests {
         let shell = BoardShell(seeds: [])
         shell.buildContentForTesting()
 
-        // 1. A claude session in the repo (another window) is observed first.
+        // 1. A claude session in the repo (another window) is observed first. With no
+        //    owned card yet it is NOT surfaced — the board shows only what we created.
         let observed = [
             BoardCard(sessionID: "e00c9e6d-x", projectDir: dir, agent: .claude,
                       flow: .b, state: .running, updatedAt: Date()),
         ]
         shell.applySessions(observed)
-        #expect(shell.cards.map(\.sessionID) == ["e00c9e6d-x"])   // status card, correct
+        #expect(shell.cards.isEmpty)   // external session, not ours → not shown
 
         // 2. Operator creates the "test" task in the SAME dir.
         shell.createSession(title: "test", projectDir: dir)

@@ -46,6 +46,45 @@ final class BoardMutationTests: XCTestCase {
         XCTAssertEqual(new.projectDir, "/tmp/some-project", "card opens in the chosen folder")
     }
 
+    func testSahaCreationPreservesFlowAndTaskFolder() {
+        let shell = BoardShell(seeds: [])
+        shell.buildContentForTesting()
+
+        shell.createSession(
+            title: "Plan native surface",
+            projectDir: "/tmp/project",
+            flow: .a,
+            taskFolder: "/tmp/project/docs/tasks/task-08-native-saha-planning"
+        )
+
+        let card = try! XCTUnwrap(shell.cards.last)
+        XCTAssertEqual(card.flow, .a)
+        XCTAssertEqual(
+            card.taskFolder,
+            "/tmp/project/docs/tasks/task-08-native-saha-planning"
+        )
+    }
+
+    func testBoardSeedPreservesFlowAndTaskFolderThroughShell() {
+        let taskFolder = "/tmp/project/docs/tasks/task-08-native-saha-planning"
+        let seed = BoardSeed(
+            sessionID: "saha-task-08",
+            projectDir: "/tmp/project",
+            agent: .claude,
+            flow: .a,
+            state: .idle,
+            scrollback: "",
+            taskFolder: taskFolder
+        )
+        let shell = BoardShell(seeds: [seed])
+
+        shell.buildContentForTesting()
+
+        let card = try! XCTUnwrap(shell.cards.first)
+        XCTAssertEqual(card.flow, .a)
+        XCTAssertEqual(card.taskFolder, taskFolder)
+    }
+
     /// Dropping a card on a column sets its state to that column's state, keeping its
     /// identity (so a drilled-in terminal survives the move).
     func testMoveSetsColumnStatePreservingIdentity() {
@@ -61,9 +100,98 @@ final class BoardMutationTests: XCTestCase {
         XCTAssertEqual(BoardColumn(state: moved.state), .done, "lands in the dropped column")
     }
 
+    /// `inWorktree` runs the card in the provisioned checkout, not the chosen dir —
+    /// the "worktree per task by default" seam (fake provisioner: no real git here).
+    func testCreateSessionInWorktreeUsesProvisionedDir() {
+        let shell = BoardShell(seeds: [])
+        shell.buildContentForTesting()
+        shell.worktreeProvisioner = FakeWorktreeProvisioner()
+
+        shell.createSession(title: "Isolate me", projectDir: "/tmp/some-project", inWorktree: true)
+
+        let card = try! XCTUnwrap(shell.cards.last)
+        XCTAssertEqual(card.projectDir, "/tmp/worktrees/isolate-me",
+                       "card lives in its own worktree, slugged from the title")
+    }
+
+    /// A provisioner miss (non-repo dir, git failure) falls back to the chosen dir —
+    /// the worktree is an upgrade, never a gate on creating the card.
+    func testCreateSessionInWorktreeFallsBackWhenProvisioningFails() {
+        let shell = BoardShell(seeds: [])
+        shell.buildContentForTesting()
+        shell.worktreeProvisioner = FakeWorktreeProvisioner(succeeds: false)
+
+        shell.createSession(title: "Thing", projectDir: "/tmp/some-project", inWorktree: true)
+
+        XCTAssertEqual(shell.cards.last?.projectDir, "/tmp/some-project")
+    }
+
+    /// Rename swaps only the title — identity and state survive, so a renamed live
+    /// task keeps its PTY binding (keyed by `id`) and its board column.
+    func testRenamePreservesIdentityAndState() {
+        let shell = BoardShell(seeds: Self.oneSeed())
+        shell.buildContentForTesting()
+        let card = shell.cards[0]
+
+        shell.rename(cardID: card.id, to: "Ship the fix")
+
+        let renamed = try! XCTUnwrap(shell.cards.first { $0.id == card.id })
+        XCTAssertEqual(renamed.title, "Ship the fix")
+        XCTAssertEqual(renamed.state, card.state, "rename never moves the card")
+        XCTAssertEqual(renamed.sessionID, card.sessionID)
+    }
+
+    /// A blank rename clears the title so the card falls back to the project dir.
+    func testRenameToBlankClearsTitle() {
+        let shell = BoardShell(seeds: Self.oneSeed())
+        shell.buildContentForTesting()
+        shell.rename(cardID: shell.cards[0].id, to: "Named")
+        XCTAssertNotNil(shell.cards[0].title)
+
+        shell.rename(cardID: shell.cards[0].id, to: "   ")
+
+        XCTAssertNil(shell.cards[0].title, "whitespace-only clears back to the dir fallback")
+    }
+
+    /// The card's context menu carries a Rename item, and dispatching it through the
+    /// real NSMenu action path (not a direct handler call) fires `onRename`.
+    func testCardContextMenuRenameItemFiresCallback() {
+        let card = BoardCard(sessionID: "t", projectDir: "~/x", agent: .claude,
+                             flow: .b, state: .idle)
+        let view = SessionCard(card: card)
+        var renamed: BoardCard?
+        view.onRename = { renamed = $0 }
+
+        let menu = try! XCTUnwrap(view.menu(for: NSEvent()))
+        let idx = menu.items.firstIndex { $0.title.hasPrefix("Rename") }
+        let itemIndex = try! XCTUnwrap(idx, "context menu has a Rename item")
+        menu.performActionForItem(at: itemIndex)
+
+        XCTAssertEqual(renamed?.id, card.id, "menu dispatch reached the rename callback")
+    }
+
+    /// Repo chip colours assign first-seen-first-slot: distinct repos get distinct
+    /// hues (up to the palette size) and the same repo is stable across calls —
+    /// the fix for hash-bucket collisions making two repos read as one.
+    func testRepoColorsAreDistinctPerRepoAndStable() {
+        let paths = (0..<8).map { "/Users/x/proj-\($0)" }
+        let colors = paths.map { BoardTheme.repoColor($0) }
+
+        XCTAssertEqual(Set(colors).count, paths.count, "first 8 repos never share a hue")
+        XCTAssertEqual(BoardTheme.repoColor(paths[3]), colors[3], "same repo stays stable")
+    }
+
     /// A stub seed (idles on `cat`, never an agentic CLI) — light enough for a unit test.
     static func oneSeed() -> [BoardSeed] {
         [BoardSeed(sessionID: "t", projectDir: "~/x", agent: .claude,
                    flow: .a, state: .running, scrollback: "")]
+    }
+}
+
+/// Deterministic provisioner double — no git, no filesystem.
+private struct FakeWorktreeProvisioner: WorktreeProvisioning {
+    var succeeds = true
+    func provision(repoDir: String, slug: String) -> ProvisionedWorktree? {
+        succeeds ? ProvisionedWorktree(path: "/tmp/worktrees/\(slug)", branch: "task/\(slug)") : nil
     }
 }

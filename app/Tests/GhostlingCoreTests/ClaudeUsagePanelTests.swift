@@ -64,7 +64,7 @@ struct ClaudeUsagePanelTests {
         #expect(src.provider == "anthropic")
         #expect(src.pool == "interactive")
         #expect(src.reading.inferred == false)    // scraped measurement → gauge shows "measured"
-        #expect(src.reading.remainingFraction == 0.68)
+        #expect(abs((src.reading.remainingFraction ?? -1) - 0.68) < 1e-9)
         #expect(src.reading.refillKind == .rollingWindow)
         #expect(src.reading.reset == r.sessionResetsAt)
         #expect(src.reading.state == .active)
@@ -76,7 +76,7 @@ struct ClaudeUsagePanelTests {
         let r = try #require(ClaudeUsagePanel.parse(
             screen: panel(session: 10, week: 55), now: now, calendar: calendar))
         let src = ClaudeUsagePanel.interactiveSource(from: r)
-        #expect(src.reading.remainingFraction == 0.45)
+        #expect(abs((src.reading.remainingFraction ?? -1) - 0.45) < 1e-9)
         #expect(src.reading.refillKind == .weekly)
         #expect(src.reading.reset == r.weekResetsAt)
     }

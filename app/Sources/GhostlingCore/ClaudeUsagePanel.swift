@@ -65,6 +65,36 @@ public enum ClaudeUsagePanel {
         )
     }
 
+    public static func interactiveDisplaySources(from reading: Reading) -> [QuotaSourceInput] {
+        [
+            splitSource(pool: "interactive_5h",
+                        used: reading.sessionUsedPercent,
+                        reset: reading.sessionResetsAt,
+                        refill: .rollingWindow),
+            splitSource(pool: "interactive_weekly",
+                        used: reading.weekUsedPercent,
+                        reset: reading.weekResetsAt,
+                        refill: .weekly),
+        ]
+    }
+
+    private static func splitSource(
+        pool: String, used: Double, reset: Date?, refill: QuotaRefillKind
+    ) -> QuotaSourceInput {
+        let remaining = max(0.0, min(1.0, 1.0 - used / 100.0))
+        return QuotaSourceInput(
+            provider: "anthropic", pool: pool,
+            reading: QuotaSourceReading(
+                available: true,
+                inferred: false,
+                remainingFraction: remaining,
+                reset: reset,
+                refillKind: refill,
+                state: remaining <= 0.0 ? .exhausted : .active
+            )
+        )
+    }
+
     // MARK: - Section extraction
 
     /// The first "NN% used" and "Resets …" after a section title. Sections render

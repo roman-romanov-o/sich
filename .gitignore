@@ -24,3 +24,6 @@ app/Frameworks/*.xcframework/**/*.a
 # Compiled Phase 00 spike binary (rebuildable via spike/phase00-pty-smoke/build.sh;
 # smoke.c + RESULT.md stay tracked).
 spike/phase00-pty-smoke/smoke
+
+# Sahaidachny execution-loop runtime logs — transient, machine-local.
+.saha_logs/

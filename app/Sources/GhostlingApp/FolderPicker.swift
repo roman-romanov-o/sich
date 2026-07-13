@@ -1,6 +1,136 @@
 import AppKit
 import GhostlingCore
 
+/// A custom-drawn, layer-backed clickable row for the saha chooser — the SAME idiom
+/// as ``BackPill`` / ``PlanningStepButton``: a `wantsLayer` `NSTextField` that paints
+/// its own fill and fires `onClick` from a REAL dispatched `mouseDown`, never a
+/// tracking loop. A stock `NSButton` was the interaction-AC-binding-rule trap here
+/// (`performClick` isn't a real gesture, and a real click enters `NSButton`'s modal
+/// tracking loop) — this is the only click path proven to composite on the dark UI
+/// AND be driven by a genuine event.
+@MainActor
+final class ChooserButton: NSTextField {
+    var onClick: (() -> Void)?
+
+    init(title: String) {
+        super.init(frame: .zero)
+        stringValue = title
+        font = BoardTheme.monoBold
+        textColor = BoardTheme.textPrimary
+        alignment = .center
+        isBezeled = false
+        isEditable = false
+        isSelectable = false
+        drawsBackground = false
+        wantsLayer = true
+        layer?.backgroundColor = BoardTheme.cardFillRaised.cgColor
+        layer?.cornerRadius = 5
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override var intrinsicContentSize: NSSize {
+        var size = super.intrinsicContentSize
+        size.width += 24
+        size.height = 28
+        return size
+    }
+
+    /// Own the whole row as one click target so real hit-testing resolves the point
+    /// to this row — not a pane behind it (the geometry half of the binding rule).
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        bounds.contains(convert(point, from: superview)) ? self : nil
+    }
+
+    override func mouseDown(with event: NSEvent) { onClick?() }
+}
+
+/// The second step of saha-card creation. Button clicks are the production callback
+/// chain as well as the integration-test seam — each is a ``ChooserButton`` so a real
+/// dispatched `mouseDown` (`window.sendEvent`) reaches it, never `performClick`.
+@MainActor
+final class SahaTaskChooserView: NSView {
+    var onChooseExisting: ((URL) -> Void)?
+    var onCreateNew: ((String) -> Void)?
+
+    private let titleField = NSTextField()
+    private let stack = NSStackView()
+    private(set) var existingButtons: [ChooserButton] = []
+    private var existingURLs: [URL]
+    let createButton = ChooserButton(title: "Create new task")
+    let errorLabel = NSTextField(labelWithString: "")
+
+    init(folders: [TaskFolderSummary]) {
+        existingURLs = folders.map(\.url)
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.backgroundColor = BoardTheme.canvas.cgColor
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
+            stack.topAnchor.constraint(equalTo: topAnchor, constant: 20),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -20),
+        ])
+
+        stack.addArrangedSubview(NSTextField(labelWithString: "Choose a saha task"))
+        for (index, folder) in folders.enumerated() {
+            let button = ChooserButton(title: "\(folder.title) · \(folder.progress.displayText)")
+            button.onClick = { [weak self] in self?.chooseExisting(index) }
+            existingButtons.append(button)
+            stack.addArrangedSubview(button)
+        }
+        titleField.placeholderString = "New task title"
+        titleField.widthAnchor.constraint(equalToConstant: 320).isActive = true
+        stack.addArrangedSubview(titleField)
+        createButton.onClick = { [weak self] in self?.createTapped() }
+        stack.addArrangedSubview(createButton)
+        errorLabel.textColor = .systemRed
+        errorLabel.isHidden = true
+        stack.addArrangedSubview(errorLabel)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    func setTitleForTesting(_ title: String) { titleField.stringValue = title }
+
+    func show(error: String) {
+        errorLabel.stringValue = error
+        errorLabel.isHidden = false
+    }
+
+    private func chooseExisting(_ index: Int) {
+        guard existingURLs.indices.contains(index) else { return }
+        onChooseExisting?(existingURLs[index])
+    }
+
+    private func createTapped() {
+        let title = titleField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else {
+            show(error: "Enter a task title.")
+            return
+        }
+        onCreateNew?(title)
+    }
+
+    func bindFolderURLs(_ folders: [TaskFolderSummary]) {
+        existingURLs = folders.map(\.url)
+    }
+}
+
+private extension TaskFolderProgress {
+    var displayText: String {
+        switch self {
+        case let .known(completed, total): return "\(completed)/\(total)"
+        case .unknown: return "unknown"
+        }
+    }
+}
+
 /// The "+ new task" project-folder chooser (designer Approach A): recent folders as
 /// **clickable rows** — a tinted initials tile, the folder leaf in bold, its git
 /// branch, and the faint `◇ ~/parent` — instead of a bare dropdown of long paths.
@@ -220,12 +350,14 @@ struct RecentFolder {
         tileTextColor = Self.contrastText(on: tint)
     }
 
-    /// Cheap current branch read: parse `.git/HEAD` (`ref: refs/heads/<branch>`).
-    /// nil for a non-repo or detached HEAD. ponytail: one small file read per recent
-    /// (≤6), no `git` subprocess.
+    /// Cheap current branch read: parse `<gitdir>/HEAD` (`ref: refs/heads/<branch>`),
+    /// resolving through ``GitWorktree`` so a worktree checkout's chip doesn't
+    /// silently read as nil. nil for a non-repo or detached HEAD. ponytail: one
+    /// small file read per recent (≤6), no `git` subprocess.
     private static func gitBranch(of path: String) -> String? {
-        let head = (path as NSString).appendingPathComponent(".git/HEAD")
-        guard let raw = try? String(contentsOfFile: head, encoding: .utf8) else { return nil }
+        guard let head = GitWorktree.gitDir(of: path).map({ ($0 as NSString).appendingPathComponent("HEAD") }),
+            let raw = try? String(contentsOfFile: head, encoding: .utf8)
+        else { return nil }
         let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let prefix = "ref: refs/heads/"
         return line.hasPrefix(prefix) ? String(line.dropFirst(prefix.count)) : nil

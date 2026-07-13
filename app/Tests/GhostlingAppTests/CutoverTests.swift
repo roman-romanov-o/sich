@@ -91,7 +91,13 @@ struct CutoverTests {
         #expect(QuotaProjection.gauge(for: sources[0]).state == .active)  // interactive live
         // Reading quota spawned NO new child — in particular no python interpreter.
         #expect(!after.contains { CutoverGuard.isPython($0) }, "native quota read must not spawn python")
-        #expect(after.count <= before.count, "native quota read must not spawn a child process")
+        // The read must not itself have spawned an interpreter sidecar. Scoped to the
+        // *delta* (children that appeared across the call) so a concurrent test's shell —
+        // a sibling of the shared runner PID, not spawned by this read — can't flake it;
+        // a raw `after.count <= before.count` counts those unrelated children too.
+        let spawnedByRead = Set(after).subtracting(before)
+        #expect(!spawnedByRead.contains(where: CutoverGuard.isPython),
+                "native quota read must not spawn a child process")
     }
 
     // MARK: - TC-E2E-302: the old sidecar port is never bound by the app

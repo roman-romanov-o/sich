@@ -230,4 +230,46 @@ struct SessionResumeTests {
         #expect(goneRestored[0].cwd == "/Users/tester")
         #expect(liveSpawns.count == 1)
     }
+
+    // MARK: - TC-UNIT-027 — deterministic Claude conversation resume
+
+    /// The start command PINS our own id (so we own it up front, no hook-scraping),
+    /// and the restart command replays that EXACT id with a fresh-claude fallback — the
+    /// round-trip that makes restart-resume deterministic. Neither is print-mode headless.
+    @Test("start pins --session-id; restart resumes the same id, lowercased, with fallback")
+    func claudeResumeCommandsArePinnedAndReversible() {
+        let id = UUID(uuidString: "AABBCCDD-1122-3344-5566-778899AABBCC")!
+        let lower = id.uuidString.lowercased()
+        let start = BoardShell.startClaudeCommand(sessionID: id)
+        let resume = BoardShell.resumeClaudeCommand(sessionID: id)
+        #expect(start == "claude --session-id \(lower)\n")
+        #expect(resume == "claude --resume \(lower) 2>/dev/null || claude\n")
+        // Firewall stays clean: we never auto-spawn a headless print-mode agent.
+        #expect(!start.contains("--print") && !start.contains(" -p"))
+        #expect(!resume.contains("--print") && !resume.contains(" -p"))
+    }
+
+    /// A pane's pinned Claude id survives the persist→restore JSON round-trip (so a
+    /// restart CAN resume it); a bare-shell pane persists nil. And a pre-resume snapshot
+    /// with no such key still decodes (→ nil) — the back-compat that skips a version bump.
+    @Test("claudeSessionID round-trips through the store; a legacy snapshot decodes it nil")
+    func claudeSessionIDRoundTripsAndBackCompatDecodesNil() throws {
+        let claudeID = UUID()
+        let dir = try makeSnapshotDir()
+        let store = SessionSnapshotStore(directory: dir, now: { self.fixedDate })
+        _ = try store.save(windows: [WindowSnapshot(panes: [
+            PaneSnapshot(sessionID: UUID(), cwd: "/w", agentType: .claude,
+                         flowTag: .interactive, childPID: 1, claudeSessionID: claudeID),
+            pane(cwd: "/bare", agent: .shell, pid: 2), // no claudeSessionID → nil
+        ])])
+        let back = try #require(store.load())
+        let panes = try #require(back.windows.first?.panes)
+        #expect(panes[0].claudeSessionID == claudeID)
+        #expect(panes[1].claudeSessionID == nil)
+
+        // A pre-resume v1 snapshot: the JSON has no claudeSessionID key at all → nil.
+        let legacy = #"{"createdAt":0,"version":1,"windows":[{"panes":[{"agentType":"claude","childPID":1,"cwd":"/w","flowTag":"interactive","sessionID":"\#(UUID().uuidString)"}]}]}"#
+        let decoded = try JSONDecoder().decode(SessionSnapshot.self, from: Data(legacy.utf8))
+        #expect(decoded.windows.first?.panes.first?.claudeSessionID == nil)
+    }
 }

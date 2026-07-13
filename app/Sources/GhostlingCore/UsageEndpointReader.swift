@@ -49,6 +49,33 @@ public enum UsageEndpointReader {
         )
     }
 
+    public static func interactiveDisplaySources(from data: Data) -> [QuotaSourceInput]? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let window = constraint(root["five_hour"]),
+              let weekly = constraint(root["seven_day"]) else { return nil }
+        return [
+            splitSource(pool: "interactive_5h", constraint: window, refill: .rollingWindow),
+            splitSource(pool: "interactive_weekly", constraint: weekly, refill: .weekly),
+        ]
+    }
+
+    private static func splitSource(
+        pool: String, constraint: Constraint, refill: QuotaRefillKind
+    ) -> QuotaSourceInput {
+        let remaining = max(0.0, min(1.0, 1.0 - constraint.utilization / 100.0))
+        return QuotaSourceInput(
+            provider: "anthropic", pool: pool,
+            reading: QuotaSourceReading(
+                available: true,
+                inferred: false,
+                remainingFraction: remaining,
+                reset: constraint.resetsAt,
+                refillKind: refill,
+                state: remaining <= 0.0 ? .exhausted : .active
+            )
+        )
+    }
+
     private static func constraint(_ raw: Any?) -> Constraint? {
         guard let obj = raw as? [String: Any],
               let util = (obj["utilization"] as? NSNumber)?.doubleValue else { return nil }

@@ -1,5 +1,6 @@
 import AppKit
 import GhostlingCore
+import UserNotifications
 
 /// The board window: hosts the mission-control ``BoardView``, the
 /// ``AttentionIndicator`` header, and the ``DrillInPanel`` overlay, wired to a
@@ -57,12 +58,16 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     // Last applied live-session snapshot signature — re-render only on a real change
     // so the 3s poll doesn't tear down and rebuild identical card views (flicker).
     private var lastSessionsSignature: [String] = []
+    private var idleHoldUntil: [UUID: Date] = [:]
 
     private var selection = BoardSelection()
     private(set) var cards: [BoardCard] = []
     private(set) var planningModeCardID: UUID?
     private var ptyByCard: [UUID: PTYSession] = [:]
     var launchOverrideForTesting: ((BoardSeed) -> Session?)?
+    /// Provisions one git worktree per task (`createSession(inWorktree:)`) —
+    /// injectable so tests never mint real worktrees in this repo.
+    var worktreeProvisioner: any WorktreeProvisioning = GitWorktreeProvisioner()
     // Repo root for the live-terminal cwd and the hook installer (resolved once).
     private let repoRoot = RepoLocator.repoRoot()
     // Monotonic suffix so each "+ new session" card gets a unique sessionID.
@@ -87,6 +92,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         seedSessions()
         makeWindow()
         installMainMenu()
+        SystemNotifier.requestAuthorization()
         installTaskSwitchMonitor()
         wireInteractions()
         refresh()
@@ -600,7 +606,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         root.addSubview(quota)
         NSLayoutConstraint.activate([
             quota.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            quota.topAnchor.constraint(equalTo: root.topAnchor, constant: 48),
+            quota.topAnchor.constraint(equalTo: root.topAnchor, constant: 32),
             quota.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             quota.widthAnchor.constraint(equalToConstant: 340),
         ])
@@ -619,7 +625,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
             v.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
             v.topAnchor.constraint(equalTo: root.topAnchor, constant: 12),
             v.heightAnchor.constraint(equalToConstant: 26),
-            v.widthAnchor.constraint(greaterThanOrEqualToConstant: 80),
+            v.widthAnchor.constraint(greaterThanOrEqualToConstant: 36),
         ]
     }
 
@@ -628,7 +634,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
             v.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             // Board fills the width left of the quota column (not the full root).
             v.trailingAnchor.constraint(equalTo: quota.leadingAnchor, constant: -12),
-            v.topAnchor.constraint(equalTo: root.topAnchor, constant: 48),
+            v.topAnchor.constraint(equalTo: root.topAnchor, constant: 32),
             v.bottomAnchor.constraint(equalTo: root.bottomAnchor),
         ]
     }
@@ -653,6 +659,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         boardView.onSelect = { [weak self] in self?.drill(into: $0) }
         boardView.onCreate = { [weak self] in self?.promptAndCreateSession() }
         boardView.onMove = { [weak self] id, column in self?.move(cardID: id, to: column) }
+        boardView.onRename = { [weak self] in self?.promptRename(for: $0) }
         attention.onActivate = { [weak self] in self?.activateAttention() }
         drillIn.onClose = { [weak self] in self?.returnToBoard() }
         planningMode.onReturn = { [weak self] in self?.returnToBoard() }
@@ -674,10 +681,10 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
             TaskFolderIndex().discover(in: URL(fileURLWithPath: dir, isDirectory: true))
         }
         palette.onCancel = { [weak self] in self?.dismissCreatePalette() }
-        palette.confirmInteractive = { [weak self] title, dir, startClaude in
+        palette.confirmInteractive = { [weak self] title, dir, startClaude, inWorktree in
             guard let self else { return }
             self.createSession(title: title.isEmpty ? nil : title, projectDir: dir,
-                               startClaude: startClaude)
+                               startClaude: startClaude, inWorktree: inWorktree)
             self.rememberProjectDir(dir)
             self.dismissCreatePalette()
         }
@@ -805,12 +812,21 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         projectDir: String? = nil,
         startClaude: Bool = false,
         flow: CardFlow = .b,
-        taskFolder: String? = nil
+        taskFolder: String? = nil,
+        inWorktree: Bool = false
     ) -> BoardCard? {
         sessionCounter += 1
         let chosen = (projectDir?.isEmpty == false) ? projectDir : nil
-        let dir = chosen.map { ($0 as NSString).expandingTildeInPath }
+        var dir = chosen.map { ($0 as NSString).expandingTildeInPath }
             ?? repoRoot?.path ?? FileManager.default.currentDirectoryPath
+        if inWorktree,
+           let worktree = worktreeProvisioner.provision(repoDir: dir, slug: sessionSlug(title)) {
+            // The card LIVES in its own checkout on a fresh task/<slug> branch, so
+            // parallel tasks on one repo stop stepping on each other's working tree.
+            // A non-repo dir (or git failure) falls through to the chosen dir — the
+            // worktree is an upgrade, never a gate on creating the card.
+            dir = worktree.path
+        }
         // The card id is minted BEFORE launch so it can ride the pty environment
         // (GHOSTLING_CARD_ID) — the identity binding that folds the hook-observed
         // claude session back into this card even when the repo dir is shared.
@@ -972,6 +988,32 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         refresh()
     }
 
+    /// Rename a card in place — identity, state, and PTY binding all preserved (the
+    /// mutator keeps `id`), so renaming a live task never disturbs its session. An
+    /// empty title clears back to the project-dir fallback.
+    func rename(cardID: UUID, to newTitle: String?) {
+        guard let idx = cards.firstIndex(where: { $0.id == cardID }) else { return }
+        cards[idx] = cards[idx].with(title: newTitle)
+        refresh()
+    }
+
+    /// The "Rename Task…" context-menu prompt: a modal sheet-style alert with the
+    /// current title pre-filled and selected, so a quick type-over just works.
+    private func promptRename(for card: BoardCard) {
+        let alert = NSAlert()
+        alert.messageText = "Rename Task"
+        alert.informativeText = "A blank name falls back to the project folder."
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.stringValue = card.title ?? ""
+        field.placeholderString = BoardTheme.shortPath(card.projectDir)
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        rename(cardID: card.id, to: field.stringValue)
+    }
+
     /// US-002: drill into a card → full-window terminal takeover (Altitude-1).
     /// The board surface and attention header are hidden so the embedded terminal
     /// is the only thing on screen.
@@ -1081,16 +1123,13 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     }
 
     /// OS-level nudge when a session newly starts waiting on the operator while
-    /// they are in another app: dock badge + bounce + a soft sound. In-app the
-    /// header indicator already covers it, so we stay quiet when active.
-    /// ponytail: dock badge/bounce, not UNUserNotificationCenter — banner
-    /// notifications require a bundled .app, which `swift run` binaries lack.
+    /// they are in another app. In-app the header indicator already covers it, so
+    /// banners stay quiet when active.
     private func alertIfAttentionRose(to count: Int) {
         defer { lastAttentionCount = count }
         NSApp.dockTile.badgeLabel = count > 0 ? "\(count)" : ""
         guard count > lastAttentionCount, !NSApp.isActive else { return }
-        NSApp.requestUserAttention(.informationalRequest)
-        NSSound(named: "Ping")?.play()
+        SystemNotifier.notifyAttention(count: count)
     }
 
     /// Swap in fresh quota readings (the Phase-2 live poller calls this) and
@@ -1137,10 +1176,13 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
             let byDir = uniqueDirs.contains(Self.normDir(card.projectDir))
             let bound = observed.filter { $0.boundCardID == card.id.uuidString }
             if let freshest = bound.max(by: { Self.staler($0, $1) }) {
-                return card.with(state: freshest.state)
+                return smoothLiveState(card: card, observed: freshest.state)
             }
-            return liveState(forDir: card.projectDir, id: card.sessionID, joinByDir: byDir, in: observed)
-                .map(card.with(state:)) ?? card
+            if let state = liveState(forDir: card.projectDir, id: card.sessionID, joinByDir: byDir, in: observed) {
+                return smoothLiveState(card: card, observed: state)
+            }
+            idleHoldUntil.removeValue(forKey: card.id)
+            return card
         }
         // Board shows ONLY sessions we created here (owned cards). Claude sessions in
         // OTHER terminals still stream hook events — that's how `adopted` above moves an
@@ -1161,6 +1203,29 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         // views without touching the live terminal's superview. ponytail: full refresh,
         // no teardown — the old `focusedCardID == nil` guard is gone.
         refresh()
+    }
+
+    // A model "thinking" between tool calls emits no hook events for many seconds,
+    // so the observed state dips to idle mid-turn; 2s was shorter than routine
+    // thinking gaps and the card stuttered working→idle→working. Only a SUSTAINED
+    // idle should demote the card — attention/blocked/done stay immediate.
+    private static let idleHoldInterval: TimeInterval = 15.0
+
+    /// Hook snapshots can briefly report `idle` between active tool events, and a
+    /// long-running tool call (a 2-minute build emits nothing between PreToolUse and
+    /// its result) decays to `unknown` via the stale sweep. Holding these two
+    /// working→at-rest live transitions prevents column jitter while keeping
+    /// attention, blocked, done, and manual moves immediate.
+    private func smoothLiveState(card: BoardCard, observed state: CardState) -> BoardCard {
+        guard state == .idle || state == .unknown,
+              card.state == .running || card.state == .runningTests else {
+            idleHoldUntil.removeValue(forKey: card.id)
+            return card.with(state: state)
+        }
+        let now = Date()
+        let deadline = idleHoldUntil[card.id] ?? now.addingTimeInterval(Self.idleHoldInterval)
+        idleHoldUntil[card.id] = deadline
+        return now < deadline ? card : card.with(state: state)
     }
 
     /// The live state to show on an owned terminal card: the detected state of the

@@ -45,6 +45,20 @@ if argv.first == "usage" {
     exit(1)
 }
 
+// `swift run ghostling-probe codex` — read the real on-disk Codex rate-limit
+// telemetry end to end (newest rollout → last rate_limits → mapped source).
+if argv.first == "codex" {
+    if let src = CodexUsageReader.source() {
+        let r = src.reading
+        let pct = r.remainingFraction.map { String(format: "%.0f%%", $0 * 100) } ?? "—"
+        print("codex: MEASURED (rollout telemetry) · remaining \(pct) "
+            + "· \(r.refillKind.rawValue) · reset \(r.reset.map { "\($0)" } ?? "—")")
+        exit(0)
+    }
+    print("codex: no rollout telemetry found — the gauge stays unknown")
+    exit(1)
+}
+
 let command = argv.isEmpty ? ["/bin/echo", "hello from ghostling"] : argv
 
 do {

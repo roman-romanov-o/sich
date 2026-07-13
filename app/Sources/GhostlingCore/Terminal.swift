@@ -27,6 +27,7 @@ public final class Terminal {
     }
 
     deinit {
+        ghostty_mouse_encoder_free(mouseEncoderStorage)
         ghostty_terminal_free(handle)
     }
 
@@ -73,11 +74,94 @@ public final class Terminal {
     /// path wraps the payload in `ESC[200~` / `ESC[201~` when set, so multi-line
     /// pastes reach a TUI (Claude Code, vim) as one paste, not typed keystrokes.
     public var bracketedPasteEnabled: Bool {
-        var value = false
         // GHOSTTY_MODE_BRACKETED_PASTE is a function-like C macro Swift can't
         // import; expand it: DEC private mode 2004.
-        let r = ghostty_terminal_mode_get(handle, ghostty_mode_new(2004, false), &value)
+        modeSet(2004)
+    }
+
+    /// Whether the child is on the alternate screen (DEC 1047/1049 — full-screen
+    /// TUIs like vim or less). There is no scrollback on the alternate screen, so
+    /// the wheel should fall back to arrow keys instead of moving the viewport.
+    public var alternateScreenActive: Bool {
+        modeSet(1047) || modeSet(1049)
+    }
+
+    private func modeSet(_ mode: UInt16) -> Bool {
+        var value = false
+        let r = ghostty_terminal_mode_get(handle, ghostty_mode_new(mode, false), &value)
         return r == GHOSTTY_SUCCESS && value
+    }
+
+    // MARK: - Mouse reporting
+
+    /// Pixel geometry the mouse encoder needs to map surface points onto cells.
+    public struct MouseGeometry {
+        public let screenWidth: UInt32
+        public let screenHeight: UInt32
+        public let cellWidth: UInt32
+        public let cellHeight: UInt32
+        public let padding: UInt32
+
+        public init(screenWidth: UInt32, screenHeight: UInt32,
+                    cellWidth: UInt32, cellHeight: UInt32, padding: UInt32) {
+            self.screenWidth = screenWidth
+            self.screenHeight = screenHeight
+            self.cellWidth = cellWidth
+            self.cellHeight = cellHeight
+            self.padding = padding
+        }
+    }
+
+    /// Encode one wheel tick as the mouse report the child asked for, or `nil`
+    /// when the child has no mouse tracking enabled — the caller then scrolls the
+    /// viewport itself. This is how a TUI that owns its own scrolling (Claude
+    /// Code's chat pane, vim with mouse=a) actually receives the wheel.
+    public func encodeWheel(up: Bool, x: Float, y: Float, geometry: MouseGeometry) -> [UInt8]? {
+        guard let encoder = mouseEncoder() else { return nil }
+        ghostty_mouse_encoder_setopt_from_terminal(encoder, handle)
+        var size = GhosttyMouseEncoderSize(
+            size: MemoryLayout<GhosttyMouseEncoderSize>.size,
+            screen_width: geometry.screenWidth, screen_height: geometry.screenHeight,
+            cell_width: geometry.cellWidth, cell_height: geometry.cellHeight,
+            padding_top: geometry.padding, padding_bottom: geometry.padding,
+            padding_right: geometry.padding, padding_left: geometry.padding)
+        withUnsafePointer(to: &size) {
+            ghostty_mouse_encoder_setopt(encoder, GHOSTTY_MOUSE_ENCODER_OPT_SIZE, $0)
+        }
+        return encodeWheelEvent(encoder: encoder, up: up, x: x, y: y)
+    }
+
+    private func encodeWheelEvent(
+        encoder: GhosttyMouseEncoder, up: Bool, x: Float, y: Float
+    ) -> [UInt8]? {
+        var event: GhosttyMouseEvent?
+        guard ghostty_mouse_event_new(nil, &event) == GHOSTTY_SUCCESS, let event else {
+            return nil
+        }
+        defer { ghostty_mouse_event_free(event) }
+        ghostty_mouse_event_set_action(event, GHOSTTY_MOUSE_ACTION_PRESS)
+        ghostty_mouse_event_set_button(
+            event, up ? GHOSTTY_MOUSE_BUTTON_FOUR : GHOSTTY_MOUSE_BUTTON_FIVE)
+        ghostty_mouse_event_set_position(event, GhosttyMousePosition(x: x, y: y))
+
+        var buf = [CChar](repeating: 0, count: 64)
+        var written = 0
+        let r = buf.withUnsafeMutableBufferPointer {
+            ghostty_mouse_encoder_encode(encoder, event, $0.baseAddress, $0.count, &written)
+        }
+        // written == 0 is the "tracking off" signal: nothing to send the child.
+        guard r == GHOSTTY_SUCCESS, written > 0 else { return nil }
+        return buf[0..<written].map { UInt8(bitPattern: $0) }
+    }
+
+    private var mouseEncoderStorage: GhosttyMouseEncoder?
+
+    private func mouseEncoder() -> GhosttyMouseEncoder? {
+        if let encoder = mouseEncoderStorage { return encoder }
+        var encoder: GhosttyMouseEncoder?
+        guard ghostty_mouse_encoder_new(nil, &encoder) == GHOSTTY_SUCCESS else { return nil }
+        mouseEncoderStorage = encoder
+        return encoder
     }
 
     /// Render the active screen as trimmed plain text.

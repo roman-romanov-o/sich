@@ -1,7 +1,7 @@
 import AppKit
 import GhostlingCore
 
-/// The board-header "N waiting on you" signal (US-005 AC#1). It renders the
+/// The board-header attention signal (US-005 AC#1). It renders the
 /// `Attention.count` and reads quiet/zero with no false alarm when nothing needs
 /// the operator (AC#3). Clicking it (when non-zero) routes to the waiting/blocked
 /// cards (AC#2) via ``onActivate``. Single responsibility: present the count and
@@ -48,11 +48,11 @@ final class AttentionIndicator: NSView {
     func update(count: Int) {
         renderedCount = count
         if count == 0 {
-            label.stringValue = "all quiet"
+            label.stringValue = ""
             label.textColor = BoardTheme.textFaint
             layer?.backgroundColor = NSColor.clear.cgColor
         } else {
-            label.stringValue = "⚠ \(count) waiting on you"
+            label.stringValue = "⚠ \(count)"
             label.textColor = NSColor.white
             layer?.backgroundColor = BoardTheme.attentionBadge.cgColor  // white-on-fill clears AA
         }

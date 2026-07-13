@@ -15,7 +15,7 @@ multiple provider pools without dispatching work on the user's behalf.
 
 | Step | Status | Artifacts |
 |---|---|---|
-| Research | Done | [research/algorithm-iterations.md](research/algorithm-iterations.md) |
+| Research | Done | [algorithm iterations](research/algorithm-iterations.md), [visualization concept](research/proactive-advisor-visualization.md), [visual review iterations](research/proactive-advisor-visualization-iterations.md) |
 | Task Description | Done | [task-description.md](task-description.md) |
 | User Stories | Pending | `user-stories/US-*.md` |
 | Design Decisions | Pending | `design-decisions/DD-*.md` |
@@ -26,6 +26,8 @@ multiple provider pools without dispatching work on the user's behalf.
 ## Next Steps
 
 - [x] Complete ten algorithm/critique iterations.
+- [x] Complete five visualization concept/review iterations.
+- [ ] Hand the approved schematics to the product designer.
 - [ ] Review and approve the resulting policy with the user.
 - [ ] After approval, turn the policy into user stories, decisions, and an
       implementation plan.

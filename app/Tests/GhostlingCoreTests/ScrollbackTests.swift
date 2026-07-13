@@ -31,6 +31,18 @@ struct ScrollbackTests {
         term.scrollViewportToBottom()
         #expect(rowText(term.snapshot(), 0) == liveTop)   // back to the live view
     }
+
+    @Test("new output while scrolled up does not yank the viewport back to bottom")
+    func outputWhileScrolledUpKeepsViewport() throws {
+        let term = try Terminal(cols: 20, rows: 5)
+        for i in 1...30 { term.write(Array("line\(i)\r\n".utf8)) }
+
+        term.scrollViewport(delta: -10)
+        let historyTop = rowText(term.snapshot(), 0)
+
+        for i in 31...40 { term.write(Array("line\(i)\r\n".utf8)) }
+        #expect(rowText(term.snapshot(), 0) == historyTop)   // still reading history
+    }
 }
 
 /// The paste path's mode probe: bracketed paste reflects DEC 2004 as the child
