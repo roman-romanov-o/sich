@@ -55,6 +55,9 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     private var deadCardIDs: Set<UUID> = []
     // Attention count at the previous render — alerts fire only on a RISE.
     private var lastAttentionCount = 0
+    // Per-card state at the previous render — a "task done" notification fires on
+    // the rising edge into `.done` (not every refresh while it stays done).
+    private var lastCardStates: [UUID: CardState] = [:]
     // Last applied live-session snapshot signature — re-render only on a real change
     // so the 3s poll doesn't tear down and rebuild identical card views (flicker).
     private var lastSessionsSignature: [String] = []
@@ -92,23 +95,16 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         seedSessions()
         makeWindow()
         installMainMenu()
-        SystemNotifier.requestAuthorization()
         installTaskSwitchMonitor()
         wireInteractions()
         refresh()
         startSessionPump()
         startQuotaBridge()
-        // Auto-wire the board's hook forwarder so real interactive sessions in this
-        // repo appear on the board — the app installs it (the agent can't). Launch
-        // path only, never the headless test build.
-        if let repoRoot { HookInstaller.install(repoRoot: repoRoot) }
-        // …and USER-level, so claude sessions in ANY project dir (task cards point at
-        // other repos too) emit hook lines — without this, a card whose repo lacks the
-        // forwarder never moves columns while its agent works.
-        HookInstaller.installGlobal()
-        // US-004: install Ghostty shell-integration the same way (idempotent; non-zsh
-        // and write failures degrade gracefully) so the shell reports cwd semantically.
-        installShellIntegration(installRoot: Self.shellIntegrationRoot(), rc: Self.defaultZshrc())
+        // Startup latency: the window is fully built above, so hand these disk-writing
+        // installs (hook forwarders, shell-integration) and the notification-auth
+        // prompt to the next runloop tick — they don't gate first paint, and running
+        // them inline was stalling the window's first appearance.
+        DispatchQueue.main.async { [weak self] in self?.installPostLaunchIntegrations() }
         // Capture seam: `GHOSTLING_OPEN_PALETTE=1` opens the ⌘N create palette on launch
         // so a screenshot tool can grab the real composited chrome (not a CALayer render).
         if ProcessInfo.processInfo.environment["GHOSTLING_OPEN_PALETTE"] != nil {
@@ -333,7 +329,34 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     /// dir. Best-effort — a write failure just means no resume, never a crash on quit.
     @discardableResult
     func persistOnTerminate(store: SessionSnapshotStore) -> SessionSnapshot? {
-        try? store.save(windows: registry.snapshotWindows())
+        try? store.save(windows: enrichedSnapshotWindows())
+    }
+
+    /// The registry snapshot, enriched with each pane's app-level card metadata (the
+    /// human title + saha task folder) so a restart brings the *task* back, not just an
+    /// unnamed shell at the same cwd. Core builds panes from sessions and has no notion
+    /// of a card title, so the join by sessionID belongs here in the app layer.
+    private func enrichedSnapshotWindows() -> [WindowSnapshot] {
+        registry.snapshotWindows().map { window in
+            WindowSnapshot(panes: window.panes.map(enrich(pane:)))
+        }
+    }
+
+    private func enrich(pane: PaneSnapshot) -> PaneSnapshot {
+        guard let card = card(forSessionID: pane.sessionID) else { return pane }
+        return pane.with(title: card.title, taskFolder: card.taskFolder)
+    }
+
+    /// The card driving a registry session — joined through the pty the two share
+    /// (`ptyByCard`), NOT the card's `sessionID`: a created card's `sessionID` is a
+    /// title slug, never the registry Session UUID, so a slug compare would silently
+    /// match nothing and persist every card unnamed. The pty is the one identity the
+    /// card and its session actually agree on (same join the hook binder uses).
+    private func card(forSessionID sessionID: UUID) -> BoardCard? {
+        guard let pty = registry.session(id: sessionID)?.pty,
+              let cardID = ptyByCard.first(where: { $0.value === pty })?.key
+        else { return nil }
+        return cards.first { $0.id == cardID }
     }
 
     /// US-003 launch side: reload the pre-quit snapshot (or its `-previous` last-known-
@@ -377,9 +400,11 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
             _ = session.pty.send(Array(Self.resumeClaudeCommand(sessionID: claudeID).utf8))
         }
         let card = BoardCard(
-            sessionID: pane.snapshot.sessionID.uuidString, projectDir: pane.cwd,
+            sessionID: pane.snapshot.sessionID.uuidString,
+            title: pane.snapshot.title, projectDir: pane.cwd,
             agent: Self.cardAgent(for: pane.snapshot.agentType),
-            flow: Self.cardFlow(for: pane.snapshot.flowTag), state: .idle
+            flow: Self.cardFlow(for: pane.snapshot.flowTag), state: .idle,
+            taskFolder: pane.snapshot.taskFolder
         )
         cards.append(card)
         ptyByCard[card.id] = session.pty
@@ -398,6 +423,13 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     /// "no conversation" note doesn't flash before the fallback.
     static func resumeClaudeCommand(sessionID: UUID) -> String {
         "claude --resume \(sessionID.uuidString.lowercased()) 2>/dev/null || claude\n"
+    }
+
+    /// Start a Codex CLI session in the already-open login shell. Unlike Claude Code,
+    /// we do not own a stable external conversation id here, so restore only reopens
+    /// the pane; it does not try to resume Codex.
+    static func startCodexCommand() -> String {
+        "codex\n"
     }
 
     /// US-004: install Ghostty shell-integration idempotently (a no-op on the second
@@ -436,6 +468,20 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     /// driven by a headless view-level test. Wires interactions exactly as
     /// `applicationDidFinishLaunching` does — otherwise the back-affordance callback
     /// (`drillIn.onClose → returnToBoard`) is unwired and a test would silently
+    /// Test seam: does this card still own a live PTY? Used to prove a delete forgets
+    /// its session binding (returns nil after `deleteCard`).
+    func ptyForTesting(_ cardID: UUID) -> PTYSession? { ptyByCard[cardID] }
+
+    /// Test seam: restore through the REAL launch-time restorer (the one that rebuilds
+    /// cards via `openRestoredCard`), not a spy — so a round-trip test can assert the
+    /// restored *cards* (title + task folder came back), not just the raw snapshot.
+    /// Returns the rebuilt board cards.
+    @discardableResult
+    func restoreCardsForTesting(store: SessionSnapshotStore) -> [BoardCard] {
+        _ = restoreOnLaunch(store: store, restorer: makeLaunchRestorer())
+        return cards
+    }
+
     /// bypass the real Esc/click → return chain. Returns the root content view.
     @discardableResult
     func buildContentForTesting() -> NSView {
@@ -505,6 +551,10 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "New Task", action: #selector(newTaskMenuAction),
                         keyEquivalent: "n").target = self
+        let remote = appMenu.addItem(withTitle: "New Remote tmux Session…",
+                                     action: #selector(newRemoteTmuxMenuAction), keyEquivalent: "r")
+        remote.keyEquivalentModifierMask = [.command, .shift]
+        remote.target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit Ghostling", action: #selector(NSApplication.terminate(_:)),
                         keyEquivalent: "q")
@@ -516,6 +566,86 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     }
 
     @objc private func newTaskMenuAction() { openCreatePalette() }
+
+    /// Prompt for a remote destination + tmux session, then open the card. Kept thin:
+    /// destination parsing lives in `RemoteTmuxSpec.parse` and card creation in
+    /// `createRemoteTmuxSession`, both unit-tested; this only collects the strings.
+    @objc private func newRemoteTmuxMenuAction() {
+        guard let (destination, session, dir) = promptRemoteTmux() else { return }
+        guard let spec = RemoteTmuxSpec.parse(
+            destination: destination, sessionName: session, remoteDir: dir) else { return }
+        _ = createRemoteTmuxSession(spec: spec)
+    }
+
+    /// A 3-field sheet (destination `[user@]host[:port]`, tmux session, optional start
+    /// dir). Returns nil on cancel or a blank destination.
+    private func promptRemoteTmux() -> (destination: String, session: String, dir: String)? {
+        let alert = NSAlert()
+        alert.messageText = "New remote tmux session"
+        alert.informativeText = "Attach to (or create) a tmux session over SSH."
+        alert.addButton(withTitle: "Open")
+        alert.addButton(withTitle: "Cancel")
+        let (view, fields) = remoteTmuxAccessory()
+        alert.accessoryView = view
+        alert.window.initialFirstResponder = fields.destination
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let destination = fields.destination.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !destination.isEmpty else { return nil }
+        let session = fields.session.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (destination, session.isEmpty ? "ghostling" : session,
+                fields.dir.stringValue.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private func remoteTmuxAccessory()
+        -> (NSView, (destination: NSTextField, session: NSTextField, dir: NSTextField)) {
+        let destination = remoteField(placeholder: "user@host  or  host:2222")
+        let session = remoteField(placeholder: "ghostling")
+        let dir = remoteField(placeholder: "start dir (optional)")
+        let rows = [labeledRow("Destination", destination),
+                    labeledRow("tmux session", session),
+                    labeledRow("Start dir", dir)]
+        let stack = NSStackView(views: rows)
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.frame = NSRect(x: 0, y: 0, width: 320, height: 96)
+        return (stack, (destination, session, dir))
+    }
+
+    private func remoteField(placeholder: String) -> NSTextField {
+        let f = NSTextField()
+        f.placeholderString = placeholder
+        f.widthAnchor.constraint(equalToConstant: 220).isActive = true
+        return f
+    }
+
+    private func labeledRow(_ label: String, _ field: NSTextField) -> NSView {
+        let l = NSTextField(labelWithString: label)
+        l.font = .systemFont(ofSize: 11)
+        l.widthAnchor.constraint(equalToConstant: 92).isActive = true
+        let row = NSStackView(views: [l, field])
+        row.orientation = .horizontal
+        row.alignment = .firstBaseline
+        row.spacing = 8
+        return row
+    }
+
+    /// Disk-writing installs + the notification prompt, run one tick after launch so
+    /// they never block the window's first paint. All are idempotent and degrade
+    /// gracefully, so deferring them changes only *when* they run, not *whether*.
+    private func installPostLaunchIntegrations() {
+        SystemNotifier.requestAuthorization()
+        // Auto-wire the board's hook forwarder so real interactive sessions in this
+        // repo appear on the board — the app installs it (the agent can't).
+        if let repoRoot { HookInstaller.install(repoRoot: repoRoot) }
+        // …and USER-level, so claude sessions in ANY project dir (task cards point at
+        // other repos too) emit hook lines — without this, a card whose repo lacks the
+        // forwarder never moves columns while its agent works.
+        HookInstaller.installGlobal()
+        // US-004: install Ghostty shell-integration the same way (idempotent; non-zsh
+        // and write failures degrade gracefully) so the shell reports cwd semantically.
+        installShellIntegration(installRoot: Self.shellIntegrationRoot(), rc: Self.defaultZshrc())
+    }
 
     /// Ctrl+Tab / Ctrl+Shift+Tab jumps straight between focused tasks. A local key
     /// monitor is the single choke point that fires BEFORE the drilled-in terminal's
@@ -660,6 +790,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         boardView.onCreate = { [weak self] in self?.promptAndCreateSession() }
         boardView.onMove = { [weak self] id, column in self?.move(cardID: id, to: column) }
         boardView.onRename = { [weak self] in self?.promptRename(for: $0) }
+        boardView.onDelete = { [weak self] in self?.promptDelete(for: $0) }
         attention.onActivate = { [weak self] in self?.activateAttention() }
         drillIn.onClose = { [weak self] in self?.returnToBoard() }
         planningMode.onReturn = { [weak self] in self?.returnToBoard() }
@@ -681,10 +812,10 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
             TaskFolderIndex().discover(in: URL(fileURLWithPath: dir, isDirectory: true))
         }
         palette.onCancel = { [weak self] in self?.dismissCreatePalette() }
-        palette.confirmInteractive = { [weak self] title, dir, startClaude, inWorktree in
+        palette.confirmInteractive = { [weak self] title, dir, harness, inWorktree in
             guard let self else { return }
             self.createSession(title: title.isEmpty ? nil : title, projectDir: dir,
-                               startClaude: startClaude, inWorktree: inWorktree)
+                               autoStartAgent: harness.cardAgent, inWorktree: inWorktree)
             self.rememberProjectDir(dir)
             self.dismissCreatePalette()
         }
@@ -811,6 +942,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         title: String? = nil,
         projectDir: String? = nil,
         startClaude: Bool = false,
+        autoStartAgent: CardAgent? = nil,
         flow: CardFlow = .b,
         taskFolder: String? = nil,
         inWorktree: Bool = false
@@ -831,9 +963,10 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         // (GHOSTLING_CARD_ID) — the identity binding that folds the hook-observed
         // claude session back into this card even when the repo dir is shared.
         let cardID = UUID()
+        let agent = autoStartAgent ?? .claude
         let seed = BoardSeed.liveTerminal(
             projectDir: dir, sessionID: sessionSlug(title), title: title,
-            cardID: cardID.uuidString
+            cardID: cardID.uuidString, agent: agent
         )
         guard let session = launch(seed) else { return nil }
         let card = BoardCard(
@@ -844,7 +977,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         )
         cards.append(card)
         ptyByCard[card.id] = session.pty
-        if startClaude {
+        if startClaude || autoStartAgent == .claude {
             // Type the start-claude line into the fresh login shell for the operator — the
             // tty input buffer holds it until the shell finishes initialising. Interactive
             // pool only; the firewall against `claude -p` is untouched.
@@ -857,7 +990,31 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
             // transcript), so claude accepts it.
             session.recordClaudeSession(session.id)
             _ = session.pty.send(Array(Self.startClaudeCommand(sessionID: session.id).utf8))
+        } else if autoStartAgent == .codex {
+            _ = session.pty.send(Array(Self.startCodexCommand().utf8))
         }
+        refresh()
+        return card
+    }
+
+    /// Open a REMOTE terminal card: SSH into `spec.host` and attach to (or create) a
+    /// tmux session there. Mirrors ``createSession`` but skips the local-only steps
+    /// (worktree, cwd reporting, auto-`claude`) — a remote card has no local checkout,
+    /// and the human drives the far-side session themselves. Firewall-clean (the launched
+    /// binary is `ssh`). The model mutation is split from any prompt so tests can drive it.
+    @discardableResult
+    func createRemoteTmuxSession(spec: RemoteTmuxSpec) -> BoardCard? {
+        sessionCounter += 1
+        let cardID = UUID()
+        guard let seed = try? BoardSeed.remoteTmux(spec: spec, cardID: cardID.uuidString),
+              let session = launch(seed) else { return nil }
+        let card = BoardCard(
+            id: cardID,
+            sessionID: seed.sessionID, title: seed.title, projectDir: seed.projectDir,
+            agent: seed.agent, flow: seed.flow, state: seed.state
+        )
+        cards.append(card)
+        ptyByCard[card.id] = session.pty
         refresh()
         return card
     }
@@ -1014,6 +1171,50 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         rename(cardID: card.id, to: field.stringValue)
     }
 
+    /// The "Delete Task…" context-menu prompt: a destructive confirmation that
+    /// names what will be torn down (the session, and — when the card lives in its
+    /// own git worktree — that checkout too). The worktree note only appears when
+    /// there's actually one to clean, so the copy never lies.
+    private func promptDelete(for card: BoardCard) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Delete \(card.title ?? BoardTheme.shortPath(card.projectDir))?"
+        let path = (card.projectDir as NSString).expandingTildeInPath
+        alert.informativeText = GitWorktree.isWorktree(path)
+            ? "This ends the session and removes its git worktree checkout (\(BoardTheme.shortPath(path))). Uncommitted changes on that branch are lost."
+            : "This ends the session and removes the task from the board."
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        // The destructive button is default-styled; make Cancel the safe Return key.
+        alert.buttons.first?.hasDestructiveAction = true
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        deleteCard(cardID: card.id)
+    }
+
+    /// Tear a task fully down (US: "ability to delete task, clean worktree too"):
+    /// leave the drill-in if it's the focused card, kill its live session, remove its
+    /// git worktree when it has one, drop the card, and forget all per-card bookkeeping
+    /// so nothing dangles. Persists the trimmed session tree so the deletion survives a
+    /// relaunch. Safe to call for an observed (PTY-less) card too.
+    func deleteCard(cardID: UUID) {
+        guard let card = cards.first(where: { $0.id == cardID }) else { return }
+        if drilledInCardID == cardID { returnToBoard() }
+        let pty = ptyByCard.removeValue(forKey: cardID)
+        pty?.terminate()
+        // Drop the registry entry too, or the persisted session tree would restore
+        // the deleted task on the next launch (snapshotWindows walks the registry).
+        if let pty, let dead = registry.all.first(where: { $0.pty === pty }) {
+            registry.remove(id: dead.id)
+        }
+        _ = worktreeProvisioner.remove(worktreeAt: (card.projectDir as NSString).expandingTildeInPath)
+        cards.removeAll { $0.id == cardID }
+        deadCardIDs.remove(cardID)
+        idleHoldUntil.removeValue(forKey: cardID)
+        lastCardStates.removeValue(forKey: cardID)
+        refresh()
+        persistOnTerminate(store: SessionSnapshotStore.applicationSupport())
+    }
+
     /// US-002: drill into a card → full-window terminal takeover (Altitude-1).
     /// The board surface and attention header are hidden so the embedded terminal
     /// is the only thing on screen.
@@ -1114,12 +1315,32 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         let count = Attention.count(cards)
         attention.update(count: count)
         alertIfAttentionRose(to: count)
+        notifyNewlyDone()
         boardView.render(cards: selection.visibleCards(from: cards))
         quota.render(gauges: QuotaProjection.gauges(from: quotaSources))
         // Keep the drill-in's status pill / waiting banner tracking the live state.
         if let id = drilledInCardID, let card = cards.first(where: { $0.id == id }) {
             drillIn.update(state: card.state)
         }
+    }
+
+    /// Fire a "task done" OS notification on the rising edge into `.done` — the
+    /// moment an agent finishes, so the operator can look away and be pulled back.
+    /// Edge-triggered off `lastCardStates` so it fires once per completion, not on
+    /// every 3s refresh while the card sits in DONE. Always notifies (unlike the
+    /// attention nudge) — "it's finished" is worth surfacing even while focused,
+    /// but only when the app isn't the frontmost window.
+    private func notifyNewlyDone() {
+        for card in cards {
+            let previous = lastCardStates[card.id]
+            lastCardStates[card.id] = card.state
+            guard card.state == .done, previous != nil, previous != .done else { continue }
+            guard !NSApp.isActive else { continue }
+            SystemNotifier.notifyDone(taskName: card.title ?? BoardTheme.shortPath(card.projectDir))
+        }
+        // Drop states for cards that no longer exist so the map can't grow unbounded.
+        let live = Set(cards.map(\.id))
+        lastCardStates = lastCardStates.filter { live.contains($0.key) }
     }
 
     /// OS-level nudge when a session newly starts waiting on the operator while

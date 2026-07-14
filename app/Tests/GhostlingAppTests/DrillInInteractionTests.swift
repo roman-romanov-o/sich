@@ -187,4 +187,53 @@ struct DrillInInteractionTests {
             "Esc must reach the child agent, not return to the board")
         #expect(shell.boardView.isHidden == true)
     }
+
+    /// Fabricate a linked git worktree (a `.git` FILE pointing at the main repo's
+    /// `worktrees/<name>` metadata) and return the checkout path. Pure filesystem —
+    /// no real `git`, so it never mints a worktree in this repo.
+    private func makeWorktreeCheckout(branch: String) throws -> String {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent("wt-\(UUID().uuidString)")
+        let meta = base.appendingPathComponent("main/.git/worktrees/wt")
+        let checkout = base.appendingPathComponent("wt")
+        try fm.createDirectory(at: meta, withIntermediateDirectories: true)
+        try fm.createDirectory(at: checkout, withIntermediateDirectories: true)
+        try "ref: refs/heads/\(branch)\n".write(
+            to: meta.appendingPathComponent("HEAD"), atomically: true, encoding: .utf8)
+        try "../..\n".write(
+            to: meta.appendingPathComponent("commondir"), atomically: true, encoding: .utf8)
+        try "gitdir: \(meta.path)\n".write(
+            to: checkout.appendingPathComponent(".git"), atomically: true, encoding: .utf8)
+        return checkout.path
+    }
+
+    /// Drilling into a card that lives in a git worktree surfaces the amber worktree
+    /// pill with the branch name, so the operator sees edits land on a side branch.
+    /// A normal checkout leaves it hidden — the indicator is opt-in on real geometry.
+    @Test("drill-in shows the worktree indicator for a worktree checkout, hides it otherwise")
+    func worktreeIndicatorReflectsCheckout() throws {
+        let checkout = try makeWorktreeCheckout(branch: "task/fix-login")
+        let seeds = [
+            BoardSeed(sessionID: "wt/one", projectDir: checkout,
+                      agent: .claude, flow: .b, state: .running, scrollback: "on a worktree"),
+            BoardSeed(sessionID: "plain/one", projectDir: "/tmp",
+                      agent: .claude, flow: .b, state: .running, scrollback: "shared checkout"),
+        ]
+        let shell = BoardShell(seeds: seeds)
+        shell.buildContentForTesting()
+        let worktreeCard = try #require(shell.cards.first { $0.projectDir == checkout })
+        let plainCard = try #require(shell.cards.first { $0.projectDir == "/tmp" })
+
+        shell.drill(into: worktreeCard)
+        #expect(shell.drillIn.worktreeTag.isHidden == false,
+            "a worktree checkout shows the indicator")
+        #expect(shell.drillIn.worktreeTag.stringValue == "WORKTREE · task/fix-login",
+            "the pill names the worktree branch")
+
+        // A plain (non-worktree) card leaves the pill hidden.
+        shell.returnToBoard()
+        shell.drill(into: plainCard)
+        #expect(shell.drillIn.worktreeTag.isHidden == true,
+            "a normal checkout hides the indicator")
+    }
 }

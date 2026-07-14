@@ -290,7 +290,7 @@ final class PlanningModeView: NSView {
         self.reader = reader
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = BoardTheme.hex(0x07090C).cgColor
+        layer?.backgroundColor = BoardTheme.documentChrome.cgColor
         returnButton.onClick = { [weak self] in self?.onReturn?() }
         // A mermaid diagram renders off-main and swaps in when ready — re-render the
         // current doc so the fallback text is replaced by the finished image.
@@ -320,7 +320,7 @@ final class PlanningModeView: NSView {
         documentPane.autoresizingMask = [.width]
         documentPane.textContainer?.widthTracksTextView = true
         terminalContainer.wantsLayer = true
-        terminalContainer.layer?.backgroundColor = BoardTheme.hex(0x07090C).cgColor
+        terminalContainer.layer?.backgroundColor = BoardTheme.documentChrome.cgColor
         terminalRail.wantsLayer = true
         terminalRail.layer?.backgroundColor = BoardTheme.documentChrome.cgColor
         feedbackField.font = BoardTheme.monoSmall

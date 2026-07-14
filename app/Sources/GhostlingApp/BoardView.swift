@@ -21,6 +21,9 @@ final class BoardView: NSView {
     var onMove: ((UUID, BoardColumn) -> Void)?
     /// A card's "Rename Task…" context item was picked — the host prompts + renames.
     var onRename: ((BoardCard) -> Void)?
+    /// A card's "Delete Task…" context item was picked — the host confirms, tears
+    /// down the session + its worktree, and removes the card.
+    var onDelete: ((BoardCard) -> Void)?
 
     /// The v5 column groups, left→right.
     enum ColumnGroup: CaseIterable {
@@ -75,6 +78,13 @@ final class BoardView: NSView {
     private var focusedCardID: UUID?
     /// Per-column count captions, updated on every render.
     private var countLabels: [ColumnGroup: NSTextField] = [:]
+    /// The last snapshot rendered — replayed on a live light/dark switch so the
+    /// rebuilt card views re-resolve their layer colours in the new appearance.
+    private var lastCards: [BoardCard] = []
+    /// Scaffold layer-backed views paired with their dynamic fill. `cgColor` is a
+    /// one-shot snapshot of the appearance at build time, so these must be re-applied
+    /// when the system flips light/dark (unlike NSColor-valued text, which auto-adapts).
+    private var scaffoldFills: [(NSView, NSColor)] = []
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -84,6 +94,21 @@ final class BoardView: NSView {
     }
 
     required init?(coder: NSCoder) { nil }
+
+    /// System light/dark flipped: re-resolve every layer-backed fill (they snapshotted
+    /// `cgColor` at build time) and rebuild the cards under the new appearance, so the
+    /// whole board follows the system theme live — no restart. Text fields use dynamic
+    /// NSColors and repaint themselves, so only the layer fills need this nudge.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = BoardTheme.canvas.cgColor
+            for (view, color) in scaffoldFills {
+                view.layer?.backgroundColor = color.cgColor
+            }
+            render(cards: lastCards)
+        }
+    }
 
     // MARK: - Scaffold (built once): four equal columns filling the surface
 
@@ -112,6 +137,7 @@ final class BoardView: NSView {
         column.wantsLayer = true
         if group == .needsYou {
             column.layer?.backgroundColor = BoardTheme.needsYouColumn.cgColor
+            scaffoldFills.append((column, BoardTheme.needsYouColumn))
         }
         if group != .done { addRightHairline(to: column) }
 
@@ -163,6 +189,7 @@ final class BoardView: NSView {
         let dot = NSView()
         dot.wantsLayer = true
         dot.layer?.backgroundColor = color.cgColor
+        scaffoldFills.append((dot, color))
         dot.layer?.cornerRadius = 3.5
         dot.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -196,6 +223,7 @@ final class BoardView: NSView {
         let line = NSView()
         line.wantsLayer = true
         line.layer?.backgroundColor = BoardTheme.hairline.cgColor
+        scaffoldFills.append((line, BoardTheme.hairline))
         line.translatesAutoresizingMaskIntoConstraints = false
         column.addSubview(line)
         NSLayoutConstraint.activate([
@@ -211,6 +239,7 @@ final class BoardView: NSView {
     /// Project a card snapshot onto the columns. Clearing + repopulating each cell
     /// is the live-column-move mechanism (US-003 AC#3).
     func render(cards: [BoardCard]) {
+        lastCards = cards
         for cell in cells.values {
             cell.arrangedSubviews.forEach { $0.removeFromSuperview() }
         }
@@ -304,6 +333,7 @@ final class BoardView: NSView {
         let view = SessionCard(card: card)
         view.onSelect = { [weak self] in self?.onSelect?($0) }
         view.onRename = { [weak self] in self?.onRename?($0) }
+        view.onDelete = { [weak self] in self?.onDelete?($0) }
         return view
     }
 

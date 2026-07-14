@@ -14,6 +14,9 @@ final class SessionCard: NSView, NSDraggingSource {
     /// Invoked from the right-click "Rename Task…" item — the board bubbles this
     /// to the host, which prompts for the new title and mutates the card.
     var onRename: ((BoardCard) -> Void)?
+    /// Invoked from the right-click "Delete Task…" item — the board bubbles this to
+    /// the host, which confirms, tears down the session + worktree, and drops the card.
+    var onDelete: ((BoardCard) -> Void)?
 
     private let stack = NSStackView()
     /// Distinguishes a click (drill-in) from a drag (column move): a drag sets
@@ -200,13 +203,18 @@ final class SessionCard: NSView, NSDraggingSource {
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = NSMenu()
-        let item = NSMenuItem(title: "Rename Task…", action: #selector(renameTapped), keyEquivalent: "")
-        item.target = self
-        menu.addItem(item)
+        let rename = NSMenuItem(title: "Rename Task…", action: #selector(renameTapped), keyEquivalent: "")
+        rename.target = self
+        menu.addItem(rename)
+        menu.addItem(.separator())
+        let delete = NSMenuItem(title: "Delete Task…", action: #selector(deleteTapped), keyEquivalent: "")
+        delete.target = self
+        menu.addItem(delete)
         return menu
     }
 
     @objc private func renameTapped() { onRename?(card) }
+    @objc private func deleteTapped() { onDelete?(card) }
 
     override func mouseDown(with event: NSEvent) { didDrag = false }
 

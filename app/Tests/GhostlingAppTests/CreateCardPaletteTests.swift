@@ -127,9 +127,9 @@ private let kReturn: UInt16 = 36
     let (palette, root, window) = makePalette(
         recents: [PaletteProject(path: proj.path, activeCards: 0)], folders: [])
 
-    var captured: (title: String, dir: String, startClaude: Bool, inWorktree: Bool)?
-    palette.confirmInteractive = { title, dir, startClaude, inWorktree in
-        captured = (title, dir, startClaude, inWorktree)
+    var captured: (title: String, dir: String, harness: CreateCardPalette.Harness, inWorktree: Bool)?
+    palette.confirmInteractive = { title, dir, harness, inWorktree in
+        captured = (title, dir, harness, inWorktree)
     }
 
     pressKey(kReturn, chars: "\r", in: window)     // project
@@ -147,14 +147,39 @@ private let kReturn: UInt16 = 36
     let got = try #require(captured)
     #expect(got.title == "poke around")
     #expect(got.dir == proj.path)
-    #expect(got.startClaude, "Claude Code harness was chosen at stage 2")
-    #expect(got.inWorktree, "own-worktree is the interactive default")
+    #expect(got.harness == .claude, "Claude Code harness was chosen at stage 2")
+    #expect(!got.inWorktree, "own-worktree is OFF by default — a worktree is an opt-in")
 }
 
-/// Unchecking the worktree box carries through to the confirm — the opt-out for
-/// "I really do want the shared checkout".
+/// Codex path: selecting Codex at the harness stage carries through the interactive
+/// task confirmation, instead of collapsing into the old Claude/bare-shell Boolean.
 @MainActor
-@Test func worktreeCheckboxOptOutReachesConfirm() throws {
+@Test func codexHarnessReachesInteractiveConfirmViaRealEvents() throws {
+    let proj = URL(fileURLWithPath: "/tmp/demo-project", isDirectory: true)
+    let (palette, root, window) = makePalette(
+        recents: [PaletteProject(path: proj.path, activeCards: 0)], folders: [])
+
+    var captured: CreateCardPalette.Harness?
+    palette.confirmInteractive = { _, _, harness, _ in captured = harness }
+
+    pressKey(kReturn, chars: "\r", in: window)     // project
+    pressKey(125, in: window)                      // harness: Claude → Codex
+    pressKey(kReturn, chars: "\r", in: window)     // Codex → task
+    #expect(palette.stage == .task)
+
+    let interactiveCard = try #require(palette.flowCards.last)
+    try clickRow(interactiveCard, root: root, window: window)
+    palette.nameField.stringValue = "try codex"
+    pressKey(kReturn, chars: "\r", in: window)
+
+    #expect(captured == .codex)
+}
+
+/// Toggling the worktree switch on carries through to the confirm — the opt-IN for
+/// "give this task its own isolated checkout". Driven by a real dispatched click on
+/// the custom toggle (the interaction-AC binding rule), not a `performClick`/state poke.
+@MainActor
+@Test func worktreeToggleOptInReachesConfirm() throws {
     let proj = URL(fileURLWithPath: "/tmp/demo-project", isDirectory: true)
     let (palette, root, window) = makePalette(
         recents: [PaletteProject(path: proj.path, activeCards: 0)], folders: [])
@@ -166,12 +191,14 @@ private let kReturn: UInt16 = 36
     let interactiveCard = try #require(palette.flowCards.last)
     try clickRow(interactiveCard, root: root, window: window)
 
-    let box = try #require(palette.worktreeCheckbox, "interactive stage shows the worktree toggle")
-    box.performClick(nil)   // the real control action path, not a state poke
-    palette.nameField.stringValue = "shared checkout task"
+    let toggle = try #require(palette.worktreeToggle, "interactive stage shows the worktree toggle")
+    #expect(!toggle.isOn, "the toggle starts off")
+    try clickRow(toggle, root: root, window: window)   // a genuine leftMouseDown flips it on
+    #expect(toggle.isOn, "clicking the toggle turns it on")
+    palette.nameField.stringValue = "isolated checkout task"
     pressKey(kReturn, chars: "\r", in: window)
 
-    #expect(captured == false, "unchecked box reaches confirmInteractive")
+    #expect(captured == true, "toggled-on worktree reaches confirmInteractive")
 }
 
 /// Esc at the project stage cancels — a real key event reaches `onCancel`.

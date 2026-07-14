@@ -114,6 +114,48 @@ struct SessionResumeTests {
         #expect(reopened.count == 2)  // both panes re-opened as live shells
     }
 
+    // MARK: - Named-task persistence: a card's title + task folder survive a restart
+
+    /// The "tasks do not save after restart" bug: a card carried a human title and a
+    /// saha task folder, but only the bare session (cwd + identity) was persisted, so a
+    /// restart brought back an *unnamed shell* at the same dir. This drives the real
+    /// quit→restart seams end to end and proves the card comes back *by name*, still
+    /// bound to its task folder — enriched at quit, rebuilt at launch.
+    @Test("a named card's title + task folder survive quit → restart")
+    func namedCardTitleAndTaskFolderSurviveRestart() throws {
+        let storeDir = makeSnapshotDir()
+        let work = makeSnapshotDir()
+        defer { cleanup(storeDir); cleanup(work) }
+
+        // A running board with one NAMED, saha-bound card (title + explicit task folder).
+        // Flow B so the task folder is the one we set, not an inferred current-task.
+        let titled = BoardSeed(
+            sessionID: "resume-titled", title: "Fix login redirect", projectDir: work.path,
+            agent: .claude, flow: .b, state: .idle, scrollback: "",
+            taskFolder: "/tasks/task-42-login"
+        )
+        let shell = BoardShell(seeds: [titled])
+        _ = shell.buildContentForTesting()
+        defer { shell.e2eTeardown() }
+
+        // Quit: the persisted pane carries the card's title + task folder — NOT a bare shell.
+        let store = SessionSnapshotStore(directory: storeDir, now: { self.fixedDate })
+        let saved = try #require(shell.persistOnTerminate(store: store))
+        let pane = try #require(saved.windows.flatMap(\.panes).first)
+        #expect(pane.title == "Fix login redirect")
+        #expect(pane.taskFolder == "/tasks/task-42-login")
+
+        // Launch: the REAL restorer rebuilds the card by name, still pointing at its task.
+        let relaunched = BoardShell()
+        defer { relaunched.e2eTeardown() }
+        let restoredCards = relaunched.restoreCardsForTesting(
+            store: SessionSnapshotStore(directory: storeDir)
+        )
+        let card = try #require(restoredCards.first)
+        #expect(card.title == "Fix login redirect")
+        #expect(card.taskFolder == "/tasks/task-42-login")
+    }
+
     // MARK: - TC-UNIT-021: corrupt current → -previous fallback (via the launch seam)
 
     @Test func corruptCurrent_fallsBackToPrevious() throws {

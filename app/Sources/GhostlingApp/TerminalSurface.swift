@@ -456,7 +456,11 @@ public final class TerminalSurface: NSView {
         let flags = event.modifierFlags
         let word = flags.contains(.control) || flags.contains(.option)
         switch Int(event.keyCode) {
-        case 36, 76: return .enter
+        // Shift+Enter (and Option+Enter) insert a newline instead of submitting —
+        // the multi-line-prompt chord Claude Code's `/terminal-setup` normally wires
+        // up by hand. We map it natively so it works out of the box.
+        case 36, 76:
+            return flags.contains(.shift) || flags.contains(.option) ? .newline : .enter
         case 48: return .tab
         case 51 where flags.contains(.command): return .deleteLine
         case 51 where word: return .deleteWord
@@ -522,7 +526,7 @@ public final class TerminalSurface: NSView {
         }
         let text = runText(row: row, from: start, to: end)
         guard text.contains(where: { $0 != " " }) else { return }   // blank run: bg only
-        (text as NSString).draw(at: NSPoint(x: x, y: y), withAttributes: glyphAttrs(fg: fg))
+        (text as NSString).draw(at: NSPoint(x: x, y: y), withAttributes: glyphAttrs(fg: fg, bg: bg))
     }
 
     private func runText(row: Int, from start: Int, to end: Int) -> String {
@@ -564,17 +568,48 @@ public final class TerminalSurface: NSView {
 
     // MARK: - Colour helpers
 
-    private func glyphAttrs(fg: RGB?) -> [NSAttributedString.Key: Any] {
-        [.font: font, .foregroundColor: fg.map(nsColor) ?? defaultFgColor(),
+    /// The lowest text/background contrast ratio we tolerate before lifting the
+    /// foreground (see ``TerminalSurface/legibleFg(_:on:)``). Tuned to rescue dim
+    /// shell autosuggestions / SGR-faint text without repainting already-readable
+    /// output — the pixel result is a human sign-off, this is the knob.
+    private static let minimumTextContrast = 3.5
+
+    private func glyphAttrs(fg: RGB?, bg: RGB? = nil) -> [NSAttributedString.Key: Any] {
+        [.font: font, .foregroundColor: legibleFg(fg, on: bg),
          .ligature: 0, .kern: 0]
+    }
+
+    /// Resolve a cell's foreground to an NSColor, first lifting it to meet the
+    /// minimum contrast against its effective background so faint suggestions become
+    /// easy to spot. `nil` fg/bg fall back to the terminal defaults.
+    private func legibleFg(_ fg: RGB?, on bg: RGB?) -> NSColor {
+        let base = fg ?? grid.defaultFg
+        guard let base else { return BoardTheme.termFg }
+        let adjusted = ContrastColor.adjusted(
+            base, against: bg ?? terminalBackgroundRGB(),
+            minimumRatio: Self.minimumTextContrast)
+        return nsColor(adjusted)
+    }
+
+    /// The surface's default background as an RGB, resolved for the *current*
+    /// appearance (this runs inside `draw(_:)`, where the dynamic colour resolves to
+    /// light/dark correctly) so the contrast maths use the real backdrop.
+    private func terminalBackgroundRGB() -> RGB {
+        guard let srgb = BoardTheme.termBg.usingColorSpace(.sRGB) else { return RGB(r: 0, g: 0, b: 0) }
+        return RGB(r: UInt8(srgb.redComponent * 255),
+                   g: UInt8(srgb.greenComponent * 255),
+                   b: UInt8(srgb.blueComponent * 255))
     }
 
     private func nsColor(_ c: RGB) -> NSColor {
         NSColor(srgbRed: CGFloat(c.r) / 255, green: CGFloat(c.g) / 255, blue: CGFloat(c.b) / 255, alpha: 1)
     }
 
-    private func defaultFgColor() -> NSColor {
-        grid.defaultFg.map(nsColor) ?? BoardTheme.termFg
+    /// Test seam: the exact fg the draw path would paint for a cell (fg on bg), so a
+    /// test can prove the surface routes through the contrast lift — the drawn pixels
+    /// themselves stay a human sign-off.
+    func resolvedForegroundForTesting(fg: RGB?, bg: RGB?) -> NSColor {
+        legibleFg(fg, on: bg)
     }
 
     private struct GridPoint: Equatable {

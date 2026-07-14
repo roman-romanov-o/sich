@@ -12,6 +12,9 @@ public final class QuotaPanel: NSView {
 
     private let scroll = NSScrollView()
     private let content = NSStackView()
+    /// Re-ticks each row's "resets in …" line every minute so the countdown stays
+    /// live between quota polls (which are minutes apart) without a full re-render.
+    private var resetTicker: Timer?
 
     public override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -21,6 +24,27 @@ public final class QuotaPanel: NSView {
     }
 
     public required init?(coder: NSCoder) { nil }
+
+    /// Tick only while on-screen: start the per-minute reset refresh when the panel
+    /// gains a window, tear it down when it leaves (also sidesteps a nonisolated
+    /// `deinit` touching the non-Sendable `Timer`).
+    public override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil {
+            resetTicker?.invalidate()
+            resetTicker = nil
+        } else if resetTicker == nil {
+            startResetTicker()
+        }
+    }
+
+    private func startResetTicker() {
+        let ticker = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.rows.forEach { $0.refreshReset() } }
+        }
+        RunLoop.main.add(ticker, forMode: .common)
+        resetTicker = ticker
+    }
 
     private func buildScaffold() {
         content.orientation = .vertical
@@ -225,7 +249,7 @@ enum QuotaLayout {
     static let innerWidth: CGFloat = 264
     static let providerWidth: CGFloat = 56
     static let cellWidth: CGFloat = 94
-    static let cellHeight: CGFloat = 38
+    static let cellHeight: CGFloat = 50
     static let barHeight: CGFloat = 8
     static let columnGap: CGFloat = 10
 }

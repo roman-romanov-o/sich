@@ -76,7 +76,7 @@ public struct BoardSeed: Sendable {
     ///   coexist on the board.
     public static func liveTerminal(
         projectDir: String, sessionID: String = "live-terminal", title: String? = nil,
-        cardID: String? = nil
+        cardID: String? = nil, agent: CardAgent = .claude
     ) -> BoardSeed {
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         // `cd` into the project dir first so the shell opens where the work is, then
@@ -90,8 +90,33 @@ public struct BoardSeed: Sendable {
         let launch = "cd \(shellQuoted(projectDir)) && \(bind)exec \(shellQuoted(shell)) -il"
         return BoardSeed(
             sessionID: sessionID, title: title, projectDir: projectDir,
-            agent: .claude, flow: .b, state: .idle, scrollback: "",
+            agent: agent, flow: .b, state: .idle, scrollback: "",
             commandOverride: ["/bin/sh", "-c", launch], cardID: id
+        )
+    }
+}
+
+extension BoardSeed {
+    /// A **remote** terminal card: SSH into `spec.host` and attach to (or create) a
+    /// tmux session there, so a session running on another machine lives on the board
+    /// like any local one. Because tmux survives the SSH drop, closing/re-opening the
+    /// card reconnects to the same running session (`-A`). Firewall-clean: the local
+    /// executable is `ssh`, and inside tmux the human drives interactively — never
+    /// `claude -p`. Flow B.
+    public static func remoteTmux(
+        spec: RemoteTmuxSpec, sessionID: String? = nil, title: String? = nil,
+        cardID: String? = nil, agent: CardAgent = .claude
+    ) throws -> BoardSeed {
+        let argv = try RemoteTmuxCommand.argv(for: spec)
+        let session = RemoteTmuxCommand.sanitizeSessionName(spec.sessionName)
+        return BoardSeed(
+            sessionID: sessionID ?? "remote/\(spec.host)/\(session)",
+            title: title ?? "\(spec.target) · \(session)",
+            // `projectDir` is a display/label field for a remote card (no local path);
+            // show the ssh destination so drill-in and the card subtitle read sensibly.
+            projectDir: spec.target,
+            agent: agent, flow: .b, state: .idle, scrollback: "",
+            commandOverride: argv, cardID: cardID ?? UUID().uuidString
         )
     }
 }

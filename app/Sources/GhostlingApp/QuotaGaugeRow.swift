@@ -31,7 +31,9 @@ public final class QuotaGaugeRow: NSView {
         if isExhausted { return "exhausted" }
         return remainingLabel.stringValue
     }
-    public var resetText: String { resetLine() }
+    /// What the reset line actually displays — reflects the latest `refreshReset`
+    /// tick, not a fresh recompute, so it stays faithful to what's on screen.
+    public var resetText: String { resetLabel.stringValue }
     public var titleText: String { titleLabel.stringValue }
 
     private func buildContent() {
@@ -68,11 +70,19 @@ public final class QuotaGaugeRow: NSView {
         stack.addArrangedSubview(remainingLabel)
 
         resetLabel.stringValue = resetLine()
-        resetLabel.isHidden = true
+        resetLabel.isHidden = resetLabel.stringValue.isEmpty
         resetLabel.font = BoardTheme.monoSmall
-        resetLabel.textColor = BoardTheme.textDim
+        resetLabel.textColor = resetColor()
         resetLabel.lineBreakMode = .byTruncatingTail
         stack.addArrangedSubview(resetLabel)
+    }
+
+    /// Re-evaluate the reset countdown against the current clock — the panel ticks
+    /// this each minute so "resets in 2h 14m" stays live without a full re-render.
+    public func refreshReset(now: Date = Date()) {
+        resetLabel.stringValue = resetLine(now: now)
+        resetLabel.isHidden = resetLabel.stringValue.isEmpty
+        resetLabel.textColor = resetColor(now: now)
     }
 
     private func poolTitle() -> String {
@@ -108,25 +118,44 @@ public final class QuotaGaugeRow: NSView {
         return "measuring"
     }
 
-    private func resetLine() -> String {
+    /// The highlighted "time left until this limit resets" line — e.g.
+    /// `"window · resets in 2h 14m"`, `"weekly · back in 1d 6h"` (exhausted framing),
+    /// or `"hard-stop · refills in 12d"` for an SDK credit. The window/weekly/hard-stop
+    /// prefix keeps the refill *kind* explicit; the countdown is the new part users
+    /// asked to see. An unknown pool has nothing to count down, so the line is empty.
+    private func resetLine(now: Date = Date()) -> String {
         if isUnknown { return "" }
+        let prefix = resetPrefix()
+        guard let reset = gauge.reset else { return prefix }
+        let phrase = resetPhrase(left: QuotaCountdown.timeLeft(to: reset, from: now))
+        return prefix.isEmpty ? phrase : "\(prefix) · \(phrase)"
+    }
+
+    private func resetPrefix() -> String {
         switch gauge.fallback {
-        case .none:
-            return resetSuffix(prefix: "hard-stop")
-        case .windowReset:
-            return resetSuffix(prefix: "window")
-        case .weeklyReset:
-            return resetSuffix(prefix: "weekly")
-        case .unknown:
-            return resetSuffix(prefix: "")
+        case .none: return "hard-stop"
+        case .windowReset: return "window"
+        case .weeklyReset: return "weekly"
+        case .unknown: return ""
         }
     }
 
-    private func resetSuffix(prefix: String) -> String {
-        let when = gauge.reset.map { QuotaGaugeRow.relative.localizedString(for: $0, relativeTo: Date()) } ?? ""
-        if prefix.isEmpty { return when }
-        if when.isEmpty { return prefix }
-        return "\(prefix) · \(when)"
+    /// A hard-stop credit *refills*; a rolling window *resets*. When exhausted, frame
+    /// either as when you're unblocked ("back in …") — that's the number that matters.
+    private func resetPhrase(left: String) -> String {
+        if isExhausted { return "back in \(left)" }
+        return gauge.fallback == .none ? "refills in \(left)" : "resets in \(left)"
+    }
+
+    /// Highlight the countdown when it matters: bright attention while exhausted (you
+    /// are waiting on exactly this reset) or when it's imminent/soon; dim otherwise.
+    private func resetColor(now: Date = Date()) -> NSColor {
+        guard let reset = gauge.reset else { return BoardTheme.textDim }
+        if isExhausted { return BoardTheme.attention }
+        switch QuotaCountdown.urgency(to: reset, from: now) {
+        case .imminent, .soon: return BoardTheme.attention
+        case .distant: return BoardTheme.textDim
+        }
     }
 
     private func remainingColor() -> NSColor {
@@ -138,13 +167,6 @@ public final class QuotaGaugeRow: NSView {
     private func normalized(_ text: String) -> String {
         text.lowercased().replacingOccurrences(of: "-", with: "_")
     }
-
-    private static let relative: RelativeDateTimeFormatter = {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .abbreviated
-        f.locale = Locale(identifier: "en_US")
-        return f
-    }()
 
     private static func makeLabel() -> NSTextField {
         let field = NSTextField(labelWithString: "")

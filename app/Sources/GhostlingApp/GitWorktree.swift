@@ -40,4 +40,25 @@ enum GitWorktree {
         // commonDir is `<main>/.git`; its parent is the main repo root.
         return (commonDir as NSString).deletingLastPathComponent
     }
+
+    /// True when `path` is a linked git *worktree* checkout (its `.git` is a file
+    /// pointing back at `<main>/.git/worktrees/<name>`), not a normal clone or a
+    /// non-repo. This is exactly the isolated checkout a task card is dropped into
+    /// when "own git worktree" is on — the drill-in surfaces it so the operator can
+    /// tell edits land on a side branch, not the shared main tree.
+    static func isWorktree(_ path: String) -> Bool {
+        mainRepoRoot(of: path) != nil
+    }
+
+    /// The branch `path` currently has checked out, read from its resolved gitdir's
+    /// `HEAD` (`ref: refs/heads/<branch>`). nil for a detached HEAD or a non-repo —
+    /// the caller falls back to a bare "worktree" label.
+    static func currentBranch(of path: String) -> String? {
+        guard let gitDir = gitDir(of: path) else { return nil }
+        let head = (gitDir as NSString).appendingPathComponent("HEAD")
+        guard let raw = try? String(contentsOfFile: head, encoding: .utf8) else { return nil }
+        let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefix = "ref: refs/heads/"
+        return line.hasPrefix(prefix) ? String(line.dropFirst(prefix.count)) : nil
+    }
 }

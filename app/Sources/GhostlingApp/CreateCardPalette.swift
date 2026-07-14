@@ -83,8 +83,8 @@ final class PaletteRow: NSView {
         layer?.borderWidth = isSelected ? 1 : 0
         layer?.borderColor = isSelected ? accent.withAlphaComponent(0.27).cgColor : nil
         glyph.textColor = isSelected ? accent : BoardTheme.textDim
-        subtitle.textColor = isSelected ? BoardTheme.hex(0x9A8468) : BoardTheme.textDim
-        meta.textColor = isSelected ? BoardTheme.hex(0x9A8468) : BoardTheme.textDim
+        subtitle.textColor = isSelected ? BoardTheme.hex(0xB39A6E) : BoardTheme.textDim
+        meta.textColor = isSelected ? BoardTheme.hex(0xB39A6E) : BoardTheme.textDim
         idChip.textColor = BoardTheme.textMuted
     }
 
@@ -183,7 +183,84 @@ final class FlowOptionCard: NSView {
         dot.layer?.borderWidth = isSelected ? 4 : 1
         dot.layer?.borderColor = (isSelected ? a : BoardTheme.textDim).cgColor
         title.textColor = isSelected ? BoardTheme.textPrimary : BoardTheme.textMuted
-        desc.textColor = isSelected ? BoardTheme.hex(0x9A8468) : BoardTheme.textDim
+        desc.textColor = isSelected ? BoardTheme.hex(0xB39A6E) : BoardTheme.textDim
+    }
+}
+
+/// The interactive-flow "own git worktree" switch (stage 3). A custom-drawn toggle,
+/// NOT `NSButton(checkboxWithTitle:)`: the stock checkbox rendered near-invisible on
+/// this hand-painted dark UI — a washed-out glyph beside low-contrast grey text — the
+/// same composite failure ``PaletteRow`` and ``FlowOptionCard`` were built to dodge.
+/// This reuses their proven idiom: layer-backed, owns its whole rect, real
+/// `mouseDown`. A 20pt box fills amber with a check when on, so the state reads at a
+/// glance. Off by default — a worktree is an opt-IN, never a surprise side branch.
+final class WorktreeToggle: NSView {
+    var onToggle: ((Bool) -> Void)?
+    private(set) var isOn: Bool
+    private let box = NSView()
+    private let check = makeMono(13)
+    private let title = makeSans(12, weight: .semibold)
+    private let subtitle = makeMono(10)
+
+    init(isOn: Bool) {
+        self.isOn = isOn
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 9
+        title.stringValue = "Own git worktree"
+        subtitle.stringValue = "fresh task/<name> branch · isolated checkout"
+        check.stringValue = "✓"
+        check.alignment = .center
+        box.wantsLayer = true
+        box.layer?.cornerRadius = 5
+        box.layer?.borderWidth = 1.5
+        box.widthAnchor.constraint(equalToConstant: 20).isActive = true
+        box.heightAnchor.constraint(equalToConstant: 20).isActive = true
+        check.translatesAutoresizingMaskIntoConstraints = false
+        box.addSubview(check)
+        NSLayoutConstraint.activate([
+            check.centerXAnchor.constraint(equalTo: box.centerXAnchor),
+            check.centerYAnchor.constraint(equalTo: box.centerYAnchor),
+        ])
+        let col = NSStackView(views: [title, subtitle])
+        col.orientation = .vertical
+        col.alignment = .leading
+        col.spacing = 2
+        let row = NSStackView(views: [box, col])
+        row.alignment = .centerY
+        row.spacing = 11
+        row.edgeInsets = NSEdgeInsets(top: 11, left: 13, bottom: 11, right: 13)
+        pin(row, to: self)
+        restyle()
+    }
+    required init?(coder: NSCoder) { nil }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        bounds.contains(convert(point, from: superview)) ? self : nil
+    }
+    override func mouseDown(with event: NSEvent) { toggle() }
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    /// Flip and notify — the seam a real `mouseDown` drives (the interaction-AC
+    /// binding rule: click ACs are exercised by a dispatched event, not a state poke).
+    func toggle() {
+        isOn.toggle()
+        restyle()
+        onToggle?(isOn)
+    }
+
+    private func restyle() {
+        let a = BoardTheme.attention
+        layer?.backgroundColor = (isOn ? a.withAlphaComponent(0.06) : BoardTheme.canvas).cgColor
+        layer?.borderWidth = 1
+        layer?.borderColor = (isOn ? a.withAlphaComponent(0.4) : BoardTheme.cardStrokeStrong).cgColor
+        box.layer?.backgroundColor = (isOn ? a : NSColor.clear).cgColor
+        box.layer?.borderColor = (isOn ? a : BoardTheme.textFaint).cgColor
+        check.textColor = isOn ? BoardTheme.canvas : .clear
+        check.isHidden = !isOn
+        title.textColor = isOn ? BoardTheme.textPrimary : BoardTheme.textMuted
+        subtitle.textColor = BoardTheme.textDim
     }
 }
 
@@ -220,10 +297,39 @@ final class FlowOptionCard: NSView {
 final class CreateCardPalette: NSView, NSTextFieldDelegate {
     enum Stage { case project, harness, task }
     enum Flow { case saha, interactive }
+    enum Harness: CaseIterable {
+        case claude
+        case codex
+        case shell
+
+        var title: String {
+            switch self {
+            case .claude: return "Claude Code"
+            case .codex: return "Codex"
+            case .shell: return "Interactive shell"
+            }
+        }
+
+        var subtitle: String {
+            switch self {
+            case .claude: return "claude · supports /saha:* commands"
+            case .codex: return "codex · OpenAI coding agent CLI"
+            case .shell: return "bare login shell · run any CLI yourself"
+            }
+        }
+
+        var cardAgent: CardAgent? {
+            switch self {
+            case .claude: return .claude
+            case .codex: return .codex
+            case .shell: return nil
+            }
+        }
+    }
 
     // Shell wires these. Each saha confirm returns an error string (nil = success,
     // shell has dismissed us + entered planning); interactive never fails visibly.
-    var confirmInteractive: ((_ title: String, _ dir: String, _ startClaude: Bool, _ inWorktree: Bool) -> Void)?
+    var confirmInteractive: ((_ title: String, _ dir: String, _ harness: Harness, _ inWorktree: Bool) -> Void)?
     var confirmSahaNew: ((_ title: String, _ dir: String) -> String?)?
     var confirmSahaExisting: ((_ folder: URL, _ dir: String) -> String?)?
     var browse: (() -> String?)?
@@ -242,11 +348,12 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
 
     private let recents: [PaletteProject]
     private var projectDir: String
-    private var startClaude = true
-    /// Interactive-flow default: each task gets its own git worktree (fresh
-    /// `task/<slug>` branch), so parallel cards on one repo don't share a checkout.
-    private(set) var inWorktree = true
-    private(set) var worktreeCheckbox: NSButton?
+    private var harness: Harness = .claude
+    /// Off by default: a worktree is an explicit opt-IN. When on, the task gets its
+    /// own git worktree (fresh `task/<slug>` branch) so parallel cards on one repo
+    /// don't share a checkout — but that's a deliberate choice, not a surprise.
+    private(set) var inWorktree = false
+    private(set) var worktreeToggle: WorktreeToggle?
     private var flow: Flow = .saha
     private var folders: [TaskFolderSummary] = []
     private var selected = 0
@@ -430,18 +537,16 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     private func renderHarness() {
         addHeader("2/3 harness", completed: [projLeaf])
         add(sectionLabel("HARNESS — RUNS THE SESSION"))
-        addNav(PaletteRow(glyph: "", title: "Claude Code",
-                          subtitle: "claude · supports /saha:* commands"))
-        addNav(PaletteRow(glyph: "", title: "Interactive shell",
-                          subtitle: "bare login shell · run any CLI yourself"))
+        for option in Harness.allCases {
+            addNav(PaletteRow(glyph: "", title: option.title, subtitle: option.subtitle))
+        }
         setFooter(["↵ next: task", "↑↓ navigate", "← back", "esc cancel"])
     }
 
     // MARK: stage 3 — task
 
     private func renderTask() {
-        let harness = startClaude ? "Claude Code" : "Interactive shell"
-        addHeader("3/3 task", completed: [projLeaf, harness])
+        addHeader("3/3 task", completed: [projLeaf, harness.title])
         buildNameField()
         buildFlowGrid()
         if flow == .saha { buildFolderList() } else { buildWorktreeToggle() }
@@ -514,20 +619,15 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         addNav(createRow)
     }
 
-    /// Interactive flow only: the default-on "own git worktree" switch. Saha tasks
-    /// stay in the repo checkout — their scaffolded docs/tasks folder lives there.
+    /// Interactive flow only: the opt-in "own git worktree" switch (off by default).
+    /// Saha tasks stay in the repo checkout — their scaffolded docs/tasks folder
+    /// lives there.
     private func buildWorktreeToggle() {
-        let box = NSButton(checkboxWithTitle: "Own git worktree — fresh task/<name> branch, isolated checkout",
-                           target: self, action: #selector(worktreeToggled(_:)))
-        box.state = inWorktree ? .on : .off
-        box.font = .systemFont(ofSize: 11)
-        box.contentTintColor = BoardTheme.textMuted
-        worktreeCheckbox = box
-        add(box)
-    }
-
-    @objc private func worktreeToggled(_ sender: NSButton) {
-        inWorktree = sender.state == .on
+        add(sectionLabel("ISOLATION"))
+        let toggle = WorktreeToggle(isOn: inWorktree)
+        toggle.onToggle = { [weak self] on in self?.inWorktree = on }
+        worktreeToggle = toggle
+        add(toggle)
     }
 
     // MARK: selection + actions
@@ -552,7 +652,7 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
             projectDir = recents[idx].path
             stage = .harness; renderStage()
         case .harness:
-            startClaude = (idx == 0)
+            harness = Harness.allCases[idx]
             folders = discoverFolders?(projectDir) ?? []
             stage = .task; renderStage()
         case .task:
@@ -563,7 +663,7 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     private func confirmTask(folderIndex: Int?) {
         let title = nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if flow == .interactive {
-            confirmInteractive?(title, projectDir, startClaude, inWorktree)
+            confirmInteractive?(title, projectDir, harness, inWorktree)
             return
         }
         // saha: the last nav row is "Create new"; earlier rows are existing folders.
@@ -674,7 +774,7 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     func presentSahaTaskStage(projectDir: String, folders: [TaskFolderSummary]) {
         self.projectDir = projectDir
         self.folders = folders
-        self.startClaude = true
+        self.harness = .claude
         self.flow = .saha
         self.stage = .task
         renderStage()

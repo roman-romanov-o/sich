@@ -13,6 +13,12 @@ struct KeyEncoderTests {
         #expect(KeyEncoder.bytes(for: .enter) == [0x0D])
     }
 
+    @Test("Shift+Enter (newline) encodes to LF, distinct from Enter's CR")
+    func newlineIsLF() {
+        #expect(KeyEncoder.bytes(for: .newline) == [0x0A])
+        #expect(KeyEncoder.bytes(for: .newline) != KeyEncoder.bytes(for: .enter))
+    }
+
     @Test("printable text encodes to its UTF-8 bytes")
     func textIsUTF8() {
         #expect(KeyEncoder.bytes(for: .text("hi")) == [0x68, 0x69])
@@ -47,7 +53,7 @@ struct KeyEncoderTests {
         (KeyInput.lineStart, [0x01]),                 // ⌃A
         (KeyInput.lineEnd, [0x05]),                   // ⌃E
         (KeyInput.deleteWord, [0x1B, 0x7F]),          // ESC DEL
-        (KeyInput.deleteLine, [0x15]),                // ⌃U
+        (KeyInput.deleteLine, [0x05, 0x15]),          // ⌃E ⌃U — clear the whole line
     ])
     func editingKeys(_ key: KeyInput, _ expected: [UInt8]) {
         #expect(KeyEncoder.bytes(for: key) == expected)

@@ -7,6 +7,11 @@ public enum KeyInput: Sendable, Equatable {
     /// One or more printable Unicode characters (e.g. typing "a" or pasting text).
     case text(String)
     case enter
+    /// Shift+Enter (and Option+Enter) — insert a literal newline WITHOUT submitting.
+    /// Claude Code's TUI (and readline apps) treat a lone LF as "newline in the
+    /// buffer" and CR as "submit", which is exactly what `/terminal-setup` wires
+    /// Shift+Enter to send. We do it natively so no per-terminal setup is needed.
+    case newline
     case tab
     case backspace
     case escape
@@ -22,7 +27,9 @@ public enum KeyInput: Sendable, Equatable {
     case lineEnd
     /// ⌃/⌥ + ⌫ — delete the word before the cursor (readline `ESC DEL`).
     case deleteWord
-    /// ⌘ + ⌫ — kill the line before the cursor (⌃U).
+    /// ⌘ + ⌫ — clear the WHOLE input line (⌃E then ⌃U). ⌃U alone only kills text
+    /// before the cursor, so a mid-line cursor left the tail behind ("text doesn't
+    /// disappear"); jumping to the end first makes the kill clear the entire line.
     case deleteLine
     /// A Control-modified letter, e.g. `.control("c")` → ⌃C (0x03).
     case control(Character)
@@ -36,7 +43,8 @@ public enum KeyEncoder {
     public static func bytes(for input: KeyInput) -> [UInt8] {
         switch input {
         case .text(let s): return Array(s.utf8)
-        case .enter: return [0x0D]                 // CR
+        case .enter: return [0x0D]                 // CR — submit
+        case .newline: return [0x0A]               // LF — insert a newline, don't submit
         case .tab: return [0x09]
         case .backspace: return [0x7F]             // DEL, what xterm sends for ⌫
         case .escape: return [0x1B]
@@ -49,7 +57,7 @@ public enum KeyEncoder {
         case .lineStart: return [0x01]             // ⌃A
         case .lineEnd: return [0x05]               // ⌃E
         case .deleteWord: return [0x1B, 0x7F]      // ESC DEL
-        case .deleteLine: return [0x15]            // ⌃U
+        case .deleteLine: return [0x05, 0x15]      // ⌃E then ⌃U — clear the whole line
         case .control(let c): return controlBytes(for: c)
         }
     }

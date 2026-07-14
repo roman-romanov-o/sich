@@ -6,23 +6,44 @@ import GhostlingCore
 /// view and the mockup read identically.
 @MainActor
 enum DiffTheme {
-    static let addedText = BoardTheme.hex(0xD8E4DC)
-    static let removedText = BoardTheme.hex(0xB8C2CC)
-    static let contextText = BoardTheme.hex(0x7D8590)
-    static let fold = BoardTheme.hex(0x39414C)
-    static let foldBg = BoardTheme.hex(0x0D1117)
+    static let addedText = BoardTheme.hex(0xCBE08F)     // solarized green-tinted light
+    static let removedText = BoardTheme.hex(0xE4B3AC)   // solarized red-tinted light
+    static let contextText = BoardTheme.hex(0x728797)   // base00
+    static let fold = BoardTheme.hex(0x2A4152)
+    static let foldBg = BoardTheme.hex(0x00111F)
 
-    static let addedWash = alpha(0x12261A, 0.20)
-    static let addedRibbon = alpha(0x12261A, 0.53)
-    static let removedWash = alpha(0x2D1214, 0.13)
-    static let removedRibbon = alpha(0x2D1214, 0.40)
-    static let addedGutter = alpha(0x3FB950, 0.40)
-    static let removedGutter = alpha(0xF85149, 0.40)
-    static let wordAdded = alpha(0x1F7A3D, 0.40)
-    static let wordRemoved = alpha(0xF85149, 0.27)
+    static let addedWash = alpha(0x1E2E0A, 0.24)
+    static let addedRibbon = alpha(0x1E2E0A, 0.55)
+    static let removedWash = alpha(0x2D1214, 0.16)
+    static let removedRibbon = alpha(0x2D1214, 0.42)
+    static let addedGutter = alpha(0x99CC00, 0.40)
+    static let removedGutter = alpha(0xE84C3D, 0.40)
+    static let wordAdded = alpha(0x669900, 0.42)
+    static let wordRemoved = alpha(0xE84C3D, 0.27)
 
     static let code = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
     static let gutter = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
+
+    // Solarized-accent syntax palette, layered ON TOP of the diff row's base text
+    // colour: keyword blue, string cyan, number magenta, comment dim. Each reads
+    // clearly on both the near-black canvas and the faint add/remove washes, so
+    // syntax colour enriches the line while the wash/ribbon/gutter still signal ±.
+    static let synKeyword = BoardTheme.hex(0x268BD2)   // solarized blue
+    static let synString = BoardTheme.hex(0x2AA198)    // solarized cyan
+    static let synNumber = BoardTheme.hex(0xD33682)    // solarized magenta
+    static let synComment = BoardTheme.hex(0x657B83)   // solarized base00 (dim)
+
+    /// The foreground override for a syntax token, or `nil` for `plain` (which keeps
+    /// the diff row's own colour — the ± signal on ordinary identifiers).
+    static func syntaxColor(_ kind: SyntaxHighlight.TokenKind) -> NSColor? {
+        switch kind {
+        case .keyword: return synKeyword
+        case .string: return synString
+        case .number: return synNumber
+        case .comment: return synComment
+        case .plain: return nil
+        }
+    }
 
     private static func alpha(_ rgb: UInt32, _ value: CGFloat) -> NSColor {
         BoardTheme.hex(rgb).withAlphaComponent(value)
@@ -77,6 +98,10 @@ final class DiffTextView: NSScrollView {
 
     required init?(coder: NSCoder) { nil }
 
+    /// Test seam: the rendered attributed document, so a test can prove the syntax
+    /// palette is actually applied on the render path (not just in the pure lexer).
+    var renderedForTesting: NSAttributedString { textView.attributedString() }
+
     /// Render EVERY file in the diff with a header separator per file (the
     /// GitHub/GitLab review layout), then scroll so the selected `filePath`'s
     /// header sits at the top — the reader can keep scrolling into the
@@ -87,9 +112,10 @@ final class DiffTextView: NSScrollView {
         for file in UnifiedDiffParser.parse(diff) {
             if file.displayPath == filePath { selectedOffset = output.length }
             output.append(fileHeader(file))
+            let language = CodeLanguage.infer(fromPath: file.displayPath)
             for hunk in file.hunks {
                 output.append(foldLine(Self.foldLabel(for: hunk)))
-                append(hunk: hunk, to: output)
+                append(hunk: hunk, to: output, language: language)
             }
         }
         textView.textStorage?.setAttributedString(output)
@@ -122,7 +148,9 @@ final class DiffTextView: NSScrollView {
         return "⋯ " + (symbol.isEmpty ? range : symbol)
     }
 
-    private func append(hunk: DiffHunk, to output: NSMutableAttributedString) {
+    private func append(
+        hunk: DiffHunk, to output: NSMutableAttributedString, language: CodeLanguage
+    ) {
         var (oldNum, newNum) = Self.startNumbers(of: hunk.header)
         var index = 0
         let lines = hunk.lines
@@ -135,18 +163,18 @@ final class DiffTextView: NSScrollView {
                 if run >= Self.contextFoldThreshold {
                     for offset in 0..<Self.contextKeep {
                         appendRow(lines[index + offset], old: oldNum + offset,
-                                  new: newNum + offset, to: output)
+                                  new: newNum + offset, to: output, language: language)
                     }
                     let hidden = run - 2 * Self.contextKeep
                     output.append(foldLine("⋯ \(hidden) unchanged lines"))
                     for offset in (run - Self.contextKeep)..<run {
                         appendRow(lines[index + offset], old: oldNum + offset,
-                                  new: newNum + offset, to: output)
+                                  new: newNum + offset, to: output, language: language)
                     }
                 } else {
                     for offset in 0..<run {
                         appendRow(lines[index + offset], old: oldNum + offset,
-                                  new: newNum + offset, to: output)
+                                  new: newNum + offset, to: output, language: language)
                     }
                 }
                 oldNum += run
@@ -158,23 +186,23 @@ final class DiffTextView: NSScrollView {
                     let spans = WordDiff.spans(
                         old: String(line.text.dropFirst()), new: String(next.text.dropFirst()))
                     appendWordRow(marker: "-", number: oldNum, spans: spans.old,
-                                  addition: false, to: output)
+                                  addition: false, to: output, language: language)
                     appendWordRow(marker: "+", number: newNum, spans: spans.new,
-                                  addition: true, to: output)
+                                  addition: true, to: output, language: language)
                     oldNum += 1
                     newNum += 1
                     index += 2
                 } else {
-                    appendRow(line, old: oldNum, new: newNum, to: output)
+                    appendRow(line, old: oldNum, new: newNum, to: output, language: language)
                     oldNum += 1
                     index += 1
                 }
             case .addition:
-                appendRow(line, old: oldNum, new: newNum, to: output)
+                appendRow(line, old: oldNum, new: newNum, to: output, language: language)
                 newNum += 1
                 index += 1
             case .metadata:
-                appendRow(line, old: oldNum, new: newNum, to: output)
+                appendRow(line, old: oldNum, new: newNum, to: output, language: language)
                 index += 1
             }
         }
@@ -197,19 +225,57 @@ final class DiffTextView: NSScrollView {
     // MARK: - Row construction
 
     private func appendRow(
-        _ line: DiffLine, old: Int, new: Int, to output: NSMutableAttributedString
+        _ line: DiffLine, old: Int, new: Int, to output: NSMutableAttributedString,
+        language: CodeLanguage
     ) {
         let style = Self.rowStyle(line.kind)
         let number: Int? = line.kind == .metadata ? nil : (line.kind == .deletion ? old : new)
         output.append(gutter(number, color: style.gutter, wash: style.wash))
-        var attributes = attrs(foreground: style.text, wash: style.wash)
-        if let ribbon = style.ribbon { attributes[.backgroundColor] = ribbon }
-        output.append(NSAttributedString(string: line.text + "\n", attributes: attributes))
+        var base = attrs(foreground: style.text, wash: style.wash)
+        if let ribbon = style.ribbon { base[.backgroundColor] = ribbon }
+        // Metadata lines carry no code — render them flat. Code rows keep their base
+        // (± diff) colour on ordinary text and overlay syntax colours on keywords,
+        // strings, numbers and comments (single-char marker excluded from the lexer).
+        guard line.kind != .metadata else {
+            output.append(NSAttributedString(string: line.text + "\n", attributes: base))
+            return
+        }
+        output.append(syntaxRow(line.text, base: base, language: language))
     }
 
+    /// A code row whose leading ±/space marker keeps the base colour and whose code
+    /// is split into syntax-coloured spans layered on that same base (so the wash /
+    /// ribbon / background attributes carry through under every span).
+    private func syntaxRow(
+        _ text: String, base: [NSAttributedString.Key: Any], language: CodeLanguage
+    ) -> NSAttributedString {
+        let row = NSMutableAttributedString(string: String(text.prefix(1)), attributes: base)
+        appendCode(String(text.dropFirst()), base: base, language: language, to: row)
+        row.append(NSAttributedString(string: "\n", attributes: base))
+        return row
+    }
+
+    /// Append `code` to `row`, split into syntax-coloured spans over `base` — the one
+    /// place the lexer's token → colour mapping is applied, shared by whole-line rows
+    /// and the unchanged segments of a word-diff row.
+    private func appendCode(
+        _ code: String, base: [NSAttributedString.Key: Any], language: CodeLanguage,
+        to row: NSMutableAttributedString
+    ) {
+        for span in SyntaxHighlight.spans(code, language: language) {
+            var attributes = base
+            if let color = DiffTheme.syntaxColor(span.kind) { attributes[.foregroundColor] = color }
+            row.append(NSAttributedString(string: span.text, attributes: attributes))
+        }
+    }
+
+    /// A word-diff row for a paired ±. Changed word spans keep their emphasis (the
+    /// added/removed background + primary text so the edit stands out); *unchanged*
+    /// segments are syntax-coloured like a whole-line code row, so highlighting reaches
+    /// the most common diff shape (a modified line) instead of only pure add/deletes.
     private func appendWordRow(
         marker: String, number: Int, spans: [WordDiff.Span], addition: Bool,
-        to output: NSMutableAttributedString
+        to output: NSMutableAttributedString, language: CodeLanguage
     ) {
         let style = Self.rowStyle(addition ? .addition : .deletion)
         output.append(gutter(number, color: style.gutter, wash: style.wash))
@@ -217,13 +283,15 @@ final class DiffTextView: NSScrollView {
         base[.backgroundColor] = style.ribbon
         let row = NSMutableAttributedString(string: marker, attributes: base)
         for span in spans {
-            var attributes = base
             if span.changed {
+                var attributes = base
                 attributes[.backgroundColor] =
                     addition ? DiffTheme.wordAdded : DiffTheme.wordRemoved
                 attributes[.foregroundColor] = BoardTheme.textPrimary
+                row.append(NSAttributedString(string: span.text, attributes: attributes))
+            } else {
+                appendCode(span.text, base: base, language: language, to: row)
             }
-            row.append(NSAttributedString(string: span.text, attributes: attributes))
         }
         row.append(NSAttributedString(string: "\n", attributes: base))
         output.append(row)

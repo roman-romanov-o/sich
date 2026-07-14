@@ -25,6 +25,10 @@ let root = RepoLocator.repoRoot()?.path ?? FileManager.default.currentDirectoryP
 // shot for the drill-in) with the rich demo spread behind it, and demo quota. A
 // daily launch stays honest — one real terminal + all-"unknown" connecting quota.
 let isE2E = ProcessInfo.processInfo.environment["GHOSTLING_E2E"] != nil
+// Developer hot code swapping (InjectionIII). DEBUG-only and never during the E2E
+// capture, so it can't perturb the screenshots; a no-op if InjectionIII isn't
+// installed. Run via `./dev.sh` to get the `-Xlinker -interposable` flag it needs.
+if !isE2E { DevHotReload.enable() }
 // The real app launch is the ONLY place the hidden `/usage` probe may spawn
 // claude — tests and the E2E capture never set this, so they never start a process.
 ClaudeUsageProbe.spawningEnabled = !isE2E

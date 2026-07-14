@@ -170,6 +170,53 @@ final class BoardMutationTests: XCTestCase {
         XCTAssertEqual(renamed?.id, card.id, "menu dispatch reached the rename callback")
     }
 
+    /// Deleting a card removes it from the board and forgets its PTY binding — the
+    /// "ability to delete task" the operator asked for.
+    func testDeleteRemovesCardAndForgetsPTY() {
+        let shell = BoardShell(seeds: [])
+        shell.buildContentForTesting()
+        shell.createSession(title: "Kill me")
+        let card = try! XCTUnwrap(shell.cards.last)
+
+        shell.deleteCard(cardID: card.id)
+
+        XCTAssertNil(shell.cards.first { $0.id == card.id }, "card is gone from the board")
+        XCTAssertNil(shell.ptyForTesting(card.id), "its PTY binding is forgotten")
+    }
+
+    /// Deleting a worktree-backed card tears down that checkout too, addressed at the
+    /// exact checkout path the card lives in (US: "clean worktree when you delete").
+    func testDeleteCleansWorktree() {
+        let shell = BoardShell(seeds: [])
+        shell.buildContentForTesting()
+        let provisioner = RecordingWorktreeProvisioner()
+        shell.worktreeProvisioner = provisioner
+        shell.createSession(title: "Isolate me", projectDir: "/tmp/some-project", inWorktree: true)
+        let card = try! XCTUnwrap(shell.cards.last)
+
+        shell.deleteCard(cardID: card.id)
+
+        XCTAssertEqual(provisioner.removed, ["/tmp/worktrees/isolate-me"],
+                       "the card's worktree checkout is removed")
+    }
+
+    /// The card's context menu carries a Delete item, and dispatching it through the
+    /// real NSMenu action path fires `onDelete` (interaction bound to a menu event).
+    func testCardContextMenuDeleteItemFiresCallback() {
+        let card = BoardCard(sessionID: "t", projectDir: "~/x", agent: .claude,
+                             flow: .b, state: .idle)
+        let view = SessionCard(card: card)
+        var deleted: BoardCard?
+        view.onDelete = { deleted = $0 }
+
+        let menu = try! XCTUnwrap(view.menu(for: NSEvent()))
+        let idx = try! XCTUnwrap(menu.items.firstIndex { $0.title.hasPrefix("Delete") },
+                                 "context menu has a Delete item")
+        menu.performActionForItem(at: idx)
+
+        XCTAssertEqual(deleted?.id, card.id, "menu dispatch reached the delete callback")
+    }
+
     /// Repo chip colours assign first-seen-first-slot: distinct repos get distinct
     /// hues (up to the palette size) and the same repo is stable across calls —
     /// the fix for hash-bucket collisions making two repos read as one.
@@ -193,5 +240,19 @@ private struct FakeWorktreeProvisioner: WorktreeProvisioning {
     var succeeds = true
     func provision(repoDir: String, slug: String) -> ProvisionedWorktree? {
         succeeds ? ProvisionedWorktree(path: "/tmp/worktrees/\(slug)", branch: "task/\(slug)") : nil
+    }
+}
+
+/// Records the worktree paths a delete asks to tear down, so a test can assert the
+/// checkout is cleaned. Reference type: the shell holds it by value-of-protocol but
+/// the class identity lets the test read back what was removed.
+private final class RecordingWorktreeProvisioner: WorktreeProvisioning, @unchecked Sendable {
+    private(set) var removed: [String] = []
+    func provision(repoDir: String, slug: String) -> ProvisionedWorktree? {
+        ProvisionedWorktree(path: "/tmp/worktrees/\(slug)", branch: "task/\(slug)")
+    }
+    func remove(worktreeAt path: String) -> Bool {
+        removed.append(path)
+        return true
     }
 }

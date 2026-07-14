@@ -216,6 +216,37 @@ private func dispatchClick(on button: ChooserButton, root: NSView, window: NSWin
     shell.e2eTeardown()
 }
 
+/// Interactive Codex creation labels the owned card as Codex and writes the `codex`
+/// launch line into the fresh login-shell PTY.
+@MainActor
+@Test func codexInteractiveCreationStartsCodexAndLabelsCard() throws {
+    let root = try temporaryProject()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let (shell, _, _) = makeHarness()
+    var input: [UInt8] = []
+    shell.launchOverrideForTesting = { seed in
+        let pty = try! PTYSession(command: ["/bin/cat"])
+        try! pty.start()
+        pty.onInput = { input += $0 }
+        return Session(
+            projectDir: seed.projectDir,
+            agentType: AgentType(rawValue: seed.agent.rawValue) ?? .shell,
+            flowTag: .interactive,
+            pty: pty
+        )
+    }
+
+    let card = try #require(shell.createSession(
+        title: "Use Codex",
+        projectDir: root.path,
+        autoStartAgent: .codex
+    ))
+
+    #expect(card.agent == .codex)
+    #expect(String(decoding: input, as: UTF8.self) == BoardShell.startCodexCommand())
+    shell.e2eTeardown()
+}
+
 /// TC-E2E-006 (US-001 edge case 1): no `docs/tasks/` folder at all → the chooser offers
 /// only "create new" (no existing rows, no crash), and create-new works from the clean slate.
 @MainActor

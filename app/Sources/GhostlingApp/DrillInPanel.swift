@@ -112,6 +112,39 @@ final class StatusPill: NSTextField {
     }
 }
 
+/// Amber "you're on a worktree" pill for the drill-in header — the same single
+/// layer-backed text-field render path as ``BackPill``/``StatusPill`` (the only one
+/// proven to composite on this hand-painted dark UI). Shown only while the focused
+/// card's checkout is a linked git worktree, so the operator sees at a glance that
+/// edits land on a side branch, not the shared main tree.
+@MainActor
+final class WorktreePill: NSTextField {
+    init() {
+        super.init(frame: .zero)
+        font = BoardTheme.monoSmall
+        alignment = .center
+        isBezeled = false
+        isEditable = false
+        isSelectable = false
+        drawsBackground = false
+        wantsLayer = true
+        textColor = BoardTheme.attention
+        layer?.cornerRadius = 5
+        layer?.borderWidth = 1
+        layer?.backgroundColor = BoardTheme.attention.withAlphaComponent(0.10).cgColor
+        layer?.borderColor = BoardTheme.attention.withAlphaComponent(0.42).cgColor
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override var intrinsicContentSize: NSSize {
+        var size = super.intrinsicContentSize
+        size.width += 18
+        size.height = 20
+        return size
+    }
+}
+
 /// The drill-in surface (US-002): when a card is selected, this panel takes over
 /// the full window (Altitude-1) hosting that session's embedded ``TerminalSurface``
 /// — in-app focus, not an OS window jump (DD-001). Reworked to the Task View POC:
@@ -137,6 +170,8 @@ final class DrillInPanel: NSView {
     private let statusPill = StatusPill()
     private let quotaField = NSTextField(labelWithString: "")
     private let tagField = NSTextField(labelWithString: "")
+    // Internal so a focus test can assert the worktree indicator is shown/hidden.
+    let worktreeTag = WorktreePill()
     private let banner = NSView()
     private let bannerField = NSTextField(labelWithString:
         "Waiting on you — answer in the terminal below")
@@ -147,6 +182,9 @@ final class DrillInPanel: NSView {
     private var surface: TerminalSurface?
     private var focusedCard: BoardCard?
     private var availableDiffs: [TurnDiff] = []
+    /// The breadcrumb header (← board / status pill / quota). Collapsed while the
+    /// diff pane is open so ChangesView's own "← Terminal" is the only nav there.
+    private var headerHolder: NSView?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -165,7 +203,9 @@ final class DrillInPanel: NSView {
     /// Root column: header / banner (collapses when hidden — NSStackView detaches
     /// hidden arranged views) / body row of terminal + sidebar.
     private func build() {
-        let column = NSStackView(views: [buildHeader(), buildBanner(), buildBody()])
+        let header = buildHeader()
+        headerHolder = header
+        let column = NSStackView(views: [header, buildBanner(), buildBody()])
         column.orientation = .vertical
         column.alignment = .leading
         column.spacing = 0
@@ -197,8 +237,10 @@ final class DrillInPanel: NSView {
         let spring = NSView()
         spring.setContentHuggingPriority(.init(1), for: .horizontal)
 
+        worktreeTag.isHidden = true
         let header = NSStackView(views: [
-            backPill, slash, dirField, titleField, statusPill, spring, quotaField, tagField,
+            backPill, slash, dirField, titleField, statusPill, spring,
+            worktreeTag, quotaField, tagField,
         ])
         header.orientation = .horizontal
         header.alignment = .centerY
@@ -262,6 +304,7 @@ final class DrillInPanel: NSView {
         titleField.stringValue = card.title ?? BoardTheme.shortPath(card.projectDir)
         dirField.stringValue = BoardTheme.projectLabel(card.projectDir)
         tagField.stringValue = "libghostty · \(card.agent.displayName.lowercased())"
+        showWorktreeTag(for: card.projectDir)
         update(state: card.state)
         detachSurface()
         let surface = TerminalSurface(session: pty)
@@ -274,6 +317,20 @@ final class DrillInPanel: NSView {
         window?.makeFirstResponder(surface)   // ready for typed input
         self.surface = surface
         renderAvailableDiffs()
+    }
+
+    /// Surface the amber worktree pill (with the branch name when readable) only when
+    /// the focused card's checkout is a linked git worktree, so "you're editing a side
+    /// branch, not main" is legible without leaving the task.
+    private func showWorktreeTag(for projectDir: String) {
+        let path = (projectDir as NSString).expandingTildeInPath
+        guard GitWorktree.isWorktree(path) else {
+            worktreeTag.isHidden = true
+            return
+        }
+        let branch = GitWorktree.currentBranch(of: path)
+        worktreeTag.stringValue = branch.map { "WORKTREE · \($0)" } ?? "WORKTREE"
+        worktreeTag.isHidden = false
     }
 
     /// Track the drilled card's live detected state (BoardShell pushes it on every
@@ -319,11 +376,20 @@ final class DrillInPanel: NSView {
         changesView.render(turns: turns, filePath: file, selectedIteration: iteration)
         changesView.isHidden = false
         termContainer.superview?.isHidden = true
+        // Collapse the drill-in chrome so the diff is a clean full-window review:
+        // the header's "← board" and the waiting banner both go, leaving
+        // ChangesView's "← Terminal" as the single, unambiguous way back.
+        headerHolder?.isHidden = true
+        banner.isHidden = true
     }
 
     private func closeDiff() {
         changesView.isHidden = true
         termContainer.superview?.isHidden = false
+        headerHolder?.isHidden = false
+        // Restore the banner to whatever the live state dictates (it's driven by
+        // update(state:)) instead of leaving it force-hidden.
+        if let state = focusedCard?.state { banner.isHidden = state != .waitingForInput }
         if let surface { window?.makeFirstResponder(surface) }
     }
 

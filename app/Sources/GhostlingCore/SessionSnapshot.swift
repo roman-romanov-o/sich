@@ -51,6 +51,15 @@ public struct PaneSnapshot: Codable, Equatable, Sendable {
     /// back up. It is still not the agent *command* — the watcher invariant holds; we
     /// only re-attach an interactive conversation the operator already started.
     public let claudeSessionID: UUID?
+    /// The human task title the operator gave this pane's card ("Fix login redirect").
+    /// Persisted so a restart brings the *task* back by name, not an unnamed shell at
+    /// the same cwd. Optional (decodes nil from a pre-title snapshot → no version bump,
+    /// same precedent as `claudeSessionID`) and nil for a card that was never named.
+    public let title: String?
+    /// The saha task-artifact folder this card was bound to at creation, if any —
+    /// captured so a restored saha-flow card still points at its own task, not the
+    /// project's shifting current-task. Optional for the same back-compat reason.
+    public let taskFolder: String?
 
     public init(
         sessionID: UUID,
@@ -58,7 +67,9 @@ public struct PaneSnapshot: Codable, Equatable, Sendable {
         agentType: AgentType,
         flowTag: FlowTag,
         childPID: Int32?,
-        claudeSessionID: UUID? = nil
+        claudeSessionID: UUID? = nil,
+        title: String? = nil,
+        taskFolder: String? = nil
     ) {
         self.sessionID = sessionID
         self.cwd = cwd
@@ -66,6 +77,19 @@ public struct PaneSnapshot: Codable, Equatable, Sendable {
         self.flowTag = flowTag
         self.childPID = childPID
         self.claudeSessionID = claudeSessionID
+        self.title = title
+        self.taskFolder = taskFolder
+    }
+
+    /// The same pane with its app-level card metadata (title + task folder) filled in.
+    /// Core builds a pane from the session (which has no card notion); the app layer
+    /// joins in the title/taskFolder by sessionID before persisting.
+    public func with(title: String?, taskFolder: String?) -> PaneSnapshot {
+        PaneSnapshot(
+            sessionID: sessionID, cwd: cwd, agentType: agentType, flowTag: flowTag,
+            childPID: childPID, claudeSessionID: claudeSessionID,
+            title: title, taskFolder: taskFolder
+        )
     }
 }
 

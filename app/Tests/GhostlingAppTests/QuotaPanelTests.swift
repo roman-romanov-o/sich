@@ -125,4 +125,38 @@ struct QuotaPanelTests {
         #expect(interactive.gauge.fallback == .windowReset)
         #expect(interactive.resetText.contains("window"))
     }
+
+    /// The new ask: the "time left until reset" is actually SHOWN and reads as a
+    /// countdown (not the old hidden relative string). An active window reset counts
+    /// down ("resets in …"); an exhausted pool is framed as when you're unblocked
+    /// ("back in …") so the number you care about is front-and-centre.
+    @Test("reset line surfaces a highlighted 'time left' countdown")
+    func resetCountdownIsSurfaced() throws {
+        let active = QuotaGaugeRow(gauge: QuotaGauge(
+            provider: "anthropic", pool: "interactive", state: .active, confidence: .measured,
+            fallback: .windowReset, remainingFraction: 0.4, reset: QuotaSeed.hoursFromNow(2.25)
+        ))
+        #expect(active.resetText.contains("resets in"))
+        #expect(active.resetText.contains("2h"), "counts down in compact h/m, not a stale relative phrase")
+
+        let exhausted = QuotaGaugeRow(gauge: QuotaGauge(
+            provider: "anthropic", pool: "interactive_weekly", state: .exhausted, confidence: .measured,
+            fallback: .weeklyReset, remainingFraction: 0.0, reset: QuotaSeed.hoursFromNow(30)
+        ))
+        #expect(exhausted.resetText.contains("back in"), "exhausted → when you're unblocked")
+        #expect(exhausted.resetText.contains("1d"), "weekly-scale wait rolls up to days")
+    }
+
+    /// The per-minute ticker re-evaluates the countdown against the live clock —
+    /// once the reset instant has passed the line collapses to "now".
+    @Test("refreshReset re-evaluates the countdown against the clock")
+    func refreshResetTicks() throws {
+        let reset = QuotaSeed.hoursFromNow(1)
+        let row = QuotaGaugeRow(gauge: QuotaGauge(
+            provider: "anthropic", pool: "interactive", state: .active, confidence: .measured,
+            fallback: .windowReset, remainingFraction: 0.4, reset: reset
+        ))
+        row.refreshReset(now: reset.addingTimeInterval(60))   // one minute past the reset
+        #expect(row.resetText.contains("now"))
+    }
 }

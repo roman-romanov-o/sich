@@ -1,58 +1,62 @@
 import AppKit
 import GhostlingCore
 
-/// The Deep Slate / Aurora palette in one place so every board view stays
-/// consistent (replaces the old near-black HELM greys). Hex tokens straight from
-/// the designer deliverable; semantic helpers (`stateColor`/`flowColor`/
-/// `agentColor`) keep the colour policy here, not smeared across the views.
+/// The **Solarized Osaka Night** palette in one place so every board view stays
+/// consistent. Base tones and accents are the canonical Solarized Osaka Night
+/// tokens (craftzdog's colour scheme): a blue-black base ramp (base04→base02)
+/// under the classic Solarized accents. Semantic helpers (`stateColor`/
+/// `flowColor`/`agentColor`) keep the colour policy here, not smeared across views.
 @MainActor
 enum BoardTheme {
-    // MARK: - Surfaces (Mission Control v5 palette)
-    static let canvas = hex(0x0B0E12)
-    static let canvasSunken = hex(0x0D1117)
-    static let cardFill = hex(0x12161C)
-    static let cardFillRaised = hex(0x1C232D)
-    static let documentSurface = hex(0x11161D)
-    static let documentChrome = hex(0x090C10)
-    static let cardStroke = hex(0x232A33)
-    static let cardStrokeStrong = hex(0x2B3542)
-    static let hairline = hex(0x1A212B)
+    // MARK: - Surfaces (theme-aware Solarized: Osaka Night dark ramp / canonical
+    // Solarized-light `base3→base2` ramp — resolved per system appearance so the
+    // whole board follows light/dark live, not just the terminal). Accents below are
+    // deliberately shared across both modes (Solarized accents are dual-scheme).
+    static let canvas = dynamic(dark: hex(0x000D1A), light: hex(0xEEE8D5))          // base04 / base2
+    static let canvasSunken = dynamic(dark: hex(0x00111F), light: hex(0xE4DCC5))    // sunken tracks/rails
+    static let cardFill = dynamic(dark: hex(0x001A2E), light: hex(0xFDF6E3))        // cards above the canvas (base3 in light)
+    static let cardFillRaised = dynamic(dark: hex(0x00304A), light: hex(0xFFFDF5))  // raised / hover
+    static let documentSurface = dynamic(dark: hex(0x00182B), light: hex(0xFDF6E3))
+    static let documentChrome = dynamic(dark: hex(0x00080F), light: hex(0xE4DCC5))  // chrome below the canvas
+    static let cardStroke = dynamic(dark: hex(0x003D52), light: hex(0xD8CFB4))       // base02 / warm light edge
+    static let cardStrokeStrong = dynamic(dark: hex(0x0A506B), light: hex(0xC4B998))
+    static let hairline = dynamic(dark: hex(0x00263D), light: hex(0xDDD5BD))
     /// The NEEDS YOU column's warm-tinted background — the whole column reads amber.
-    static let needsYouColumn = hex(0x0E0C09)
+    static let needsYouColumn = dynamic(dark: hex(0x1A0F03), light: hex(0xFBF0DC))
     /// A NEEDS YOU card's warm fill; stroke is `attention` (fresh) or `needsYouStroke` (aging).
-    static let needsYouCard = hex(0x1C1610)
-    static let needsYouStroke = hex(0x6B4A1F)
+    static let needsYouCard = dynamic(dark: hex(0x2B1908), light: hex(0xF7E6C8))
+    static let needsYouStroke = hex(0xB35C1F)   // orange700 — shared accent
     /// A done card's faint green-tinted stroke.
-    static let doneStroke = hex(0x1E2A22)
+    static let doneStroke = dynamic(dark: hex(0x1E2E0A), light: hex(0xCFE0A8))
 
-    // MARK: - Text
-    static let textPrimary = hex(0xE6EDF3)
-    static let textMuted = hex(0x9AA4B2)
-    static let textFaint = hex(0x7D8590)
-    static let documentText = hex(0xD7DEE8)
-    /// Dimmest tier — card meta lines and footnotes (POC #4d5560).
-    static let textDim = hex(0x4D5560)
+    // MARK: - Text (Solarized base tones — dark: light-on-dark; light: base01→base1 on paper)
+    static let textPrimary = dynamic(dark: hex(0xB3BAC4), light: hex(0x586E75))      // base1 / base01
+    static let textMuted = dynamic(dark: hex(0x8794A0), light: hex(0x657B83))         // / base00
+    static let textFaint = dynamic(dark: hex(0x667980), light: hex(0x93A1A1))         // base01 / base1
+    static let documentText = dynamic(dark: hex(0xA6ADBA), light: hex(0x586E75))      // base0 / base01
+    /// Dimmest tier — card meta lines and footnotes.
+    static let textDim = dynamic(dark: hex(0x4A5A63), light: hex(0x93A1A1))
 
-    // MARK: - Accents
+    // MARK: - Accents (Solarized accents)
     /// The interactive brand blue — create affordance, drop ring. Kept distinct
     /// from the (deeper) running-state blue so a UI accent never reads as a state.
-    static let brand = hex(0x4B8DF8)
+    static let brand = hex(0x3A9ADE)             // solarized blue
     /// Amber "needs you" accent — attention header/edge.
-    static let attention = hex(0xE3A13C)
+    static let attention = hex(0xD97A3A)         // solarized orange
     /// Cool cyan for inline `code` spans — deliberately distinct from the amber file-link
     /// color so identifiers and clickable paths never read as the same thing.
-    static let codeInline = hex(0x79C0C9)
+    static let codeInline = hex(0x20A896)        // solarized cyan
     /// Red for blocked/overdue accents.
-    static let alert = hex(0xF85149)
+    static let alert = hex(0xE84C3D)             // solarized red
     /// Deeper crimson used ONLY as the global attention badge FILL, so its
-    /// white text clears WCAG AA (the coral `alert` at white text is only 3.49:1).
-    static let attentionBadge = hex(0xB8392E)
+    /// white text clears WCAG AA (the bright `alert` red at white text falls short).
+    static let attentionBadge = hex(0xB0302A)
 
-    // MARK: - Terminal surface (theme-aware: a rich console in the dark, a clean
-    // paper-white one in the light — resolved per the system appearance at draw time).
-    static let termBg = dynamic(dark: hex(0x0D1119), light: hex(0xFBFAF7))
-    static let termFg = dynamic(dark: hex(0xCDD6E4), light: hex(0x2E3138))
-    static let termCursor = dynamic(dark: hex(0x2DD4BF), light: hex(0x0D9488))
+    // MARK: - Terminal surface (theme-aware: a rich Solarized console in the dark,
+    // a warm Solarized-light paper one in the light — resolved per system appearance).
+    static let termBg = dynamic(dark: hex(0x001F33), light: hex(0xF5F1E8))   // base03 / base3
+    static let termFg = dynamic(dark: hex(0xA6ADBA), light: hex(0x556B72))   // base0 / base01
+    static let termCursor = dynamic(dark: hex(0x20A896), light: hex(0x009966)) // cyan / cyan700
 
     /// An NSColor that resolves to `dark` under a dark appearance and `light` under a
     /// light one — the standard way to be system-theme-aware without duplicating views.
@@ -80,27 +84,27 @@ enum BoardTheme {
     /// The colour for a card's state rail / chip — the at-a-glance lifecycle cue.
     static func stateColor(_ state: CardState) -> NSColor {
         switch state {
-        case .idle: return hex(0x6B7686)
-        case .running: return hex(0x4CC2FF)   // the POC's "working" pulse blue
-        case .runningTests: return hex(0xA06BFF)
-        case .waitingForInput: return hex(0xE3A13C)
-        case .blocked: return hex(0xF85149)
-        case .done: return hex(0x3FB950)
-        case .unknown: return hex(0x7A8998)   // lifted from #5A6573 (2.89:1) to clear WCAG AA on canvas
+        case .idle: return hex(0x667980)      // base01
+        case .running: return hex(0x3A9ADE)   // solarized blue — the "working" pulse
+        case .runningTests: return hex(0x7A5FB8) // solarized violet
+        case .waitingForInput: return hex(0xD97A3A) // solarized orange
+        case .blocked: return hex(0xE84C3D)   // solarized red
+        case .done: return hex(0x99CC00)      // solarized green
+        case .unknown: return hex(0x728797)   // base00 — clears WCAG AA on the canvas
         }
     }
 
-    /// Flow-A (saha / SDK) violet vs Flow-B (interactive) teal — the two-flow cue.
+    /// Flow-A (saha / SDK) violet vs Flow-B (interactive) cyan — the two-flow cue.
     static func flowColor(_ flow: CardFlow) -> NSColor {
-        flow == .a ? hex(0xA06BFF) : hex(0x2DD4BF)
+        flow == .a ? hex(0x7A5FB8) : hex(0x20A896)
     }
 
     /// Which agentic CLI drives the card — a small colour dot on the card face.
     static func agentColor(_ agent: CardAgent) -> NSColor {
         switch agent {
-        case .claude: return hex(0xD9893E)
-        case .codex: return hex(0x10A37F)
-        case .gemini: return hex(0x5B8DEF)
+        case .claude: return hex(0xD97A3A)    // solarized orange
+        case .codex: return hex(0x99CC00)     // solarized green
+        case .gemini: return hex(0x3A9ADE)    // solarized blue
         }
     }
 
@@ -122,8 +126,8 @@ enum BoardTheme {
 
     private static var repoColorSlots: [String: Int] = [:]
     private static let repoPalette = [
-        hex(0x2DD4BF), hex(0x4CC2FF), hex(0xA06BFF), hex(0xE3A13C),
-        hex(0x3FB950), hex(0xF778BA), hex(0x79C0C9), hex(0xD9893E),
+        hex(0x20A896), hex(0x3A9ADE), hex(0x7A5FB8), hex(0xD97A3A),
+        hex(0x99CC00), hex(0xD4599F), hex(0xB39900), hex(0xE84C3D),
     ]
 
     /// Display form of a card's project dir. A deep absolute path collapses to its

@@ -22,7 +22,7 @@ final class ArchitecturePane: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = BoardTheme.hex(0x07090C).cgColor
+        layer?.backgroundColor = BoardTheme.documentChrome.cgColor
         statusField.font = BoardTheme.monoSmall
         statusField.textColor = BoardTheme.textMuted
         statusField.alignment = .center
