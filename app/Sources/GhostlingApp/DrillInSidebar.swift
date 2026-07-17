@@ -23,7 +23,7 @@ final class DrillInSidebar: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = BoardTheme.canvasSunken.cgColor
+        themedBackground = BoardTheme.canvasSunken
         build()
     }
 
@@ -68,7 +68,7 @@ final class DrillInSidebar: NSView {
 
         let hairline = NSView()
         hairline.wantsLayer = true
-        hairline.layer?.backgroundColor = BoardTheme.hairline.cgColor
+        hairline.themedBackground = BoardTheme.hairline
         hairline.translatesAutoresizingMaskIntoConstraints = false
         addSubview(hairline)
         NSLayoutConstraint.activate([
@@ -194,7 +194,7 @@ final class DrillInSidebar: NSView {
             meta.textColor = BoardTheme.textDim
 
             if selected {
-                button.layer?.backgroundColor = BoardTheme.cardFillRaised.cgColor
+                button.themedBackground = BoardTheme.cardFillRaised
             }
             let content = NSStackView(views: [marker, title, spring, meta])
             content.orientation = .horizontal
@@ -245,15 +245,15 @@ private final class SidebarRowButton: NSControl {
     var isFlat = false {
         didSet {
             layer?.borderWidth = isFlat ? 0 : 1
-            if isFlat { layer?.backgroundColor = NSColor.clear.cgColor }
+            if isFlat { themedBackground = .clear }
         }
     }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = BoardTheme.cardFill.cgColor
-        layer?.borderColor = BoardTheme.cardStroke.cgColor
+        themedBackground = BoardTheme.cardFill
+        themedBorder = BoardTheme.cardStroke
         layer?.borderWidth = 1
         layer?.cornerRadius = 6
     }
@@ -261,11 +261,11 @@ private final class SidebarRowButton: NSControl {
     required init?(coder: NSCoder) { nil }
 
     override func mouseDown(with event: NSEvent) {
-        layer?.borderColor = BoardTheme.brand.cgColor
+        themedBorder = BoardTheme.brand
     }
 
     override func mouseUp(with event: NSEvent) {
-        layer?.borderColor = BoardTheme.cardStroke.cgColor
+        themedBorder = BoardTheme.cardStroke
         guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
         sendAction(action, to: target)
     }

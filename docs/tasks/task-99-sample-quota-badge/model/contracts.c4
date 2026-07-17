@@ -1,0 +1,37 @@
+// contracts.c4 — task-99 interface contracts.
+
+model {
+  extend sys.quota {
+    share_api = component 'share(for:)' {
+      #new
+      description 'Per-card quota share lookup the badge reads.'
+      metadata {
+        contract_kind 'function'
+        file 'app/Sources/GhostlingCore/QuotaStore.swift'
+        contract '''
+          func share(for cardID: UUID) -> QuotaShare?
+          input:
+            cardID: UUID — the board card identity (ptyByCard join)
+          output:
+            QuotaShare?: {percent: Int, stale: Bool} — nil when unknown
+          errors:
+            unknown card: returns nil (never 0)
+        '''
+        stories 'US-001'
+      }
+    }
+  }
+
+  sys.badge -> sys.quota.share_api 'share(for: cardID)' {
+    metadata {
+      payload 'UUID in; QuotaShare? out'
+    }
+  }
+}
+
+views {
+  view contracts {
+    title 'task-99: contracts'
+    include sys.quota, sys.quota.*, sys.badge
+  }
+}

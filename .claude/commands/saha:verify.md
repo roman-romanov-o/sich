@@ -1,12 +1,14 @@
 ---
 description: Verify planning artifacts are complete and consistent
 argument-hint: [task-path] [--mode=manual|playwright|script|test]
-allowed-tools: Read, Glob, Grep, Bash, AskUserQuestion, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_click
+allowed-tools: Read, Edit, Glob, Grep, Bash, AskUserQuestion, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_click
 ---
 
 # Verify Artifacts
 
-Verify planning artifacts are complete, consistent, and ready for implementation.
+Verify the plan is complete, consistent, and ready for implementation. In
+saha/v2 the checks are structural: the LikeC4 model must **compile**, and the
+cross-references live in `progress.yaml` — no markdown scraping.
 
 ## Arguments
 
@@ -23,99 +25,96 @@ Verify planning artifacts are complete, consistent, and ready for implementation
 
 ## Execution
 
-### 1. Artifact Inventory
+### 1. Compile Gate (hard failure)
 
-Scan task folder and catalog all artifacts:
+The model must be well-formed:
 
-```
-Artifacts Found:
-├── task-description.md (1.2KB, modified 2024-01-15)
-├── user-stories/
-│   ├── US-001-login.md
-│   ├── US-002-logout.md
-│   └── US-003-password-reset.md
-├── design-decisions/
-│   └── DD-001-jwt-auth.md
-├── code-changes/
-│   └── auth-api.md
-├── test-specs/
-│   ├── e2e/user-auth-flow.md
-│   ├── integration/auth-api.md
-│   └── unit/token-validator.md
-└── implementation-plan/
-    ├── phase-01-foundation.md
-    └── phase-02-core-auth.md
+```bash
+likec4 validate {task_path}/model
 ```
 
-### 2. Completeness Check
+- Non-zero exit (DSL error, dangling reference) = verify **failure**. (Do not
+  use `likec4 export json` for pass/fail — it exits 0 even on model errors.)
+- CLI absent (`command -v likec4` fails) → note "likec4 CLI not found — compile
+  gate skipped (`npm i -g likec4`)" and continue with the YAML checks. Never
+  block planning on node tooling.
 
-Verify required artifacts exist based on mode:
+### 2. Completeness Check (progress.yaml)
 
-**Minimal Mode:**
-- [ ] task-description.md
-- [ ] At least 1 user story
-- [ ] At least 1 test spec
-- [ ] At least 1 implementation phase
+Read `{task_path}/progress.yaml` (it must exist with `format: saha/v2`; if the
+folder has the old markdown layout instead, say so and stop — this command
+verifies v2 tasks).
 
-**Full Mode:**
-- [ ] All minimal requirements
-- [ ] At least 1 design decision
-- [ ] code changes (if API changes involved)
+**Minimum the execution loop needs:**
+- [ ] `planning.task_description.status: done`
+- [ ] At least 1 story with at least 1 acceptance criterion
+- [ ] At least 1 phase with steps
 
-Report missing artifacts with suggestions.
+**Recommended (full mode):**
+- [ ] `planning.test_specs` done with at least 1 view
+- [ ] `planning.design_decisions` done
+- [ ] `planning.code_changes` done (if interfaces change)
 
-### 3. Consistency Check
+Report missing pieces with the command that produces each.
 
-Validate cross-references are valid:
+### 3. View-Reference Check
 
-**Stories ↔ Tests:**
-- Every user story should have related test specs
-- Every test spec should reference valid story IDs
+Every view id referenced from YAML must exist in the compiled model:
 
-**Stories ↔ Decisions:**
-- Design decisions should reference affected stories
-- Stories with technical notes should have supporting decisions
+- Collect referenced ids: all `planning.*.views`, every story's `view`, every
+  AC's `specs`, every phase's `view`.
+- Collect actual ids: with the CLI, the keys of `views` in
+  `likec4 export json --skip-layout -o {scratch}/likec4-verify.json {task_path}/model`
+  (delete the file afterwards); without it, `view <id>` / `dynamic view <id>`
+  declarations grepped from `{task_path}/model/*.c4`.
+- Any referenced-but-missing view id is a failure (the kanban review rail
+  deep-links these).
+
+### 4. Cross-Reference Check (all from YAML + model)
+
+**Stories ↔ ACs ↔ Specs:**
+- Every AC has a `verify` method (`automated` | `build` | `manual`)
+- Every `verify: manual` AC has `manual_instructions`
+- Every `verify: automated` AC has at least one entry in `specs` — or the story
+  is listed in `planning.test_specs.gaps` with a reason
+- Spec views' Proves lists (in `model/test-specs.c4` view descriptions) cite
+  only AC ids that exist in progress.yaml
 
 **Stories ↔ Phases:**
-- Every story should be assigned to a phase
-- No story should appear in multiple phases
+- Every story appears in exactly one phase's `stories` list
+- `depends_on` references existing story ids; phase order respects them
 
-**Contracts ↔ Tests:**
-- code changes should have integration test coverage
+**Stories ↔ Decisions:**
+- `decisions:` entries reference `dd-*` elements that exist in `model/decisions.c4`
+- Each `dd-*` element's `metadata { stories }` cites existing story ids
+
+**Contracts:**
+- Each contract component's `metadata { stories }` cites existing story ids
+- Every contract component has at least one relation (no dead spec)
 
 Report inconsistencies:
 ```
 Inconsistencies Found:
-- US-003 has no test coverage
-- DD-001 references non-existent US-005
-- Phase 02 includes US-004 which doesn't exist
+- US-003 AC-2 is verify:automated but has no specs and no gap entry
+- dd-001 references non-existent US-005
+- phase-02 includes US-004 which doesn't exist
 ```
 
-### 4. Quality Check
+### 5. Quality Check
 
-Evaluate artifact quality:
+- Stories follow "As a… I want… so that…" with priority set
+- Each story's `us-NNN-flow` has ≥3 steps and cites its AC ids in step notes
+- AC text is Given/When/Then and measurable
+- Test scenario Expected notes are implementable without ambiguity
+- Phase steps have `files` lists
 
-**Task Description:**
-- [ ] Has clear problem statement
-- [ ] Success criteria are measurable
-- [ ] Scope is defined (in/out)
+### 6. Project Architecture Model (optional)
 
-**User Stories:**
-- [ ] Follow "As a... I want... So that..." format
-- [ ] Have acceptance criteria
-- [ ] Have priority assigned
+Only when `docs/architecture/` exists (skip silently otherwise):
+- `likec4 validate docs/architecture` — non-zero exit is a failure
+- View ids in DD `metadata { arch_views }` must exist in that model
 
-**Test Specs:**
-- [ ] Have clear expected results
-- [ ] Include test data
-- [ ] Cover error cases
-
-**Implementation Plan:**
-- [ ] Phases have clear objectives
-- [ ] Steps are actionable
-- [ ] Definition of done is specified
-
-### 5. Mode-Specific Verification
+### 7. Mode-Specific Verification
 
 #### Manual Mode (default)
 
@@ -123,110 +122,48 @@ Present summary and ask user to confirm:
 
 ```
 Verification Summary:
-✅ 5/5 required artifacts present
+✅ model compiles (7 files)
+✅ 14/14 referenced views exist
 ✅ 12/12 cross-references valid
 ⚠️ 2 quality suggestions
 
-Quality Suggestions:
-1. US-002 acceptance criteria could be more specific
-2. Phase 02 missing estimated effort
-
-Approve artifacts as ready for implementation?
+Approve the plan as ready for implementation?
 ```
+
+Remind the user they can review visually in ghostling's Planning Mode.
 
 #### Playwright Mode
 
-For UI-related tasks, verify against existing UI:
-
-```javascript
-// Navigate to relevant pages
-// Take snapshots
-// Verify current state matches assumptions in research
-```
-
-Report discrepancies between planned changes and current UI.
+For UI-related tasks, verify planned changes against the existing UI (navigate,
+snapshot, compare with research assumptions). Report discrepancies.
 
 #### Script Mode
-
-Run custom verification script:
 
 ```bash
 bash $SCRIPT_PATH $TASK_PATH
 ```
 
-Script should exit 0 for success, non-zero for failure.
-Capture and report stdout/stderr.
+Exit 0 = success. Capture and report stdout/stderr.
 
 #### Test Mode
 
-If tests already exist, run them:
+If tests already exist, run them using the project's resolved test command
+(`.sahaidachny/stack.yaml` `test.command`, else auto-detect from marker files —
+saha is not Python-specific): `pytest -q`, `swift test`, `npm test`,
+`cargo test`, `go test ./...`, …
 
-```bash
-# Detect test framework and run
-pytest tests/ -v
-# or
-npm test
-# or
-go test ./...
+### 8. Record the Result
+
+Report the summary to the user, then update `{task_path}/progress.yaml`
+(NOT a separate report file — progress.yaml is the single tracking surface):
+
+```yaml
+planning:
+  verify: { status: done, result: passed }   # passed | passed_with_warnings | failed
 ```
 
-### 6. Generate Verification Report
-
-Create `{task_path}/verification-report.md`:
-
-```markdown
-# Verification Report
-
-**Date:** YYYY-MM-DD
-**Mode:** Manual | Playwright | Script | Test
-**Result:** ✅ Passed | ⚠️ Passed with Warnings | ❌ Failed
-
-## Summary
-
-| Check | Status | Details |
-|-------|--------|---------|
-| Completeness | ✅ | All required artifacts present |
-| Consistency | ✅ | All references valid |
-| Quality | ⚠️ | 2 suggestions |
-
-## Artifacts Verified
-
-| Artifact | Status | Notes |
-|----------|--------|-------|
-| task-description.md | ✅ | Complete |
-| US-001-login.md | ✅ | Complete |
-| US-002-logout.md | ⚠️ | Acceptance criteria vague |
-| ... | ... | ... |
-
-## Issues Found
-
-### Warnings
-
-1. **US-002 Acceptance Criteria**
-   - Current: "User is logged out"
-   - Suggestion: Add specific assertions (session cleared, redirect URL)
-
-### Errors
-
-_None_
-
-## Recommendations
-
-- [ ] Address warnings before implementation
-- [ ] Consider adding integration tests for auth flow
-
-## Approval
-
-- [ ] Artifacts approved for implementation
-- Approved by: [Name]
-- Date: YYYY-MM-DD
-```
-
-### 7. Update Task README
-
-Update `{task_path}/README.md`:
-- Add verification status
-- Update overall planning status
+On `passed`/`passed_with_warnings` with user approval, the task is ready for
+`/saha:execute` — from that point `model/*.c4` is frozen.
 
 ## Example Usage
 
@@ -240,6 +177,5 @@ Update `{task_path}/README.md`:
 
 ## Output
 
-- Verification report displayed
-- `{task_path}/verification-report.md` created
-- `{task_path}/README.md` updated
+- Verification summary displayed
+- `{task_path}/progress.yaml` planning.verify updated

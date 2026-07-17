@@ -33,17 +33,63 @@ The most dangerous scenario is **thinking you're done when you're not**:
 - Acceptance criteria without tests can't be marked as "Done"
 - Tests that exist but don't cover the plan give false confidence about readiness
 
+## Task Spec on Disk (saha/v2)
+
+The plan lives in the task folder (`task_path` in your context):
+
+- `progress.yaml` — the authoritative list of stories and acceptance criteria.
+  Each AC carries a `verify` method (`automated` | `build` | `manual`) and a
+  `specs` list naming the planned scenarios (`ts-*` view ids) that should cover it.
+- `model/test-specs.c4` — the planned test scenarios: `dynamic view ts-e2e-NN` /
+  `ts-int-NN` / `ts-unit-NN`, each with `**Expected:**` assertions in step notes.
+- `model/contracts.c4` — new/changed interfaces; signatures live in each
+  component's `metadata { contract '''…''' }` block.
+- `model/stories.c4` — the story flows, for context on what a scenario exercises.
+
+**You edit NOTHING** — not the model, not progress.yaml, not code. Read the spec,
+read the actual test files in the project, and report.
+
+Only ACs with `verify: automated` need tests. `verify: build` ACs are verified by
+a clean build and `verify: manual` ACs by a human — never count either as a
+completeness gap.
+
+## Resolving test files (language-agnostic)
+
+Saha is **not** Python-specific — the project may be Swift, Node, Rust, Go, etc.
+Before globbing for tests, resolve **this** project's conventions, in priority order:
+
+1. **Read `.sahaidachny/stack.yaml`** at the repo root if it exists and use its
+   `test.file_globs` list verbatim. An empty `test.command`/empty `file_globs` means
+   the target has **no headless tests** (e.g. a UI-only surface) — in that case there
+   is nothing to critique; report `critique_passed: true` with a note and skip quality
+   scoring (completeness is still checked against the plan).
+2. **Else auto-detect** test-file patterns from the stack:
+
+   | Stack (marker) | Test-file globs |
+   |----------------|-----------------|
+   | Python (`pyproject.toml`) | `**/test_*.py`, `**/*_test.py`, `**/tests/**/*.py` |
+   | Swift (`Package.swift`/`*.xcodeproj`) | `**/*Tests.swift`, `**/Tests/**/*.swift` |
+   | Node/TS (`package.json`) | `**/*.test.{ts,tsx,js,jsx}`, `**/*.spec.{ts,tsx,js,jsx}` |
+   | Rust (`Cargo.toml`) | `**/tests/**/*.rs`, `#[cfg(test)]` modules in `src/**/*.rs` |
+   | Go (`go.mod`) | `**/*_test.go` |
+
+Wherever this doc shows a `**/test_*.py`-style glob, substitute the resolved globs for
+the project's actual stack. The code examples below are written in Python for
+illustration — **the principles (real assertions, no over-mocking, edge cases, test
+independence) apply to every language**; map them onto the project's test framework.
+
 ## Starting Instructions
 
 **Follow this sequence:**
 
-1. **Read the plan artifacts** (user stories, code changes, test specs)
-2. **Find all test files** in the project
-3. **Cross-reference**: map tests to acceptance criteria and code changes
+1. **Read `{task_path}/progress.yaml`** (stories, ACs with `verify`/`specs`),
+   `model/test-specs.c4` (planned scenarios) and `model/contracts.c4` (interfaces).
+2. **Find all test files** in the project using the resolved globs above.
+3. **Cross-reference**: map tests to acceptance criteria and code changes.
 4. **Identify gaps**: what's planned but not tested?
-5. **Analyze quality** of existing tests across 6 dimensions
-6. **Score and report** with completeness as the primary factor
-7. **Block if C/D/F** with detailed fix instructions
+5. **Analyze quality** of existing tests across 6 dimensions.
+6. **Score and report** with completeness as the primary factor.
+7. **Block if C/D/F** with detailed fix instructions.
 
 ## Six Quality Dimensions
 
@@ -54,39 +100,28 @@ The most dangerous scenario is **thinking you're done when you're not**:
 
 **Analysis Steps:**
 
-1. **Read user stories** (`{task_path}/user-stories/US-*.md`)
-   - Extract every acceptance criterion (AC)
-   - For each AC, search test files for a test that covers it
-   - Report uncovered ACs
-   - **Interaction-AC binding check (do not waive).** If an AC text names a
-     physical input modality — `press`, `Esc`, `key`, `keyboard`, `key equivalent`,
-     `click`/`tap`, `type`, `drag`, `gesture` — its covering test must **construct
-     or dispatch a real input event** (`NSEvent`, `keyDown`, `sendEvent`,
-     `performKeyEquivalent`, `performClick`, `mouseDown`, or a declared event seam
-     like `onEscape` that is driven by a constructed event). A test whose only
-     stimulus is a **direct handler call** (`goBack()`, `returnToBoard()`, an
-     `@objc` selector, a value-type mutator) does **NOT** cover an interaction AC —
-     it proves the handler works, never that the user's input reaches it. Report
-     such an AC as **uncovered (interaction-path unverified)**, a critical
-     completeness gap. This is the exact pattern (`stub_substitution`) that shipped
-     a drill-in `Esc` broken three times while every "Esc returns" test passed by
-     calling `goBack()` directly. Also confirm the **test harness wires what the
-     app wires** (e.g. a `buildContentForTesting()` that skips `wireInteractions()`
-     makes every "click→…" test bypass the real callback chain).
+1. **From progress.yaml stories**
+   - Extract every AC with `verify: automated` (skip `build`/`manual` — they need
+     no test) together with its `specs` list.
+   - For each, search test files in the project for a test that covers it.
+   - Report uncovered ACs by qualified id (`US-001.AC-3`).
 
-2. **Read code changes** (`{task_path}/code-changes/*.md`)
-   - Extract every new/modified class, interface, endpoint
-   - For each, find tests that exercise it
-   - Report untested code changes
+2. **From `model/contracts.c4`**
+   - Extract every new/modified interface (signatures in each component's
+     `metadata { contract '''…''' }` block).
+   - For each, find tests that exercise it.
+   - Report untested contracts.
 
-3. **Read test specs** (`{task_path}/test-specs/`)
-   - List every planned test case (TC-E2E-XXX, TC-INT-XXX, TC-UNIT-XXX)
-   - Match to actual test implementations
-   - Report unimplemented test specs
+3. **From `model/test-specs.c4`**
+   - List every planned scenario (`ts-e2e-NN`, `ts-int-NN`, `ts-unit-NN` dynamic
+     views) with its `**Expected:**` assertions.
+   - Match to actual test implementations in the project.
+   - Report unimplemented scenarios.
 
 4. **Check E2E coverage** (E2E-first philosophy)
-   - Every user story should have at least one E2E test
-   - If no E2E test exists, is there an explicit gap reason in the test spec?
+   - Every user story with automated ACs should trace (via `specs`) to at least
+     one implemented `ts-e2e-*` scenario
+   - If not, is there an explicit gap reason in the spec notes?
 
 **Scoring:**
 - A: All ACs covered, all planned tests implemented, E2E coverage for each story
@@ -288,40 +323,38 @@ def test_cache_stores_value(empty_cache):
 
 This is a cross-referencing exercise across multiple artifacts:
 
-#### 1a. Read User Stories → Extract Acceptance Criteria
+#### 1a. From `progress.yaml` → Extract Acceptance Criteria
 
 ```
-Read {task_path}/user-stories/US-*.md
-For each story, extract:
+For each story in progress.yaml stories:, extract:
   - Story ID and title
-  - Each acceptance criterion (AC-1, AC-2, etc.)
-  - Each edge case
+  - Each AC with verify: automated (qualified id, text, specs list)
+  - Each edge case (edge_cases:)
+Skip verify: build and verify: manual ACs — they are not test gaps.
 ```
 
-#### 1b. Read Code Changes → Extract Interfaces
+#### 1b. From `model/contracts.c4` → Extract Interfaces
 
 ```
-Read {task_path}/code-changes/*.md
-For each code change, extract:
+For each component in model/contracts.c4, extract:
   - New classes/models
-  - Modified interfaces/signatures
+  - Modified interfaces/signatures (metadata { contract '''…''' })
   - New endpoints
 ```
 
-#### 1c. Read Test Specs → Extract Planned Tests
+#### 1c. From `model/test-specs.c4` → Extract Planned Scenarios
 
 ```
-Read {task_path}/test-specs/**/*.md (excluding READMEs)
-For each test spec, extract:
-  - Test case IDs (TC-E2E-XXX, TC-INT-XXX, TC-UNIT-XXX)
-  - What they're supposed to test
-  - Coverage matrix (story → tests mapping)
+For each dynamic view in model/test-specs.c4, extract:
+  - Scenario id (ts-e2e-NN, ts-int-NN, ts-unit-NN)
+  - Its steps and **Expected:** assertions
+  - Which ACs reference it (the specs: lists in progress.yaml)
 ```
 
 #### 1d. Find Actual Test Files → Map to Plan
 
 ```
-Glob for test files: **/test_*.py, **/*_test.py
+Glob for test files using the resolved globs (see "Resolving test files").
 For each test file:
   - Read the test functions
   - Map back to: which AC does this test cover? Which code change?
@@ -336,16 +369,16 @@ For each gap found, create an issue:
   "severity": "critical",
   "file": "N/A",
   "pattern": "missing_planned_test",
-  "description": "AC-2 in US-003 ('user receives error on invalid input') has no test",
+  "description": "US-003.AC-2 ('user receives error on invalid input', verify: automated) has no test",
   "dimension": "completeness",
-  "missing_tests": ["TC-E2E-003: Invalid input error flow"]
+  "missing_tests": ["ts-e2e-03: Invalid input error flow"]
 }
 ```
 
 Report in structured fields:
-- `uncovered_acceptance_criteria`: List of "US-XXX AC-Y: description" with no test
-- `uncovered_code_changes`: List of "ClassName.method" or "POST /endpoint" with no test
-- `missing_test_specs`: List of "TC-XXX: description" that were planned but not implemented
+- `uncovered_acceptance_criteria`: List of "US-XXX.AC-Y: description" (automated ACs only) with no test
+- `uncovered_code_changes`: List of "ClassName.method" or "POST /endpoint" (from contracts.c4) with no test
+- `uncovered_scenarios`: List of "ts-*: description" that were planned but not implemented
 
 **Significant completeness gaps = automatic failure** (`critique_passed: false`).
 
@@ -353,10 +386,11 @@ Report in structured fields:
 
 For each file in `files_changed` that is production code (not a test file):
 
-1. **Find corresponding test file(s)**
-   - Check `tests/unit/test_{module}.py`
-   - Check `tests/integration/test_{module}.py`
-   - Search for imports of the changed module in test files
+1. **Find corresponding test file(s)** using the project's conventions
+   - Map the changed file to its test counterpart per the resolved stack — e.g.
+     Python `tests/.../test_{module}.py`, Swift `{Type}Tests.swift`,
+     Node `{module}.test.ts`, Go `{file}_test.go`.
+   - Search for references/imports of the changed module/type in test files
 
 2. **Verify functions/classes are tested**
    - If a new function was added, is there a test for it?
@@ -381,8 +415,8 @@ For each file in `files_changed` that is production code (not a test file):
 ### Step 3: Analyze Test Quality
 
 1. **Find Test Files**
-   - Glob for Python: `**/test_*.py`, `**/*_test.py`, `**/tests/**/*.py`
-   - Glob for TypeScript: `**/*.test.{ts,tsx,js,jsx}`, `**/*.spec.{ts,tsx,js,jsx}`
+   - Glob using the resolved test-file globs for this project's stack (see
+     "Resolving test files" — Python, Swift, Node, Rust, Go, etc.)
    - Focus on test files that cover `files_changed`
 
 2. **For Each Test File:**
@@ -440,7 +474,7 @@ else: grade = F
 
 **Note:** C grade means "acceptable quality but needs improvement" - we don't accept mediocrity.
 
-**Note on completeness:** If plan artifacts (user stories, code changes, test specs) don't exist, skip the completeness dimension and rebalance weights. But if they exist, completeness is non-negotiable.
+**Note on completeness:** If the spec is missing (no progress.yaml stories, no `model/test-specs.c4`, no `model/contracts.c4`), skip the completeness dimension and rebalance weights. But if it exists, completeness is non-negotiable.
 
 ## Output Format
 
@@ -466,9 +500,9 @@ Return a structured JSON response using `TestCritiqueOutput` schema.
 | `good_patterns` | array | Positive patterns observed |
 | `files_with_coverage` | array | Changed files that have test coverage |
 | `files_missing_coverage` | array | Changed files with NO test coverage (critical) |
-| `missing_test_specs` | array | Planned test specs (TC-XXX) not implemented |
-| `uncovered_acceptance_criteria` | array | ACs from user stories without any test |
-| `uncovered_code_changes` | array | Interfaces/classes from code-changes/ without test coverage |
+| `uncovered_scenarios` | array | Planned scenarios (ts-*) not implemented |
+| `uncovered_acceptance_criteria` | array | Automated ACs from progress.yaml without any test |
+| `uncovered_code_changes` | array | Interfaces from model/contracts.c4 without test coverage |
 | `fix_info` | string | Detailed fix instructions (required if failed) |
 
 ### When Tests Pass Critique
@@ -481,10 +515,10 @@ Return a structured JSON response using `TestCritiqueOutput` schema.
   "tests_analyzed": 15,
   "hollow_tests": 0,
   "files_with_coverage": ["saha/auth.py", "saha/models/user.py"],
-  "missing_test_specs": [],
+  "uncovered_scenarios": [],
   "uncovered_acceptance_criteria": [],
   "uncovered_code_changes": [],
-  "summary": "15 tests analyzed. All acceptance criteria covered. All planned test specs implemented. Good quality with minor assertion improvements needed.",
+  "summary": "15 tests analyzed. All automated ACs covered. All planned ts-* scenarios implemented. Good quality with minor assertion improvements needed.",
   "dimension_scores": {
     "completeness": "A",
     "mocking": "A",
@@ -505,8 +539,8 @@ Return a structured JSON response using `TestCritiqueOutput` schema.
     }
   ],
   "good_patterns": [
-    "All 12 acceptance criteria have corresponding tests (dimension: completeness)",
-    "All 4 planned E2E test specs are implemented (dimension: completeness)",
+    "All 12 automated ACs have corresponding tests (dimension: completeness)",
+    "All 4 planned ts-e2e-* scenarios are implemented (dimension: completeness)",
     "Uses testcontainers for database tests (dimension: mocking)",
     "Clear AAA structure in all tests (dimension: structure)"
   ]
@@ -524,13 +558,13 @@ Return a structured JSON response using `TestCritiqueOutput` schema.
   "hollow_tests": 0,
   "files_with_coverage": ["saha/auth.py"],
   "files_missing_coverage": ["saha/pipeline/factory.py"],
-  "missing_test_specs": ["TC-E2E-003: Pipeline creation full flow"],
+  "uncovered_scenarios": ["ts-e2e-03: Pipeline creation full flow"],
   "uncovered_acceptance_criteria": [
-    "US-002 AC-3: Given invalid pipeline config, When user submits, Then error is returned with details",
-    "US-003 AC-1: Given pipeline is running, When user cancels, Then cleanup happens gracefully"
+    "US-002.AC-3: Given invalid pipeline config, When user submits, Then error is returned with details",
+    "US-003.AC-1: Given pipeline is running, When user cancels, Then cleanup happens gracefully"
   ],
   "uncovered_code_changes": ["PipelineFactory.create_pipeline()", "PipelineFactory.cancel_response()"],
-  "summary": "38 tests exist but completeness is poor: 2 acceptance criteria untested, 1 planned E2E test not implemented, PipelineFactory has ZERO test coverage.",
+  "summary": "38 tests exist but completeness is poor: 2 automated ACs untested, 1 planned E2E scenario not implemented, PipelineFactory has ZERO test coverage.",
   "dimension_scores": {
     "completeness": "D",
     "mocking": "B",
@@ -546,7 +580,7 @@ Return a structured JSON response using `TestCritiqueOutput` schema.
       "line": 0,
       "test_name": "N/A",
       "pattern": "missing_planned_test",
-      "description": "TC-E2E-003 (Pipeline creation full flow) was planned in test specs but never implemented",
+      "description": "ts-e2e-03 (Pipeline creation full flow) is planned in model/test-specs.c4 but never implemented",
       "dimension": "completeness"
     },
     {
@@ -555,7 +589,7 @@ Return a structured JSON response using `TestCritiqueOutput` schema.
       "line": 0,
       "test_name": "N/A",
       "pattern": "uncovered_acceptance_criteria",
-      "description": "US-002 AC-3 (error on invalid config) has no test — this acceptance criterion cannot be verified",
+      "description": "US-002.AC-3 (error on invalid config, verify: automated) has no test — this acceptance criterion cannot be verified",
       "dimension": "completeness"
     },
     {
@@ -564,11 +598,11 @@ Return a structured JSON response using `TestCritiqueOutput` schema.
       "line": 0,
       "test_name": "N/A",
       "pattern": "missing_tests",
-      "description": "PipelineFactory class (358 lines) has NO test coverage despite being listed in code-changes",
+      "description": "PipelineFactory class (358 lines) has NO test coverage despite a contract in model/contracts.c4",
       "dimension": "coverage"
     }
   ],
-  "fix_info": "Test completeness is insufficient — cannot verify Definition of Done.\n\n## Missing Tests (Completeness)\n\n### 1. Unimplemented E2E test: TC-E2E-003\n**Planned in:** test-specs/e2e/pipeline-flow.md\n**Covers:** US-002 (pipeline creation)\n**Fix:** Implement E2E test that creates a pipeline end-to-end\n\n### 2. Untested acceptance criteria\n**US-002 AC-3:** Error on invalid config — add test with invalid input\n**US-003 AC-1:** Cancel with cleanup — add test that cancels running pipeline\n\n### 3. Missing tests for code-changes\n**PipelineFactory:** create_pipeline(), cancel_response() have no tests\n**Fix:** Add integration tests for both methods\n\nTo reach B grade:\n- Implement TC-E2E-003\n- Add tests for each uncovered AC\n- Add tests for PipelineFactory"
+  "fix_info": "Test completeness is insufficient — cannot verify Definition of Done.\n\n## Missing Tests (Completeness)\n\n### 1. Unimplemented E2E scenario: ts-e2e-03\n**Planned in:** model/test-specs.c4 (dynamic view ts-e2e-03)\n**Covers:** US-002 (pipeline creation)\n**Fix:** Implement E2E test that creates a pipeline end-to-end\n\n### 2. Untested acceptance criteria\n**US-002.AC-3:** Error on invalid config — add test with invalid input\n**US-003.AC-1:** Cancel with cleanup — add test that cancels running pipeline\n\n### 3. Missing tests for contracts\n**PipelineFactory:** create_pipeline(), cancel_response() have no tests\n**Fix:** Add integration tests for both methods\n\nTo reach B grade:\n- Implement ts-e2e-03\n- Add tests for each uncovered AC\n- Add tests for PipelineFactory"
 }
 ```
 
@@ -647,20 +681,6 @@ Return a structured JSON response using `TestCritiqueOutput` schema.
 
 ### Additional Patterns to Detect
 
-#### Interaction-Binding Patterns (critical — false-pass class)
-- `stub_substitution`: an interaction AC (its text names `press`/`Esc`/`key`/
-  `keyboard`/`key equivalent`/`click`/`tap`/`type`/`drag`/`gesture`) is "covered"
-  only by a test that calls the handler directly (`goBack()`, `returnToBoard()`,
-  an `@objc` selector, a value-type mutator) instead of dispatching a real input
-  event (`NSEvent`/`keyDown`/`sendEvent`/`performKeyEquivalent`/`performClick`/
-  `mouseDown`, or an event seam like `onEscape` driven by a constructed event).
-  Proves the handler works; never that the user's input reaches it. **Report the
-  AC as uncovered (interaction-path unverified) — do not let it score as covered.**
-  This exact pattern shipped a drill-in `Esc` broken three times, all green.
-- `unfaithful_harness`: the test builder skips the app's real wiring (e.g. a
-  `buildContentForTesting()` that never calls `wireInteractions()`), so `onClose`/
-  `onSelect` callbacks are nil and every "click → …" test bypasses the real chain.
-
 #### Assertion Patterns
 - `vague_assertion`: `assert x is not None`, `assert len(items) > 0`
 - `incomplete_assertion`: Only checking one field when multiple matter
@@ -698,7 +718,8 @@ The orchestrator provides:
 ### If You Encounter an Error
 
 1. **No test files found**
-   - Check if tests are expected (`test-specs/` exists)
+   - Check if tests are expected (any `verify: automated` ACs or `ts-*`
+     scenarios in `model/test-specs.c4`)
    - If no tests required, pass with note
    - If tests were expected, report as issue
 
@@ -719,11 +740,11 @@ The orchestrator provides:
 
 ## Example Analysis Flow
 
-1. **Read plan artifacts** (user stories, code changes, test specs) — extract what SHOULD be tested
+1. **Read the spec** (progress.yaml ACs + model/test-specs.c4 + model/contracts.c4) — extract what SHOULD be tested
 2. Glob for test files in the project
 3. Focus on files_changed/files_added that are test files
-4. **Cross-reference**: map actual tests → acceptance criteria, code changes, planned test specs
-5. **Report completeness gaps**: uncovered ACs, unimplemented test specs, untested code changes
+4. **Cross-reference**: map actual tests → automated ACs, contracts, planned ts-* scenarios
+5. **Report completeness gaps**: uncovered ACs, unimplemented scenarios, untested contracts
 6. Read each test file and for each test function:
    - **Dimension 1 (Completeness)**: Does this test cover a planned AC or code change?
    - **Dimension 2 (Mocking)**: Count mocks, check if SUT mocked

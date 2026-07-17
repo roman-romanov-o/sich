@@ -60,12 +60,44 @@ public struct PlanningArtifactState: Equatable, Sendable {
     public let step: PlanningStep
     public let url: URL
     public let status: PlanningStepStatus
+    /// saha/v2: the LikeC4 view id this review item deep-links to (`us-001-flow`).
+    /// `nil` = a markdown artifact rendered as a document (the legacy path, and
+    /// research files in v2). When set, `url` is the model file holding the view.
+    public let viewID: String?
+    /// saha/v2 display title ("US-001 · Board renders"); `nil` = use the file name.
+    public let title: String?
+
+    public init(step: PlanningStep, url: URL, status: PlanningStepStatus,
+                viewID: String? = nil, title: String? = nil) {
+        self.step = step
+        self.url = url
+        self.status = status
+        self.viewID = viewID
+        self.title = title
+    }
+
+    /// Stable identity for selection + ReviewStore keys: the view id for diagram
+    /// items, the file name for markdown items.
+    public var reviewKey: String { viewID ?? url.lastPathComponent }
+
+    public var displayTitle: String { title ?? url.lastPathComponent }
 }
 
 public struct PlanningState: Equatable, Sendable {
     public let taskFolder: URL
     public let steps: [PlanningStepState]
     public let artifacts: [PlanningArtifactState]
+    /// True when this state came from a `format: saha/v2` progress.yaml — the task's
+    /// spec is a LikeC4 model under `model/` and diagram items carry `viewID`s.
+    public let isV2: Bool
+
+    public init(taskFolder: URL, steps: [PlanningStepState],
+                artifacts: [PlanningArtifactState], isV2: Bool = false) {
+        self.taskFolder = taskFolder
+        self.steps = steps
+        self.artifacts = artifacts
+        self.isV2 = isV2
+    }
 
     public var nextIncomplete: PlanningStepState? {
         steps.first { $0.status != .complete }
@@ -118,6 +150,11 @@ public struct PlanningStateReader: Sendable {
     }
 
     public func read(taskFolder: URL) -> PlanningState {
+        // saha/v2 tasks carry a `format: saha/v2` progress.yaml — the single
+        // source of truth, preferred over both the JSON runner and markers.
+        if let v2 = PlanningProgressReader.read(taskFolder: taskFolder) {
+            return v2
+        }
         if let data = jsonRunner?.run(taskFolder: taskFolder),
            let state = decodeJSON(data, folder: taskFolder) {
             return state

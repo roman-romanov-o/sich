@@ -13,11 +13,38 @@ import Testing
 @Suite("Dev hot reload")
 struct DevHotReloadTests {
 
-    @Test("enable() is a safe no-op without InjectionIII, and is idempotent")
+    @Test("enable() has a safe disabled no-op path, and is idempotent")
     func enableIsSafeWithoutInjection() {
-        // No InjectionIII bundle on the test host → the guarded path just logs and
-        // installs the repaint observer. Calling it twice must not crash either.
-        DevHotReload.enable()
-        DevHotReload.enable()
+        // Tests should not load a real InjectionIII install from the developer's
+        // machine; the guarded path still installs the repaint observer, and
+        // calling it twice must not crash.
+        DevHotReload.enable(environment: ["GHOSTLING_DISABLE_HOT_RELOAD": "1"])
+        DevHotReload.enable(environment: ["GHOSTLING_DISABLE_HOT_RELOAD": "1"])
+    }
+
+    @Test("bundle path can be overridden for nonstandard installs")
+    func bundlePathOverride() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("ghostling-injection-\(UUID().uuidString)", isDirectory: true)
+        let bundle = root.appendingPathComponent("macOSInjection.bundle", isDirectory: true)
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        #expect(DevHotReload.findInjectionBundlePath(
+            environment: ["GHOSTLING_INJECTION_BUNDLE": bundle.path],
+            homeDirectory: root.path
+        ) == bundle.path)
+    }
+
+    @Test("bundle path supports user Applications installs")
+    func userApplicationsBundlePath() throws {
+        let home = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("ghostling-home-\(UUID().uuidString)", isDirectory: true)
+        let bundle = home
+            .appendingPathComponent("Applications/InjectionIII.app/Contents/Resources/macOSInjection.bundle", isDirectory: true)
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        #expect(DevHotReload.findInjectionBundlePath(environment: [:], homeDirectory: home.path) == bundle.path)
     }
 }

@@ -1,0 +1,44 @@
+// phases.c4 — the implementation plan as phase elements + dependency arrows.
+// Replaces implementation-plan/phase-XX-*.md. Step-level detail (files, per-step
+// status) lives in progress.yaml `phases:`; this view shows the reviewer the SHAPE
+// of delivery: what ships in what order and which stories land where.
+//
+// Conventions:
+//   - element id `phase-01` <-> progress.yaml phases[].id
+//   - `->` between phases = hard dependency (execution order)
+//   - `phase -> story` relation = delivers; metadata carries effort + risk.
+
+model {
+  phase-01 = phase 'Phase 01: {{phase_title}}' {
+    description '''
+      {{what_this_phase_accomplishes}}
+    '''
+    metadata {
+      effort 'M'                       // S | M | L | XL
+      stories '{{US-001}}'
+      risks '{{risk}}: {{mitigation}}'
+    }
+  }
+
+  phase-02 = phase 'Phase 02: {{phase_title_2}}' {
+    description '''
+      {{what_this_phase_accomplishes_2}}
+    '''
+    metadata {
+      effort 'S'
+      stories '{{US-002}}'
+      risks ''
+    }
+  }
+
+  phase-01 -> phase-02 'unblocks'
+  phase-01 -> us-001 'delivers'
+}
+
+views {
+  view phases {
+    title '{{task_id}}: implementation plan'
+    include phase-01, phase-02, us-001
+    // include every phase-* and the stories they deliver
+  }
+}

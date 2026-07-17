@@ -42,22 +42,22 @@ final class SessionCard: NSView, NSDraggingSource {
         switch card.state {
         case .waitingForInput:
             // The freshest attention style: warm fill, full amber edge + soft ring.
-            layer?.backgroundColor = BoardTheme.needsYouCard.cgColor
-            layer?.borderColor = BoardTheme.attention.cgColor
+            themedBackground = BoardTheme.needsYouCard
+            themedBorder = BoardTheme.attention
             layer?.masksToBounds = false
-            layer?.shadowColor = BoardTheme.attention.cgColor
+            themedShadow = BoardTheme.attention
             layer?.shadowRadius = 4
             layer?.shadowOpacity = 0.25
             layer?.shadowOffset = .zero
         case .blocked:
-            layer?.backgroundColor = BoardTheme.needsYouCard.cgColor
-            layer?.borderColor = BoardTheme.needsYouStroke.cgColor
+            themedBackground = BoardTheme.needsYouCard
+            themedBorder = BoardTheme.needsYouStroke
         case .done:
-            layer?.backgroundColor = BoardTheme.cardFill.cgColor
-            layer?.borderColor = BoardTheme.doneStroke.cgColor
+            themedBackground = BoardTheme.cardFill
+            themedBorder = BoardTheme.doneStroke
         default:
-            layer?.backgroundColor = BoardTheme.cardFill.cgColor
-            layer?.borderColor = BoardTheme.cardStroke.cgColor
+            themedBackground = BoardTheme.cardFill
+            themedBorder = BoardTheme.cardStroke
         }
     }
 
@@ -66,7 +66,7 @@ final class SessionCard: NSView, NSDraggingSource {
     func setKeyboardFocus(_ focused: Bool) {
         if focused {
             layer?.borderWidth = 2
-            layer?.borderColor = BoardTheme.brand.cgColor
+            themedBorder = BoardTheme.brand
         } else {
             layer?.borderWidth = 1
             configureLayer()
@@ -192,8 +192,8 @@ final class SessionCard: NSView, NSDraggingSource {
         let color = BoardTheme.repoColor(card.projectDir)
         chip.textColor = color
         chip.wantsLayer = true
-        chip.layer?.backgroundColor = color.withAlphaComponent(0.12).cgColor
-        chip.layer?.borderColor = color.withAlphaComponent(0.34).cgColor
+        chip.themedBackground = color.withAlphaComponent(0.12)
+        chip.themedBorder = color.withAlphaComponent(0.34)
         chip.layer?.borderWidth = 1
         chip.layer?.cornerRadius = 5
         return chip

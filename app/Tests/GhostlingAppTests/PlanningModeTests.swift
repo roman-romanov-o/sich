@@ -246,6 +246,62 @@ struct PlanningModeTests {
         #expect(!view.documentPane.string.contains("let marker = 42"))
     }
 
+    // saha/v2: the rail lists stories from progress.yaml with display titles, a REAL
+    // click selects by reviewKey (several rows share model/stories.c4 as their url),
+    // and the story pane overlays the doc area for the selected LikeC4 view.
+    @Test func v2RailListsStoriesAndClickSelectsByReviewKey() throws {
+        let folder = try v2Fixture()
+        let view = PlanningModeView(reader: PlanningStateReader())
+        view.frame = NSRect(x: 0, y: 0, width: 1280, height: 720)
+        let window = NSWindow(contentRect: view.frame, styleMask: [.titled],
+                              backing: .buffered, defer: false)
+        window.contentView = view
+        window.makeKeyAndOrderFront(nil)
+        view.show(card: BoardCard(
+            sessionID: "planning", projectDir: folder.path, agent: .claude,
+            flow: .a, state: .idle, taskFolder: folder.path))
+        view.layoutSubtreeIfNeeded()
+
+        #expect(view.selectedStep == .userStories)
+        #expect(view.selectedReviewKey == "us-001-flow")
+        #expect(view.documentHeaderField.stringValue == "US-001 · First story")
+        #expect(!view.storyPane.isHidden)
+
+        let buttons = view.reviewPane.arrangedSubviews
+            .compactMap { $0 as? PlanningReviewButton }
+        #expect(buttons.count == 2)
+        let second = try #require(buttons.first { $0.reviewKey == "us-002-flow" })
+        try click(second, in: window, root: view)
+
+        #expect(view.selectedReviewKey == "us-002-flow")
+        #expect(view.documentHeaderField.stringValue == "US-002 · Second story")
+        #expect(!view.storyPane.isHidden)
+    }
+
+    private func v2Fixture() throws -> URL {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        // model/ stays empty of .c4 files so the story pane resolves to .noSources —
+        // no likec4 build process spawns during the test.
+        let model = folder.appendingPathComponent("model", isDirectory: true)
+        try FileManager.default.createDirectory(at: model, withIntermediateDirectories: true)
+        try """
+        format: saha/v2
+        task: task-99-fixture
+        title: Fixture task
+        status: planning
+        planning:
+          research:         {status: done, artifacts: []}
+          task_description: {status: done, views: [task-context]}
+          user_stories:     {status: in_progress, views: [us-001-flow, us-002-flow]}
+        stories:
+          - {id: US-001, title: First story, view: us-001-flow, status: ready}
+          - {id: US-002, title: Second story, view: us-002-flow, status: draft}
+        """.write(to: folder.appendingPathComponent("progress.yaml"), atomically: true,
+                  encoding: .utf8)
+        return folder
+    }
+
     private func planningFixtureWithSource() throws -> URL {
         let folder = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

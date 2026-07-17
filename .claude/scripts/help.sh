@@ -7,7 +7,11 @@ cat << 'EOF'
                      SAHAIDACHNY COMMANDS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-PLANNING COMMANDS (in Claude Code):
+SMALL TASKS (one command, in Claude Code):
+
+  /saha:quick "<task>" Plan a small change in one pass, then /saha:execute
+
+PLANNING COMMANDS — large tasks (in Claude Code):
 
   /saha:init <name>    Initialize new task folder
   /saha:research       Deep codebase exploration
@@ -27,7 +31,12 @@ EXECUTION COMMANDS (in terminal):
   saha status [task-id]       Check execution status
   saha clean [task-id]        Clean execution state
 
-WORKFLOW:
+WORKFLOW — small task:
+
+  1. /saha:quick "add a --json flag to status output"
+  2. saha run <task-id>        (or /saha:execute in Claude Code)
+
+WORKFLOW — large task:
 
   1. /saha:init my-feature
   2. /saha:research
@@ -36,11 +45,6 @@ WORKFLOW:
   5. /saha:verify stories
   6. /saha:plan
   7. saha run <task-id>
-
-MODES:
-
-  --mode=full      Complete planning (all artifacts)
-  --mode=minimal   Lightweight (task + plan only)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 EOF

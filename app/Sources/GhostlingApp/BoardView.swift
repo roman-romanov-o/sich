@@ -78,41 +78,22 @@ final class BoardView: NSView {
     private var focusedCardID: UUID?
     /// Per-column count captions, updated on every render.
     private var countLabels: [ColumnGroup: NSTextField] = [:]
-    /// The last snapshot rendered — replayed on a live light/dark switch so the
-    /// rebuilt card views re-resolve their layer colours in the new appearance.
     private var lastCards: [BoardCard] = []
-    /// Scaffold layer-backed views paired with their dynamic fill. `cgColor` is a
-    /// one-shot snapshot of the appearance at build time, so these must be re-applied
-    /// when the system flips light/dark (unlike NSColor-valued text, which auto-adapts).
-    private var scaffoldFills: [(NSView, NSColor)] = []
-
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        wantsLayer = true
-        layer?.backgroundColor = BoardTheme.canvas.cgColor
+        themedBackground = BoardTheme.canvas
         buildScaffold()
     }
 
     required init?(coder: NSCoder) { nil }
 
-    /// System light/dark flipped: re-resolve every layer-backed fill (they snapshotted
-    /// `cgColor` at build time) and rebuild the cards under the new appearance, so the
-    /// whole board follows the system theme live — no restart. Text fields use dynamic
-    /// NSColors and repaint themselves, so only the layer fills need this nudge.
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = BoardTheme.canvas.cgColor
-            for (view, color) in scaffoldFills {
-                view.layer?.backgroundColor = color.cgColor
-            }
-            render(cards: lastCards)
-        }
-    }
-
     // MARK: - Scaffold (built once): four equal columns filling the surface
 
     private func buildScaffold() {
+        subviews.forEach { $0.removeFromSuperview() }
+        constraints.forEach { $0.isActive = false }
+        cells = [:]
+        countLabels = [:]
         var previous: NSView?
         for group in groups {
             let column = makeColumn(group)
@@ -136,8 +117,7 @@ final class BoardView: NSView {
         let column = NSView()
         column.wantsLayer = true
         if group == .needsYou {
-            column.layer?.backgroundColor = BoardTheme.needsYouColumn.cgColor
-            scaffoldFills.append((column, BoardTheme.needsYouColumn))
+            column.themedBackground = BoardTheme.needsYouColumn
         }
         if group != .done { addRightHairline(to: column) }
 
@@ -187,9 +167,7 @@ final class BoardView: NSView {
 
     private func pulsingDot(_ color: NSColor) -> NSView {
         let dot = NSView()
-        dot.wantsLayer = true
-        dot.layer?.backgroundColor = color.cgColor
-        scaffoldFills.append((dot, color))
+        dot.themedBackground = color
         dot.layer?.cornerRadius = 3.5
         dot.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -221,9 +199,7 @@ final class BoardView: NSView {
 
     private func addRightHairline(to column: NSView) {
         let line = NSView()
-        line.wantsLayer = true
-        line.layer?.backgroundColor = BoardTheme.hairline.cgColor
-        scaffoldFills.append((line, BoardTheme.hairline))
+        line.themedBackground = BoardTheme.hairline
         line.translatesAutoresizingMaskIntoConstraints = false
         column.addSubview(line)
         NSLayoutConstraint.activate([
@@ -270,6 +246,11 @@ final class BoardView: NSView {
         for group in groups {
             countLabels[group]?.stringValue = countCaption(group, count: counts[group] ?? 0)
         }
+    }
+
+    func applyFontScale() {
+        buildScaffold()
+        render(cards: lastCards)
     }
 
     private func countCaption(_ group: ColumnGroup, count: Int) -> String {
@@ -374,8 +355,8 @@ final class BoardCell: NSStackView {
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         layer?.borderWidth = 1.5
-        layer?.borderColor = BoardTheme.brand.cgColor
-        layer?.backgroundColor = BoardTheme.brand.withAlphaComponent(0.06).cgColor
+        themedBorder = BoardTheme.brand
+        themedBackground = BoardTheme.brand.withAlphaComponent(0.06)
         return .move
     }
 
@@ -391,6 +372,7 @@ final class BoardCell: NSStackView {
 
     private func clearDropRing() {
         layer?.borderWidth = 0
-        layer?.backgroundColor = nil
+        themedBorder = nil
+        themedBackground = nil
     }
 }

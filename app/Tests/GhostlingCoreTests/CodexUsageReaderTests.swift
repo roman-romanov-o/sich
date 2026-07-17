@@ -129,11 +129,68 @@ struct CodexUsageReaderTests {
         #expect(abs((src.reading.remainingFraction ?? -1) - 0.60) < 1e-9)
     }
 
+    @Test("weekly-only newest line does not erase a recent 5h quota snapshot")
+    func weeklyOnlyNewestLineKeepsRecentFiveHour() throws {
+        let dir = try makeSessionsDir(files: [
+            ("rollout-new.jsonl", [
+                rolloutLine(primaryUsed: 75, secondaryUsed: 20),
+                rolloutLine(primaryUsed: 12, primaryResets: 1_784_796_865, secondaryUsed: 0)
+                    .replacingOccurrences(of: #""window_minutes":300"#, with: #""window_minutes":10080"#)
+                    .replacingOccurrences(
+                        of: #""secondary":{"used_percent":0.0,"window_minutes":10080,"resets_at":1783795570}"#,
+                        with: #""secondary":null"#
+                    ),
+            ], now)
+        ])
+
+        let sources = try #require(CodexUsageReader.displaySources(now: now, sessionsDir: dir))
+        #expect(sources.map(\.pool) == ["codex_5h", "codex_weekly"])
+        #expect(abs((sources[0].reading.remainingFraction ?? -1) - 0.25) < 1e-9)
+        #expect(abs((sources[1].reading.remainingFraction ?? -1) - 0.88) < 1e-9)
+    }
+
     @Test("no rollouts / absent dir → nil, the gauge stays unknown")
     func noTelemetryIsNil() throws {
         let empty = try makeSessionsDir(files: [])
         #expect(CodexUsageReader.source(now: now, sessionsDir: empty) == nil)
         let absent = empty.appendingPathComponent("does-not-exist")
         #expect(CodexUsageReader.source(now: now, sessionsDir: absent) == nil)
+    }
+
+    @Test("display sources classify windows by window_minutes, not primary/secondary key")
+    func displaySourcesClassifyByWindowMinutes() throws {
+        let snapshot = CodexUsageReader.Snapshot(
+            primary: CodexUsageReader.Constraint(
+                usedPercent: 12, windowMinutes: 300,
+                resetsAt: Date(timeIntervalSince1970: 1_783_256_844)
+            ),
+            secondary: CodexUsageReader.Constraint(
+                usedPercent: 34, windowMinutes: 10_080,
+                resetsAt: Date(timeIntervalSince1970: 1_783_795_570)
+            )
+        )
+
+        let sources = try #require(CodexUsageReader.displaySources(from: snapshot, now: now))
+        #expect(sources.map(\.pool) == ["codex_5h", "codex_weekly"])
+        #expect(sources[0].reading.refillKind == .rollingWindow)
+        #expect(abs((sources[0].reading.remainingFraction ?? -1) - 0.88) < 1e-9)
+        #expect(sources[1].reading.refillKind == .weekly)
+        #expect(abs((sources[1].reading.remainingFraction ?? -1) - 0.66) < 1e-9)
+    }
+
+    @Test("weekly-only primary renders only as weekly, leaving Codex 5H absent")
+    func weeklyOnlyPrimaryIsNotCodex5h() throws {
+        let snapshot = CodexUsageReader.Snapshot(
+            primary: CodexUsageReader.Constraint(
+                usedPercent: 1, windowMinutes: 10_080,
+                resetsAt: Date(timeIntervalSince1970: 1_784_796_865)
+            ),
+            secondary: nil
+        )
+
+        let sources = try #require(CodexUsageReader.displaySources(from: snapshot, now: now))
+        #expect(sources.map(\.pool) == ["codex_weekly"])
+        #expect(sources[0].reading.refillKind == .weekly)
+        #expect(abs((sources[0].reading.remainingFraction ?? -1) - 0.99) < 1e-9)
     }
 }

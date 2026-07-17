@@ -67,17 +67,16 @@ Per-turn diffs shown in the drill-in panel (`DiffModel`, `DiffTextView`,
 
 ## Data flow (running app)
 
-1. `AppShell` (NSApplicationDelegate) boots the window and installs global
-   Claude hooks.
-2. `BoardShell` owns the main window's board + quota + drill-in
+1. `BoardShell` (NSApplicationDelegate) boots the window and installs global
+   Claude hooks. It owns the main window's board + quota + drill-in
    composition and runs the always-on PTY pump (drains every session's PTY
    except the one currently drilled into, avoiding PTY back-pressure
    deadlocks).
-3. Hook events land via `HookEventTail`, get normalized, and update
+2. Hook events land via `HookEventTail`, get normalized, and update
    `SessionRegistry` / `BoardColumn` state, moving cards across the board.
-4. `QuotaSidecar` polls quota/session data in the background and feeds
+3. `QuotaSidecar` polls quota/session data in the background and feeds
    `QuotaPanel`/`QuotaGaugeRow`.
-5. Selecting a card drills into `TerminalSurface` (if it's the owned
+4. Selecting a card drills into `TerminalSurface` (if it's the owned
    embedded terminal) or `DrillInPanel`/`DrillInSidebar` for diffs and
    history.
 

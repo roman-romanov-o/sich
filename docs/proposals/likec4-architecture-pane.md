@@ -1,6 +1,7 @@
 # LikeC4 Architecture Pane — Spec
 
-Status: **approved direction, not yet implemented**.
+Status: **implemented** (see `LikeC4Build.swift`, `StaticFileServer.swift`,
+`ArchitecturePane.swift`, and the Architecture pane tests).
 Companion spec: `sahaidachny/docs/proposals/likec4-architecture-model.md`.
 
 Division of labor (fixed): saha owns the model (plain-text LikeC4 DSL under

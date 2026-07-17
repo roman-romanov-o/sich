@@ -14,6 +14,7 @@ final class ChooserButton: NSTextField {
 
     init(title: String) {
         super.init(frame: .zero)
+        useCenteredTextCell()
         stringValue = title
         font = BoardTheme.monoBold
         textColor = BoardTheme.textPrimary
@@ -23,7 +24,7 @@ final class ChooserButton: NSTextField {
         isSelectable = false
         drawsBackground = false
         wantsLayer = true
-        layer?.backgroundColor = BoardTheme.cardFillRaised.cgColor
+        themedBackground = BoardTheme.cardFillRaised
         layer?.cornerRadius = 5
     }
 
@@ -64,7 +65,7 @@ final class SahaTaskChooserView: NSView {
         existingURLs = folders.map(\.url)
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = BoardTheme.canvas.cgColor
+        themedBackground = BoardTheme.canvas
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
@@ -259,7 +260,7 @@ final class FolderRow: ClickableRow {
         chip.font = BoardTheme.monoSmall
         chip.textColor = BoardTheme.flowColor(.a)
         chip.wantsLayer = true
-        chip.layer?.backgroundColor = BoardTheme.flowColor(.a).withAlphaComponent(0.16).cgColor
+        chip.themedBackground = BoardTheme.flowColor(.a).withAlphaComponent(0.16)
         chip.layer?.cornerRadius = 3
         let stack = NSStackView(views: [leaf, chip])
         stack.spacing = 7
@@ -277,7 +278,7 @@ final class FolderRow: ClickableRow {
         let label = makeLabel(folder.initials, font: BoardTheme.monoBold, color: folder.tileTextColor)
         label.alignment = .center
         label.wantsLayer = true
-        label.layer?.backgroundColor = folder.tint.cgColor
+        label.themedBackground = folder.tint
         label.layer?.cornerRadius = 6
         label.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -292,8 +293,8 @@ final class FolderRow: ClickableRow {
     func setSelected(_ on: Bool) {
         check.isHidden = !on
         layer?.borderWidth = on ? 1.5 : 1
-        layer?.borderColor = (on ? BoardTheme.flowColor(.b) : BoardTheme.cardStroke).cgColor
-        layer?.backgroundColor = (on ? BoardTheme.cardFillRaised : BoardTheme.cardFill).cgColor
+        themedBorder = on ? BoardTheme.flowColor(.b) : BoardTheme.cardStroke
+        themedBackground = on ? BoardTheme.cardFillRaised : BoardTheme.cardFill
     }
 }
 

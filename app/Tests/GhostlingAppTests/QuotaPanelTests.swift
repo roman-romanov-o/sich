@@ -119,25 +119,30 @@ struct QuotaPanelTests {
         #expect(!interactive.resetText.isEmpty)
         #expect(!sdk.resetText.isEmpty)
         // The asymmetry is represented: Agent SDK = hard-stop / no fallback;
-        // interactive = window reset.
+        // interactive = window reset. With the redundant prefix gone, the VERB carries it —
+        // a hard-stop credit "refills", a window you're merely waiting out comes "back".
         #expect(sdk.gauge.fallback == .none)
-        #expect(sdk.resetText.contains("hard-stop"))
+        #expect(sdk.resetText.contains("refills in"))
         #expect(interactive.gauge.fallback == .windowReset)
-        #expect(interactive.resetText.contains("window"))
+        #expect(interactive.resetText.contains("back in"))
+        #expect(!interactive.resetText.contains("window"), "the 5H/WEEKLY column header already says which window this is")
     }
 
-    /// The new ask: the "time left until reset" is actually SHOWN and reads as a
-    /// countdown (not the old hidden relative string). An active window reset counts
-    /// down ("resets in …"); an exhausted pool is framed as when you're unblocked
-    /// ("back in …") so the number you care about is front-and-centre.
-    @Test("reset line surfaces a highlighted 'time left' countdown")
+    /// The countdown must FIT, not just exist: at a 94 pt cell width a
+    /// `"window · resets in 2h 14m"` caption ellipsized away the one part that matters.
+    /// The line is now the countdown and nothing else.
+    @Test("reset line surfaces a highlighted 'time left' countdown that fits the cell")
     func resetCountdownIsSurfaced() throws {
         let active = QuotaGaugeRow(gauge: QuotaGauge(
             provider: "anthropic", pool: "interactive", state: .active, confidence: .measured,
             fallback: .windowReset, remainingFraction: 0.4, reset: QuotaSeed.hoursFromNow(2.25)
         ))
-        #expect(active.resetText.contains("resets in"))
-        #expect(active.resetText.contains("2h"), "counts down in compact h/m, not a stale relative phrase")
+        #expect(active.resetText == "in 2h 15m", "countdown only — no prefix eating the width")
+        #expect(
+            active.resetText.size(withAttributes: [.font: BoardTheme.monoSmall]).width
+                <= QuotaLayout.cellWidth,
+            "the countdown must render un-truncated inside the cell"
+        )
 
         let exhausted = QuotaGaugeRow(gauge: QuotaGauge(
             provider: "anthropic", pool: "interactive_weekly", state: .exhausted, confidence: .measured,
@@ -145,6 +150,38 @@ struct QuotaPanelTests {
         ))
         #expect(exhausted.resetText.contains("back in"), "exhausted → when you're unblocked")
         #expect(exhausted.resetText.contains("1d"), "weekly-scale wait rolls up to days")
+    }
+
+    /// The percent rides inside the bar (phone-battery style) rather than on its own text
+    /// row, which is what buys the countdown a full-width line in a shorter cell.
+    @Test("percent is drawn inside the bar, not on a row under it")
+    func percentRidesInsideTheBar() throws {
+        let row = QuotaGaugeRow(gauge: QuotaGauge(
+            provider: "anthropic", pool: "interactive_5h", state: .active, confidence: .measured,
+            fallback: .windowReset, remainingFraction: 0.92, reset: QuotaSeed.hoursFromNow(2)
+        ))
+        row.layoutSubtreeIfNeeded()
+        #expect(row.barLabelText == "92%")
+        #expect(
+            row.barLabelText.size(withAttributes: [.font: BoardTheme.gaugeLabel]).width
+                <= QuotaLayout.cellWidth
+        )
+        // An exhausted pool can't lean on the fraction — an empty bar and a full red one
+        // both need the number said out loud.
+        let dry = QuotaGaugeRow(gauge: QuotaGauge(
+            provider: "anthropic", pool: "interactive_5h", state: .exhausted, confidence: .measured,
+            fallback: .windowReset, remainingFraction: 0.0, reset: QuotaSeed.hoursFromNow(2)
+        ))
+        #expect(dry.barLabelText == "0%")
+
+        // An inferred number must never read as a measured one — the whole point of the
+        // confidence split. Inside the bar that cue is a "~", doubled by the amber fill.
+        let guessed = QuotaGaugeRow(gauge: QuotaGauge(
+            provider: "anthropic", pool: "interactive_5h", state: .active, confidence: .estimated,
+            fallback: .windowReset, remainingFraction: 0.55, reset: QuotaSeed.hoursFromNow(1)
+        ))
+        #expect(guessed.barLabelText == "~55%")
+        #expect(guessed.showsEstimatedCue)
     }
 
     /// The per-minute ticker re-evaluates the countdown against the live clock —

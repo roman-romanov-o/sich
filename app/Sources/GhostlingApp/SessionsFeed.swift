@@ -22,7 +22,7 @@ enum SessionsFeed {
         BoardCard(
             sessionID: entry.sessionID,
             projectDir: entry.projectDir ?? entry.sessionID,  // label by repo, fall back to id
-            agent: .claude,  // every Claude Code hook line is a Claude session
+            agent: entry.agent,
             flow: .b,        // hook-observed == human-launched interactive (flow B)
             state: CardState(rawValue: entry.state.rawValue) ?? .unknown,
             updatedAt: entry.updatedAt,  // freshness key: newest observation wins on a dir join

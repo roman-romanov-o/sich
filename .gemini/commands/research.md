@@ -1,7 +1,7 @@
 ---
 description: Research codebase and validate assumptions for a task
 argument-hint: [task-path] [--topic=<focus-area>]
-allowed-tools: Task, Read, Glob, Grep, WebSearch, WebFetch, mcp__context7__resolve-library-id, mcp__context7__query-docs
+allowed-tools: Task, Read, Edit, Glob, Grep, WebSearch, WebFetch, mcp__context7__resolve-library-id, mcp__context7__query-docs
 ---
 
 # Research Task
@@ -18,9 +18,10 @@ Conduct critical codebase research for planning, using the task description as c
 
 Before running this command:
 1. Task folder must exist (run `/saha:init` first)
-2. Task description should exist (run `/saha:task` first)
+2. Task model should exist (run `/saha:task` first)
 
-The task description provides essential context for focused research.
+The task model provides essential context for focused research. Research output
+itself stays **markdown** (`research/*.md`) — it is prose, not spec.
 
 ## Execution
 
@@ -44,8 +45,10 @@ Task tool:
 
     Task context:
     - Task path: {task_path}
-    - Task description: {task_path}/task-description.md
-    - Task README: {task_path}/README.md
+    - Task model: {task_path}/model/task.c4 (saha/v2) — or {task_path}/task-description.md on a legacy task
+    - Task state: {task_path}/progress.yaml
+    - Architecture model (if present): docs/architecture/*.c4 — read as context;
+      flag drift between the model and the actual code as a research finding
     ${topic ? "- Focus topic: " + topic : ""}
 
     Research the codebase thoroughly. Be critical and skeptical.
@@ -58,8 +61,14 @@ Task tool:
 
 The agent will create in `{task_path}/research/`:
 - Research reports for each investigated topic
-- Updated README.md listing all findings
 - Critical assessment of the proposed task
+
+Then update `{task_path}/progress.yaml`:
+
+```yaml
+planning:
+  research: { status: done, artifacts: [research/codebase-analysis.md, …] }
+```
 
 ## After Research
 
@@ -69,7 +78,7 @@ Review the research findings. They may:
 - Recommend reconsidering the task
 
 Based on findings:
-- If the task description needs updates, revise it with `/saha:task`
+- If the task model needs updates, revise it with `/saha:task`
 - Otherwise, proceed to `/saha:stories` to generate user stories
 
 ## 4. Review Artifacts

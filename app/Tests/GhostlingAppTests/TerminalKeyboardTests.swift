@@ -98,4 +98,37 @@ struct TerminalKeyboardTests {
 
         #expect(sent == [0x7F], "a lone Delete stays a one-char backspace")
     }
+
+    private func tabEvent(modifiers: NSEvent.ModifierFlags) throws -> NSEvent {
+        try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
+            windowNumber: 0, context: nil,
+            characters: "\t", charactersIgnoringModifiers: "\t",
+            isARepeat: false, keyCode: 48
+        ))
+    }
+
+    @Test("Shift+Tab sends xterm BackTab for Claude mode changes")
+    func shiftTabIsBacktab() throws {
+        let (surface, session) = try makeSurface()
+        defer { session.terminate() }
+        var sent: [UInt8] = []
+        session.onInput = { sent += $0 }
+
+        surface.keyDown(with: try tabEvent(modifiers: .shift))
+
+        #expect(sent == [0x1B, 0x5B, 0x5A], "Shift+Tab must reach Claude as BackTab")
+    }
+
+    @Test("plain Tab still sends HT")
+    func plainTabIsHT() throws {
+        let (surface, session) = try makeSurface()
+        defer { session.terminate() }
+        var sent: [UInt8] = []
+        session.onInput = { sent += $0 }
+
+        surface.keyDown(with: try tabEvent(modifiers: []))
+
+        #expect(sent == [0x09])
+    }
 }

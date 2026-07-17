@@ -24,7 +24,7 @@ final class ChangesView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = BoardTheme.canvas.cgColor
+        themedBackground = BoardTheme.canvas
         scope.target = self
         scope.action = #selector(selectionChanged)
         scope.font = BoardTheme.sansSmall
@@ -56,11 +56,11 @@ final class ChangesView: NSView {
         bar.spacing = 12
         bar.edgeInsets = NSEdgeInsets(top: 8, left: 16, bottom: 8, right: 16)
         bar.wantsLayer = true
-        bar.layer?.backgroundColor = BoardTheme.canvasSunken.cgColor
+        bar.themedBackground = BoardTheme.canvasSunken
 
         let hairline = NSView()
         hairline.wantsLayer = true
-        hairline.layer?.backgroundColor = BoardTheme.hairline.cgColor
+        hairline.themedBackground = BoardTheme.hairline
 
         for view in [bar, hairline, diffView, empty] {
             view.translatesAutoresizingMaskIntoConstraints = false

@@ -46,15 +46,16 @@ final class AttentionIndicator: NSView {
     /// Re-render for a new count. Zero is the quiet state: muted text, no badge
     /// fill, not clickable — the explicit no-false-alarm read (US-005 AC#3).
     func update(count: Int) {
+        label.font = BoardTheme.monoBold
         renderedCount = count
         if count == 0 {
             label.stringValue = ""
             label.textColor = BoardTheme.textFaint
-            layer?.backgroundColor = NSColor.clear.cgColor
+            themedBackground = .clear
         } else {
             label.stringValue = "⚠ \(count)"
             label.textColor = NSColor.white
-            layer?.backgroundColor = BoardTheme.attentionBadge.cgColor  // white-on-fill clears AA
+            themedBackground = BoardTheme.attentionBadge  // white-on-fill clears AA
         }
     }
 

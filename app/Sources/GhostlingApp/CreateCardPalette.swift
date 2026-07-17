@@ -79,9 +79,9 @@ final class PaletteRow: NSView {
     }
 
     private func restyle() {
-        layer?.backgroundColor = isSelected ? accent.withAlphaComponent(0.08).cgColor : .clear
+        themedBackground = isSelected ? accent.withAlphaComponent(0.08) : .clear
         layer?.borderWidth = isSelected ? 1 : 0
-        layer?.borderColor = isSelected ? accent.withAlphaComponent(0.27).cgColor : nil
+        themedBorder = isSelected ? accent.withAlphaComponent(0.27) : nil
         glyph.textColor = isSelected ? accent : BoardTheme.textDim
         subtitle.textColor = isSelected ? BoardTheme.hex(0xB39A6E) : BoardTheme.textDim
         meta.textColor = isSelected ? BoardTheme.hex(0xB39A6E) : BoardTheme.textDim
@@ -99,8 +99,8 @@ final class PaletteRow: NSView {
             s.layer?.cornerRadius = 2
             // ponytail: pure completion bar — green done vs empty. No amber "next"
             // segment: we have no in-progress signal, so it just contradicted the N/M badge.
-            s.layer?.backgroundColor = (i < done ? BoardTheme.stateColor(.done)
-                : BoardTheme.cardStroke).cgColor
+            s.themedBackground = i < done ? BoardTheme.stateColor(.done)
+                : BoardTheme.cardStroke
             s.heightAnchor.constraint(equalToConstant: 4).isActive = true
             return s
         }
@@ -177,11 +177,11 @@ final class FlowOptionCard: NSView {
         let a = BoardTheme.attention
         // Quieter wash than a focused list row (0.08): the filled radio dot carries the
         // "committed pick" signal, so this doesn't fight the arrow-key cursor for amber.
-        layer?.backgroundColor = isSelected ? a.withAlphaComponent(0.05).cgColor : .clear
+        themedBackground = isSelected ? a.withAlphaComponent(0.05) : .clear
         layer?.borderWidth = isSelected ? 1 : 1
-        layer?.borderColor = (isSelected ? a : BoardTheme.cardFillRaised).cgColor
+        themedBorder = isSelected ? a : BoardTheme.cardFillRaised
         dot.layer?.borderWidth = isSelected ? 4 : 1
-        dot.layer?.borderColor = (isSelected ? a : BoardTheme.textDim).cgColor
+        dot.themedBorder = isSelected ? a : BoardTheme.textDim
         title.textColor = isSelected ? BoardTheme.textPrimary : BoardTheme.textMuted
         desc.textColor = isSelected ? BoardTheme.hex(0xB39A6E) : BoardTheme.textDim
     }
@@ -252,11 +252,11 @@ final class WorktreeToggle: NSView {
 
     private func restyle() {
         let a = BoardTheme.attention
-        layer?.backgroundColor = (isOn ? a.withAlphaComponent(0.06) : BoardTheme.canvas).cgColor
+        themedBackground = isOn ? a.withAlphaComponent(0.06) : BoardTheme.canvas
         layer?.borderWidth = 1
-        layer?.borderColor = (isOn ? a.withAlphaComponent(0.4) : BoardTheme.cardStrokeStrong).cgColor
-        box.layer?.backgroundColor = (isOn ? a : NSColor.clear).cgColor
-        box.layer?.borderColor = (isOn ? a : BoardTheme.textFaint).cgColor
+        themedBorder = isOn ? a.withAlphaComponent(0.4) : BoardTheme.cardStrokeStrong
+        box.themedBackground = isOn ? a : NSColor.clear
+        box.themedBorder = isOn ? a : BoardTheme.textFaint
         check.textColor = isOn ? BoardTheme.canvas : .clear
         check.isHidden = !isOn
         title.textColor = isOn ? BoardTheme.textPrimary : BoardTheme.textMuted
@@ -378,10 +378,10 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
 
     private func buildChrome() {
         wantsLayer = true
-        layer?.backgroundColor = NSColor.black.withAlphaComponent(0.62).cgColor
+        themedBackground = NSColor.black.withAlphaComponent(0.62)
         card.wantsLayer = true
-        card.layer?.backgroundColor = BoardTheme.cardFill.cgColor
-        card.layer?.borderColor = BoardTheme.cardStrokeStrong.cgColor
+        card.themedBackground = BoardTheme.cardFill
+        card.themedBorder = BoardTheme.cardStrokeStrong
         card.layer?.borderWidth = 1
         card.layer?.cornerRadius = 12
         card.layer?.shadowColor = .black
@@ -408,7 +408,7 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         errorLabel.isHidden = true
         let hairline = { () -> NSView in
             let v = NSView(); v.wantsLayer = true
-            v.layer?.backgroundColor = BoardTheme.hairline.cgColor
+            v.themedBackground = BoardTheme.hairline
             v.heightAnchor.constraint(equalToConstant: 1).isActive = true
             return v
         }
@@ -447,10 +447,10 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         wrap.wantsLayer = true
         wrap.layer?.cornerRadius = 4
         wrap.layer?.borderWidth = 1
-        wrap.layer?.borderColor = (accent?.withAlphaComponent(0.5)
-            ?? (done ? BoardTheme.cardStroke : BoardTheme.cardStrokeStrong)).cgColor
-        wrap.layer?.backgroundColor = accent?.withAlphaComponent(0.10).cgColor
-            ?? (done ? BoardTheme.canvas.cgColor : .clear)
+        wrap.themedBorder = accent?.withAlphaComponent(0.5)
+            ?? (done ? BoardTheme.cardStroke : BoardTheme.cardStrokeStrong)
+        wrap.themedBackground = accent?.withAlphaComponent(0.10)
+            ?? (done ? BoardTheme.canvas : .clear)
         l.translatesAutoresizingMaskIntoConstraints = false
         wrap.addSubview(l)
         NSLayoutConstraint.activate([
@@ -569,7 +569,7 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         // as a section label, so first-timers couldn't tell the most important field apart.
         nameBox.wantsLayer = true
         nameBox.layer?.cornerRadius = 8
-        nameBox.layer?.backgroundColor = BoardTheme.canvas.cgColor
+        nameBox.themedBackground = BoardTheme.canvas
         nameBox.layer?.borderWidth = 1
         styleNameBox(focused: false)
         nameField.translatesAutoresizingMaskIntoConstraints = false
@@ -584,8 +584,8 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     }
 
     private func styleNameBox(focused: Bool) {
-        nameBox.layer?.borderColor =
-            (focused ? BoardTheme.attention : BoardTheme.cardStrokeStrong).cgColor
+        nameBox.themedBorder =
+            focused ? BoardTheme.attention : BoardTheme.cardStrokeStrong
     }
 
     func controlTextDidBeginEditing(_ obj: Notification) { styleNameBox(focused: true) }

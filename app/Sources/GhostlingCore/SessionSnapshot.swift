@@ -60,6 +60,24 @@ public struct PaneSnapshot: Codable, Equatable, Sendable {
     /// captured so a restored saha-flow card still points at its own task, not the
     /// project's shifting current-task. Optional for the same back-compat reason.
     public let taskFolder: String?
+    /// The board card's stable `id` this pane belongs to. Persisted so a restored card
+    /// keeps its identity instead of being minted a fresh UUID: the restored shell is
+    /// re-opened carrying this same id as `GHOSTLING_CARD_ID`, which is what lets the
+    /// hook feed bind an observed agent session back to the card and keep moving it
+    /// between columns. Without it a restored card is frozen for the app's whole life.
+    public let cardID: UUID?
+    /// The column the card was parked in at quit. Persisted because a card's state is
+    /// *detected*, not derived from the pane — nothing on the restore side could
+    /// reconstruct it, so an unpersisted card always came back `.idle`, silently
+    /// dropping a `waiting-for-input` ask.
+    public let cardState: CardState?
+    /// Whether the pane's process was alive **at snapshot time** — a fact recorded while
+    /// we can still observe it, not inferred later. `childPID` is useless for this on the
+    /// next launch: we SIGTERM every shell on the way out, so the recorded PID is dead by
+    /// construction (and worse, may have been recycled onto an unrelated process). Only
+    /// leaked SIGTERM-ignoring login shells made the old PID probe appear to work.
+    /// Optional so a pre-`wasAlive` snapshot falls back to the PID probe.
+    public let wasAlive: Bool?
 
     public init(
         sessionID: UUID,
@@ -69,7 +87,10 @@ public struct PaneSnapshot: Codable, Equatable, Sendable {
         childPID: Int32?,
         claudeSessionID: UUID? = nil,
         title: String? = nil,
-        taskFolder: String? = nil
+        taskFolder: String? = nil,
+        cardID: UUID? = nil,
+        cardState: CardState? = nil,
+        wasAlive: Bool? = nil
     ) {
         self.sessionID = sessionID
         self.cwd = cwd
@@ -79,16 +100,22 @@ public struct PaneSnapshot: Codable, Equatable, Sendable {
         self.claudeSessionID = claudeSessionID
         self.title = title
         self.taskFolder = taskFolder
+        self.cardID = cardID
+        self.cardState = cardState
+        self.wasAlive = wasAlive
     }
 
-    /// The same pane with its app-level card metadata (title + task folder) filled in.
-    /// Core builds a pane from the session (which has no card notion); the app layer
-    /// joins in the title/taskFolder by sessionID before persisting.
-    public func with(title: String?, taskFolder: String?) -> PaneSnapshot {
+    /// The same pane with its app-level card metadata filled in. Core builds a pane from
+    /// the session (which has no card notion); the app layer joins the card in by PTY
+    /// identity and stamps what only it knows — the card's id, name, column, and folder.
+    public func with(
+        cardID: UUID?, cardState: CardState?, title: String?, taskFolder: String?
+    ) -> PaneSnapshot {
         PaneSnapshot(
             sessionID: sessionID, cwd: cwd, agentType: agentType, flowTag: flowTag,
             childPID: childPID, claudeSessionID: claudeSessionID,
-            title: title, taskFolder: taskFolder
+            title: title, taskFolder: taskFolder,
+            cardID: cardID, cardState: cardState, wasAlive: wasAlive
         )
     }
 }

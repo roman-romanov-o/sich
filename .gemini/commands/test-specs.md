@@ -1,22 +1,36 @@
 ---
-description: Generate test specifications from user stories
+description: Generate test specifications as scenario flows in the task model
 argument-hint: [task-path] [--type=e2e|integration|unit]
-allowed-tools: Read, Write, Glob, Grep, AskUserQuestion, Task
+allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, Task
 ---
 
 # Test Specifications
 
-Generate test specifications before implementation.
+Author test scenarios as **LikeC4 dynamic views** (`model/test-specs.c4`): each
+scenario is a walkable flow through the same elements the stories use —
+preconditions and environment in the view description, expected results in the
+assert steps' notes. The reviewer checks a test spec the same way they check a
+story: by walking the diagram.
 
 ## Testing Philosophy: E2E First
 
 **The test pyramid is inverted during planning.** We think top-down:
 
-1. **E2E tests are the top priority.** Every user story should have at least one E2E test that simulates the full flow a user goes through. These are the most valuable tests because they verify the system works as a whole.
-2. **Integration tests fill gaps** where E2E tests can't provide consistent or reliable coverage (e.g., error paths that are hard to trigger end-to-end, race conditions, third-party service boundaries).
-3. **Unit tests are written only when necessary** — for complex algorithms, tricky edge cases in pure logic, or when higher-level tests can't isolate the behavior.
+1. **E2E tests are the top priority.** Every user story should have at least one E2E scenario that simulates the full flow a user goes through.
+2. **Integration tests fill gaps** where E2E can't provide reliable coverage (hard-to-trigger error paths, race conditions, third-party boundaries).
+3. **Unit tests only when necessary** — complex algorithms, tricky pure-logic edge cases.
 
-**The key question for every user story is:** "Can I write an E2E test that walks through the entire flow?" If yes, start there. Only drop down to integration/unit when E2E isn't feasible or sufficient.
+**The key question per story:** "Can I write an E2E test that walks the entire
+flow?" If yes, start there. Only drop down when E2E isn't feasible.
+
+> **Match the project's stack.** Saha is language-agnostic — write specs against
+> the project's own test framework (`swift test`/XCTest, Vitest/Jest, `cargo test`,
+> `go test`, pytest, …). Resolve the stack from `.sahaidachny/stack.yaml` or the
+> repo's marker files, and name it in the scenario's `metadata { framework }`.
+>
+> **ACs with `verify: manual` in progress.yaml get NO spec.** Do not invent a
+> brittle automated scenario for visual/feel criteria — the loop routes those to
+> a human. List them in the coverage gaps instead.
 
 ## Arguments
 
@@ -25,286 +39,128 @@ Generate test specifications before implementation.
     1. Current task from `.sahaidachny/current-task` (set via `saha use`)
     2. Most recent task folder in `docs/tasks/`
   - If no context found, asks the user
-- `--type=<type>`: Focus on specific test type (e2e, integration, unit)
+- `--type=<type>`: Focus on a specific test type (e2e, integration, unit)
 
 ## Prerequisites
 
-- User stories must exist with acceptance criteria
-- Optionally: code changes for integration tests
+- Stories with ACs exist (`model/stories.c4` + progress.yaml stories)
+- Optionally: contracts (`model/contracts.c4`) for integration scenarios
 
 ## Execution
 
 ### 1. Analyze Test Requirements
 
-Read all user stories and extract:
-- Acceptance criteria (Given/When/Then)
-- Edge cases
-- Error scenarios
+Read:
+- `{task_path}/progress.yaml` - Every AC with `verify: automated` needs coverage;
+  `verify: build`/`manual` do NOT get scenarios
+- `{task_path}/model/stories.c4` - The flows to mirror
+- `{task_path}/model/contracts.c4` - Interface behaviors and error responses
+- `.claude/templates/test-specs.c4` - Template/conventions for this artifact
 
-From code changes (if exist):
-- Endpoint behaviors
-- Error responses
-- Data validation rules
+### 2. Author Scenarios (Top-Down)
 
-### 2. Generate Test Specs (Top-Down)
+Add to `{task_path}/model/test-specs.c4`. View id convention (progress.yaml and
+the kanban reference these):
 
-**Start with E2E specs.** For each user story, ask:
-- What is the full user flow? Can I simulate it end-to-end?
-- If yes → write an E2E spec covering happy path + key error paths
-- If parts can't be tested E2E → write integration specs for those parts
-- If isolated logic is complex enough → write unit specs
+- `ts-e2e-NN` — end-to-end scenarios
+- `ts-int-NN` — integration scenarios
+- `ts-unit-NN` — unit scenarios (rare)
 
-**Every story MUST have at least one E2E or integration test.** Unit-only coverage for a story is a red flag.
+```likec4
+model {
+  // The test harness is an actor in the flows:
+  harness = external 'Test Harness' {
+    description 'swift test / pytest / vitest — whatever the stack resolves to'
+  }
+}
 
-#### E2E Tests (`test-specs/e2e/`)
+views {
+  dynamic view ts-e2e-01 {
+    title 'TS-E2E-01: Session appears on the board'
+    description '''
+      **Proves:** US-001 AC-1, AC-2
 
-Test complete user flows through the UI or API.
+      **Preconditions:** clean registry; hook installed.
 
-```markdown
-# E2E Test Spec: [Flow Name]
-
-**Related Stories:** US-XXX, US-YYY
-**Priority:** Critical | High | Medium | Low
-**Status:** Draft | Ready | Implemented
-
-## Overview
-
-[What user flow this tests]
-
-## Preconditions
-
-- [System state before test]
-- [Required test data]
-- [User authentication state]
-
-## Test Cases
-
-### TC-E2E-001: [Happy Path Name]
-
-**Description:** [What this tests]
-
-**Steps:**
-1. [User action]
-2. [Another action]
-3. [...]
-
-**Expected Results:**
-- [Observable outcome]
-- [System state change]
-- [UI feedback]
-
-**Test Data:**
-```json
-{
-  "input": { ... },
-  "expected": { ... }
+      **Environment:** `swift test --filter BoardE2ETests`; no network.
+    '''
+    harness -> sys.receiver 'POST session-start hook payload'
+    sys.receiver -> sys.registry 'registers session'
+    harness -> sys.board 'reads board state' {
+      notes '''
+        **Expected:** exactly one card, column = running, title = repo dir name.
+        **Expected:** re-sending the same payload does not duplicate the card.
+      '''
+    }
+  }
 }
 ```
 
----
+Conventions:
+- Steps reuse the elements from `task.c4`/`contracts.c4`; the `harness` element
+  drives the flow. Error scenarios are their own views (drive the failing input,
+  assert the recovery).
+- **Proves** lists the exact `US-NNN AC-N` ids the scenario covers — this is the
+  coverage matrix, distributed across the views.
+- Every scenario ends in at least one step whose `notes` carry `**Expected:**`
+  assertions concrete enough to implement without ambiguity (specific values,
+  states, error codes — include test data inline where it matters).
+- Add scenario `metadata { framework / stories / priority }` on a companion
+  element if the view alone is insufficient — but prefer keeping everything in
+  the view.
 
-### TC-E2E-002: [Error Scenario]
+### 3. Record Coverage in progress.yaml
 
-**Description:** [What error case this tests]
+For each scenario, add its view id to the ACs it proves:
 
-**Steps:**
-1. [Action that triggers error]
-
-**Expected Results:**
-- [Error message shown]
-- [System remains in valid state]
-
-## Cleanup
-
-- [How to reset state after tests]
+```yaml
+stories:
+  - id: US-001
+    acceptance_criteria:
+      - id: AC-1
+        verify: automated
+        specs: [ts-e2e-01]     # planned coverage (the loop later fills tests:)
 ```
 
-#### Integration Tests (`test-specs/integration/`)
+Then check the matrix: every `verify: automated` AC must appear in at least one
+scenario's Proves list. **Every story needs E2E coverage or an explicit gap
+reason** — record gaps in `planning.test_specs.gaps`:
 
-Test component interactions and API behavior.
-
-```markdown
-# Integration Test Spec: [Component/API Name]
-
-**Related:** US-XXX, [code-change.md]
-**Priority:** Critical | High | Medium | Low
-**Status:** Draft | Ready | Implemented
-
-## Overview
-
-[What integration this tests]
-
-## Dependencies
-
-- [Database/service this needs]
-- [Mock requirements]
-
-## Test Cases
-
-### TC-INT-001: [Scenario Name]
-
-**Description:** [What this tests]
-
-**Setup:**
-```python
-# Fixture or setup code
+```yaml
+planning:
+  test_specs:
+    status: done
+    views: [ts-e2e-01, ts-e2e-02, ts-int-01]
+    gaps:
+      - { story: US-003, reason: "third-party API cannot be called E2E; covered by ts-int-01" }
 ```
 
-**Input:**
-```json
-{ ... }
+### 4. Compile Gate
+
+```bash
+likec4 validate {task_path}/model
 ```
 
-**Expected Output:**
-```json
-{ ... }
-```
-
-**Assertions:**
-- [Specific assertion]
-- [Database state check]
-- [Side effect verification]
-
----
-
-### TC-INT-002: [Error Handling]
-
-**Description:** [Error case]
-
-**Input:**
-```json
-{ "invalid": "data" }
-```
-
-**Expected:**
-- Status: 400
-- Error code: VALIDATION_ERROR
-
-## Data Fixtures
-
-```python
-@pytest.fixture
-def sample_data():
-    return { ... }
-```
-```
-
-#### Unit Tests (`test-specs/unit/`)
-
-Test isolated functions and classes.
-
-```markdown
-# Unit Test Spec: [Module/Function Name]
-
-**File:** `src/path/to/module.py`
-**Priority:** High | Medium | Low
-**Status:** Draft | Ready | Implemented
-
-## Overview
-
-[What logic this tests]
-
-## Test Cases
-
-### TC-UNIT-001: [Function] - [Scenario]
-
-**Input:** `function_name(arg1, arg2)`
-
-**Expected:** `expected_result`
-
-**Notes:** [Edge case or reason for test]
-
----
-
-### TC-UNIT-002: [Function] - [Edge Case]
-
-**Input:** `function_name(None, "")`
-
-**Expected:** Raises `ValueError`
-
-## Parameterized Cases
-
-| Input | Expected | Description |
-|-------|----------|-------------|
-| (1, 2) | 3 | Normal case |
-| (0, 0) | 0 | Zero case |
-| (-1, 1) | 0 | Negative case |
-
-## Mocks Required
-
-- `mock_external_service` - [Why mocked]
-```
-
-### 3. Map Stories to Tests
-
-Create coverage matrix. **Every story MUST have E2E coverage unless explicitly justified:**
-
-```markdown
-# Test Coverage Matrix
-
-| Story | E2E | Integration | Unit | E2E Gap Reason |
-|-------|-----|-------------|------|----------------|
-| US-001 | TC-E2E-001, TC-E2E-002 | TC-INT-001 | - | - |
-| US-002 | TC-E2E-003 | - | - | - |
-| US-003 | - | TC-INT-002, TC-INT-003 | - | Third-party API can't be called in E2E |
-```
-
-If a story has no E2E test, the "E2E Gap Reason" column MUST explain why.
-
-### 4. Update Test Specs README
-
-Update `{task_path}/test-specs/README.md`:
-
-```markdown
-# Test Specifications
-
-Test specs organized by type.
-
-## Coverage Summary
-
-| Type | Specs | Test Cases | Stories Covered |
-|------|-------|------------|-----------------|
-| E2E | 2 | 8 | US-001, US-002 |
-| Integration | 3 | 12 | US-001, US-002, US-003 |
-| Unit | 5 | 20 | US-001, US-003 |
-
-## Contents
-
-### E2E Tests
-- [user-authentication-flow.md](e2e/user-authentication-flow.md)
-
-### Integration Tests
-- [auth-api.md](integration/auth-api.md)
-
-### Unit Tests
-- [token-validator.md](unit/token-validator.md)
-```
-
-### 5. Update Subdirectory READMEs
-
-Update each type's README with its specific test specs.
+Fix any errors before review.
 
 ## Test Spec Guidelines
 
-Good test specs:
-- [ ] **Every user story has E2E coverage** (or an explicit reason why not)
-- [ ] E2E tests simulate the full user flow from start to finish
-- [ ] Integration tests only cover what E2E can't reach reliably
-- [ ] Unit tests only for complex isolated logic (not for glue code)
-- [ ] Map directly to acceptance criteria
-- [ ] Cover happy path AND error cases
-- [ ] Include specific test data
-- [ ] Define clear expected results
-- [ ] Are implementable without ambiguity
-- [ ] Don't duplicate coverage unnecessarily
+Good test scenarios:
+- [ ] Every story has E2E coverage (or an explicit gap reason in YAML)
+- [ ] E2E flows go trigger → system → observable outcome, start to finish
+- [ ] Integration scenarios only cover what E2E can't reach reliably
+- [ ] Unit scenarios only for complex isolated logic (not glue code)
+- [ ] Proves lists map 1:1 to real AC ids in progress.yaml
+- [ ] Happy path AND error cases each have a view
+- [ ] Expected notes are implementable without ambiguity
 
-**Anti-patterns to avoid:**
-- Writing only unit/integration tests with no E2E coverage
-- Testing internal implementation details instead of user-visible behavior
-- Over-mocking: if you need 5+ mocks, it should probably be an integration test with real dependencies
-- Unit tests for simple CRUD or delegation logic
+**Anti-patterns:**
+- Unit/integration-only coverage for a story with a walkable user flow
+- Testing implementation details instead of user-visible behavior
+- Over-mocking — 5+ mocks means it should be an integration test with real deps
+- Scenarios for `verify: manual` ACs
 
-## 6. Review Artifacts
+## 5. Review Artifacts
 
 Launch the reviewer agent to validate test specifications:
 
@@ -317,9 +173,10 @@ Task tool:
 
     Review mode: test-specs
     Task path: {task_path}
-    Artifacts to review: {task_path}/test-specs/**/*.md (exclude READMEs)
+    Artifacts to review: {task_path}/model/test-specs.c4 and the AC specs/gaps
+    entries in {task_path}/progress.yaml
 
-    Review the test specifications and report any issues.
+    Review the test scenarios and coverage and report any issues.
 ```
 
 If the reviewer finds blockers (🔴), fix before proceeding.
@@ -330,3 +187,9 @@ If the reviewer finds blockers (🔴), fix before proceeding.
 /saha:test-specs docs/tasks/task-01-auth
 /saha:test-specs --type=e2e
 ```
+
+## Output
+
+Creates or updates:
+- `{task_path}/model/test-specs.c4` (views `ts-e2e-NN` / `ts-int-NN` / `ts-unit-NN`)
+- `{task_path}/progress.yaml` (AC specs bindings + planning.test_specs with gaps)

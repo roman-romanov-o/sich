@@ -1,0 +1,62 @@
+// stories.c4 — user stories as step-by-step workflows (dynamic views).
+// Replaces user-stories/US-XXX-*.md. THIS is what the human reviews: every story is
+// a walkable, ordered flow — not a wall of text.
+//
+// Conventions (binding with ../progress.yaml — keep them in lockstep):
+//   - story element id `us-001` <-> progress.yaml story `US-001`
+//   - dynamic view id  `us-001-flow` <-> progress.yaml story `view:`
+//   - Acceptance criteria LIVE in progress.yaml (id, verify method, bound tests).
+//     Cite AC ids in step `notes` so the reviewer sees WHERE each AC is proven,
+//     but never duplicate their status here.
+//   - Steps reference elements declared in task.c4 / contracts.c4 (or add missing
+//     participants here). Use `<-` for responses, `parallel {}` for concurrency.
+
+model {
+  // One story element per story: the reviewable summary card.
+  us-001 = story 'US-001: {{story_title}}' {
+    #must
+    description '''
+      As a {{role}}, I want {{feature}} so that {{benefit}}.
+    '''
+    metadata {
+      priority 'must'
+      depends_on ''
+      decisions '{{DD-001}}'
+      edge_cases '{{edge_case_1}}; {{edge_case_2}}'
+    }
+  }
+  us-001 -> sys.new_part 'delivered by'
+}
+
+views {
+  dynamic view us-001-flow {
+    title 'US-001: {{story_title}}'
+    description '''
+      {{one_line_reviewer_orientation_for_this_flow}}
+    '''
+
+    user -> sys.new_part '{{step_1_user_action}}' {
+      notes '''
+        {{what_happens_and_why}}
+
+        **AC-1** — {{criterion_proven_at_this_step}}
+      '''
+    }
+    sys.new_part -> sys.existing_part '{{step_2_internal_call}}' {
+      notes '''
+        {{contract_or_data_involved}}
+      '''
+    }
+    sys.new_part <- sys.existing_part '{{step_3_response}}'
+    user <- sys.new_part '{{step_4_visible_outcome}}' {
+      notes '''
+        **AC-2** — {{observable_result_the_user_sees}}
+      '''
+    }
+
+    // parallel {
+    //   sys.new_part -> dep '{{concurrent_side_effect}}'
+    //   sys.new_part -> sys.existing_part '{{concurrent_update}}'
+    // }
+  }
+}

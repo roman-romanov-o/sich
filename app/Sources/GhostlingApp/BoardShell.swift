@@ -23,6 +23,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     // not cover whether the board is actually hidden / restored on screen.
     let boardView = BoardView()
     let attention = AttentionIndicator()
+    let fontControls = FontSizeControls(scope: .board)
     let drillIn = DrillInPanel()
     let planningMode = PlanningModeView()
     private(set) var sahaTaskChooser: SahaTaskChooserView?
@@ -62,6 +63,14 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     // so the 3s poll doesn't tear down and rebuild identical card views (flicker).
     private var lastSessionsSignature: [String] = []
     private var idleHoldUntil: [UUID: Date] = [:]
+    // User intent, not detector output: only a manual drop to DONE survives a restart
+    // as DONE. Everything else starts from queue and must earn WORKING again from
+    // fresh observations in the current app session.
+    private var manuallyDoneCardIDs: Set<UUID> = []
+    // A card manually moved out of DONE must not be pulled straight back by the stale
+    // finished run still present in the hook/session feed. Let fresh work reopen the
+    // automatic done path.
+    private var manuallyReopenedDoneCardIDs: Set<UUID> = []
 
     private var selection = BoardSelection()
     private(set) var cards: [BoardCard] = []
@@ -75,6 +84,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     private let repoRoot = RepoLocator.repoRoot()
     // Monotonic suffix so each "+ new session" card gets a unique sessionID.
     private var sessionCounter = 0
+    private var terminalFontSize: CGFloat = 20
 
     /// - Parameters:
     ///   - seeds: the sessions to populate the board with (defaults to the demo
@@ -90,21 +100,34 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
-        // US-003: reload + re-open the pre-quit session tree before the fresh seed lands.
-        restorePreviousSessions()
-        seedSessions()
+        BoardTheme.boardFontScale = 1.2
         makeWindow()
         installMainMenu()
         installTaskSwitchMonitor()
         wireInteractions()
         refresh()
+        // First paint should not wait for shell/PTY spawns, saved-session restore,
+        // quota disk walks, event-tail setup, or idempotent integration installs.
+        // Build and order the window first; hydrate the board just after AppKit gets
+        // a chance to present that empty-but-usable shell.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.finishStartupAfterFirstPaint()
+        }
+    }
+
+    private func finishStartupAfterFirstPaint() {
+        // US-003: reload + re-open the pre-quit session tree before the fresh seed lands.
+        restorePreviousSessions()
+        seedSessions()
+        refresh()
         startSessionPump()
         startQuotaBridge()
-        // Startup latency: the window is fully built above, so hand these disk-writing
-        // installs (hook forwarders, shell-integration) and the notification-auth
-        // prompt to the next runloop tick — they don't gate first paint, and running
-        // them inline was stalling the window's first appearance.
-        DispatchQueue.main.async { [weak self] in self?.installPostLaunchIntegrations() }
+        installPostLaunchIntegrations()
+        handleLaunchCaptureRequests()
+        maybeRunE2E()
+    }
+
+    private func handleLaunchCaptureRequests() {
         // Capture seam: `GHOSTLING_OPEN_PALETTE=1` opens the ⌘N create palette on launch
         // so a screenshot tool can grab the real composited chrome (not a CALayer render).
         if ProcessInfo.processInfo.environment["GHOSTLING_OPEN_PALETTE"] != nil {
@@ -136,7 +159,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
             }
             if let n = window?.windowNumber { FileHandle.standardError.write(Data("GHOSTLING_WINDOW=\(n)\n".utf8)) }
         }
-        maybeRunE2E()
     }
 
     /// `GHOSTLING_E2E=1` → once the window has rendered and the first native poll has
@@ -264,6 +286,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
                 }
             }
         }
+        reconcileCodexChoiceScreens()
         adaptPumpCadence(sawData: sawData)
     }
 
@@ -279,12 +302,45 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Codex has no Claude-style `Notification` hook, so its request_user_input menu
+    /// would otherwise sit in WORKING forever. Read the already-rendered emulator
+    /// screen for owned Codex cards and turn the narrow choice UI into the same
+    /// `.waitingForInput` state the board already understands.
+    private func reconcileCodexChoiceScreens() {
+        for (id, pty) in ptyByCard where pty.masterFD >= 0 {
+            guard let screen = try? pty.terminal.plainText() else { continue }
+            reconcileCodexChoiceScreen(cardID: id, screen: screen)
+        }
+    }
+
+    func reconcileCodexChoiceScreensForTesting() {
+        reconcileCodexChoiceScreens()
+    }
+
+    func reconcileCodexChoiceScreenForTesting(cardID: UUID, screen: String) {
+        reconcileCodexChoiceScreen(cardID: cardID, screen: screen)
+    }
+
+    private func reconcileCodexChoiceScreen(cardID: UUID, screen: String) {
+        guard let index = cards.firstIndex(where: { $0.id == cardID }),
+              cards[index].agent == .codex,
+              cards[index].state != .done
+        else { return }
+        let waiting = CodexChoiceScreen.isWaitingForChoice(screen)
+        if waiting, cards[index].state != .waitingForInput {
+            cards[index] = cards[index].with(state: .waitingForInput)
+            refresh()
+        } else if !waiting, cards[index].state == .waitingForInput {
+            cards[index] = cards[index].with(state: .running)
+            refresh()
+        }
+    }
+
     /// Keep the board honest about death: poll every owned child (`waitpid` WNOHANG
     /// via the registry) and reflect any that exited or crashed. A dead card off
     /// screen is removed outright (its shell is gone — a stale card is a lie); the
     /// drilled-in card first shows the end banner on its surface and is swept when
-    /// the operator returns to the board. This is the BoardShell counterpart of the
-    /// AppShell reconcile the shipped app never ran.
+    /// the operator returns to the board.
     @discardableResult
     func reconcileDeadSessions() -> [UUID] {
         var processed: [UUID] = []
@@ -332,10 +388,10 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         try? store.save(windows: enrichedSnapshotWindows())
     }
 
-    /// The registry snapshot, enriched with each pane's app-level card metadata (the
-    /// human title + saha task folder) so a restart brings the *task* back, not just an
-    /// unnamed shell at the same cwd. Core builds panes from sessions and has no notion
-    /// of a card title, so the join by sessionID belongs here in the app layer.
+    /// The registry snapshot, enriched with each pane's app-level card metadata (identity,
+    /// human title, column, saha task folder) so a restart brings the *task* back, not just
+    /// an unnamed shell at the same cwd. Core builds panes from sessions and has no notion
+    /// of a card, so the join belongs here in the app layer.
     private func enrichedSnapshotWindows() -> [WindowSnapshot] {
         registry.snapshotWindows().map { window in
             WindowSnapshot(panes: window.panes.map(enrich(pane:)))
@@ -344,7 +400,14 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
 
     private func enrich(pane: PaneSnapshot) -> PaneSnapshot {
         guard let card = card(forSessionID: pane.sessionID) else { return pane }
-        return pane.with(title: card.title, taskFolder: card.taskFolder)
+        return pane.with(
+            cardID: card.id, cardState: persistedRestartState(for: card),
+            title: card.title, taskFolder: card.taskFolder
+        )
+    }
+
+    private func persistedRestartState(for card: BoardCard) -> CardState {
+        manuallyDoneCardIDs.contains(card.id) ? .done : .idle
     }
 
     /// The card driving a registry session — joined through the pty the two share
@@ -395,18 +458,31 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         // not as a bare shell: resume the pinned id we persisted. The restored session
         // carries the ORIGINAL id forward (not its own fresh `id`), so the resume token
         // survives an unbounded chain of restarts. Interactive `claude` only — firewall-clean.
-        if let claudeID = pane.snapshot.claudeSessionID, pane.liveness == .reopened {
+        if let claudeID = Self.claudeResumeID(for: pane.snapshot), pane.liveness == .reopened {
             session.recordClaudeSession(claudeID)
-            _ = session.pty.send(Array(Self.resumeClaudeCommand(sessionID: claudeID).utf8))
+        } else if pane.snapshot.agentType == .codex, pane.liveness == .reopened {
+            HookInstaller.installCodexShim()
         }
+        if let command = Self.restoredAgentCommand(for: pane.snapshot), pane.liveness == .reopened {
+            _ = session.pty.send(Array(command.utf8))
+        }
+        // Identity and column both come from the snapshot. The id must be the ORIGINAL:
+        // the shell we just re-opened exports it as GHOSTLING_CARD_ID, and a fresh UUID
+        // here would leave every incoming hook line pointing at a card that doesn't exist,
+        // freezing this card in place for the rest of the app's life.
         let card = BoardCard(
+            id: pane.snapshot.cardID ?? UUID(),
             sessionID: pane.snapshot.sessionID.uuidString,
             title: pane.snapshot.title, projectDir: pane.cwd,
             agent: Self.cardAgent(for: pane.snapshot.agentType),
-            flow: Self.cardFlow(for: pane.snapshot.flowTag), state: .idle,
+            flow: Self.cardFlow(for: pane.snapshot.flowTag),
+            state: pane.snapshot.cardState ?? .idle,
             taskFolder: pane.snapshot.taskFolder
         )
         cards.append(card)
+        if card.state == .done {
+            manuallyDoneCardIDs.insert(card.id)
+        }
         ptyByCard[card.id] = session.pty
     }
 
@@ -425,11 +501,34 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         "claude --resume \(sessionID.uuidString.lowercased()) 2>/dev/null || claude\n"
     }
 
-    /// Start a Codex CLI session in the already-open login shell. Unlike Claude Code,
-    /// we do not own a stable external conversation id here, so restore only reopens
-    /// the pane; it does not try to resume Codex.
+    /// Prefer the explicit pinned Claude conversation id. For snapshots written before
+    /// that field existed, a Claude pane's own session id is the best available resume
+    /// token: newer create paths pinned Claude to that id, and if no transcript exists
+    /// the generated command falls back to fresh interactive `claude`.
+    static func claudeResumeID(for pane: PaneSnapshot) -> UUID? {
+        pane.claudeSessionID ?? (pane.agentType == .claude ? pane.sessionID : nil)
+    }
+
+    static func restoredAgentCommand(for pane: PaneSnapshot) -> String? {
+        if let claudeID = claudeResumeID(for: pane) {
+            return resumeClaudeCommand(sessionID: claudeID)
+        }
+        if pane.agentType == .codex {
+            return resumeCodexCommand()
+        }
+        return nil
+    }
+
+    /// Start a Codex CLI session in the already-open login shell.
     static func startCodexCommand() -> String {
-        "codex\n"
+        "\(HookInstaller.codexShimPath())/codex\n"
+    }
+
+    /// Resume the most recent Codex interactive session for this cwd. Codex owns its
+    /// saved session ids, so we use its cwd-filtered `--last` behavior instead of
+    /// inventing an app-level id.
+    static func resumeCodexCommand() -> String {
+        "\(HookInstaller.codexShimPath())/codex resume --last\n"
     }
 
     /// US-004: install Ghostty shell-integration idempotently (a no-op on the second
@@ -556,6 +655,23 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         remote.keyEquivalentModifierMask = [.command, .shift]
         remote.target = self
         appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Increase Board Font",
+                        action: #selector(increaseBoardFontMenuAction),
+                        keyEquivalent: "=").target = self
+        appMenu.addItem(withTitle: "Decrease Board Font",
+                        action: #selector(decreaseBoardFontMenuAction),
+                        keyEquivalent: "-").target = self
+        let terminalUp = appMenu.addItem(withTitle: "Increase Terminal Font",
+                                         action: #selector(increaseTerminalFontMenuAction),
+                                         keyEquivalent: "+")
+        terminalUp.keyEquivalentModifierMask = [.command, .shift]
+        terminalUp.target = self
+        let terminalDown = appMenu.addItem(withTitle: "Decrease Terminal Font",
+                                           action: #selector(decreaseTerminalFontMenuAction),
+                                           keyEquivalent: "_")
+        terminalDown.keyEquivalentModifierMask = [.command, .shift]
+        terminalDown.target = self
+        appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit Ghostling", action: #selector(NSApplication.terminate(_:)),
                         keyEquivalent: "q")
         let appItem = NSMenuItem()
@@ -566,6 +682,10 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     }
 
     @objc private func newTaskMenuAction() { openCreatePalette() }
+    @objc private func increaseBoardFontMenuAction() { changeBoardFont(by: 0.1) }
+    @objc private func decreaseBoardFontMenuAction() { changeBoardFont(by: -0.1) }
+    @objc private func increaseTerminalFontMenuAction() { changeTerminalFont(by: 1) }
+    @objc private func decreaseTerminalFontMenuAction() { changeTerminalFont(by: -1) }
 
     /// Prompt for a remote destination + tmux session, then open the card. Kept thin:
     /// destination parsing lives in `RemoteTmuxSpec.parse` and card creation in
@@ -635,13 +755,15 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     /// gracefully, so deferring them changes only *when* they run, not *whether*.
     private func installPostLaunchIntegrations() {
         SystemNotifier.requestAuthorization()
-        // Auto-wire the board's hook forwarder so real interactive sessions in this
-        // repo appear on the board — the app installs it (the agent can't).
-        if let repoRoot { HookInstaller.install(repoRoot: repoRoot) }
-        // …and USER-level, so claude sessions in ANY project dir (task cards point at
-        // other repos too) emit hook lines — without this, a card whose repo lacks the
-        // forwarder never moves columns while its agent works.
-        HookInstaller.installGlobal()
+        // Clean up old global Ghostling Claude hooks from prior builds; status is now
+        // scoped through managed PATH shims below, so global config would duplicate and
+        // cross-contaminate unrelated Claude sessions.
+        HookInstaller.uninstallGlobal()
+        // Managed PATH shims inject hooks per invocation, cmux-style. This keeps
+        // Claude/Codex status scoped to Ghostling-owned terminals instead of mutating
+        // global agent config and cross-contaminating unrelated sessions.
+        HookInstaller.installClaudeShim()
+        HookInstaller.installCodexShim()
         // US-004: install Ghostty shell-integration the same way (idempotent; non-zsh
         // and write failures degrade gracefully) so the shell reports cwd semantically.
         installShellIntegration(installRoot: Self.shellIntegrationRoot(), rc: Self.defaultZshrc())
@@ -689,7 +811,12 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.backgroundColor = BoardTheme.canvas
-        window.appearance = NSAppearance(named: .darkAqua)
+        // Follow the system appearance (nil) rather than pinning `.darkAqua`. Every
+        // surface is painted from `BoardTheme`'s dynamic light/dark tokens, so pinning
+        // dark froze `effectiveAppearance` and stopped those tokens — and the terminal
+        // surface, whose live-flip hook keys off appearance changes — from ever
+        // resolving light. Following the system flips the whole app, terminal included.
+        window.appearance = nil
         // The fixed 5-column board clips below ~1360pt with no scroll signal
         // (ColumnLayout's known ceiling) — stop the window from shrinking into it.
         window.contentMinSize = NSSize(width: 1360, height: 640)
@@ -701,14 +828,17 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     }
 
     private func makeContentView(in size: NSSize) -> NSView {
-        let root = NSView(frame: NSRect(origin: .zero, size: size))
-        root.wantsLayer = true
-        root.layer?.backgroundColor = BoardTheme.canvas.cgColor
-        // The whole UI is a hand-painted dark theme on near-black surfaces. Tell
-        // AppKit it IS dark so any standard control chrome (text-field focus rings,
-        // selection) is drawn light-on-dark rather than light/aqua.
-        root.appearance = NSAppearance(named: .darkAqua)
+        // A `ThemedRootView`, not a plain NSView: it owns the single appearance hook the
+        // whole window hangs off, re-resolving every `themedBackground`/`themedBorder`
+        // beneath it on a light/dark flip. Layer fills snapshot their colour when set, so
+        // without this the board would flip and the drill-in and quota panel would not.
+        let root = ThemedRootView(frame: NSRect(origin: .zero, size: size))
+        root.themedBackground = BoardTheme.canvas
+        // Follow the system appearance (don't pin `.darkAqua`): the UI is painted from
+        // `BoardTheme`'s dynamic light/dark tokens, and standard control chrome should
+        // match the active system theme so the app reads light in light mode.
         layout(attention, in: root, header: true)
+        layoutFontControls(in: root)
         layoutQuota(in: root)
         layout(boardView, in: root, header: false)
         drillIn.isHidden = true
@@ -739,6 +869,17 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
             quota.topAnchor.constraint(equalTo: root.topAnchor, constant: 32),
             quota.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             quota.widthAnchor.constraint(equalToConstant: 340),
+        ])
+    }
+
+    private func layoutFontControls(in root: NSView) {
+        fontControls.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(fontControls)
+        NSLayoutConstraint.activate([
+            fontControls.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
+            fontControls.topAnchor.constraint(equalTo: root.topAnchor, constant: 10),
+            fontControls.heightAnchor.constraint(equalToConstant: 30),
+            fontControls.widthAnchor.constraint(equalToConstant: fontControls.intrinsicContentSize.width),
         ])
     }
 
@@ -792,8 +933,28 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         boardView.onRename = { [weak self] in self?.promptRename(for: $0) }
         boardView.onDelete = { [weak self] in self?.promptDelete(for: $0) }
         attention.onActivate = { [weak self] in self?.activateAttention() }
+        fontControls.onBoardSmaller = { [weak self] in self?.changeBoardFont(by: -0.1) }
+        fontControls.onBoardLarger = { [weak self] in self?.changeBoardFont(by: 0.1) }
+        drillIn.onTerminalSmaller = { [weak self] in self?.changeTerminalFont(by: -1) }
+        drillIn.onTerminalLarger = { [weak self] in self?.changeTerminalFont(by: 1) }
+        planningMode.onTerminalSmaller = { [weak self] in self?.changeTerminalFont(by: -1) }
+        planningMode.onTerminalLarger = { [weak self] in self?.changeTerminalFont(by: 1) }
         drillIn.onClose = { [weak self] in self?.returnToBoard() }
         planningMode.onReturn = { [weak self] in self?.returnToBoard() }
+    }
+
+    private func changeBoardFont(by delta: CGFloat) {
+        BoardTheme.boardFontScale = min(1.8, max(1.0, BoardTheme.boardFontScale + delta))
+        boardView.applyFontScale()
+        attention.update(count: attention.renderedCount)
+        quota.render(gauges: QuotaProjection.gauges(from: quotaSources))
+        window?.contentView?.layoutSubtreeIfNeeded()
+    }
+
+    private func changeTerminalFont(by delta: CGFloat) {
+        terminalFontSize = min(28, max(12, terminalFontSize + delta))
+        drillIn.updateTerminalFontSize(terminalFontSize)
+        planningMode.updateTerminalFontSize(terminalFontSize)
     }
 
     /// The "+ new session" affordance (⌘N): open the keyboard-first create palette —
@@ -991,6 +1152,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
             session.recordClaudeSession(session.id)
             _ = session.pty.send(Array(Self.startClaudeCommand(sessionID: session.id).utf8))
         } else if autoStartAgent == .codex {
+            HookInstaller.installCodexShim()
             _ = session.pty.send(Array(Self.startCodexCommand().utf8))
         }
         refresh()
@@ -1107,13 +1269,16 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         planningModeCardID = card.id
         boardView.isHidden = true
         attention.isHidden = true
+        fontControls.isHidden = true
         quota.isHidden = true
         drillIn.isHidden = true
         planningMode.show(card: card)
         // Mount the card's already-registered interactive session as the planning
         // terminal (US-004 AC2) — reused, never a new spawn. Its surface now owns the
         // fd, so the background pump must skip it (one reader per fd).
-        if let pty = ptyByCard[card.id] { planningMode.attach(session: pty) }
+        if let pty = ptyByCard[card.id] {
+            planningMode.attach(session: pty, terminalFontSize: terminalFontSize)
+        }
         planningMode.isHidden = false
         if let surface = planningMode.terminalSurface {
             window?.makeFirstResponder(surface)
@@ -1141,7 +1306,17 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     /// terminal keeps working; only the state — hence the board column — changes.
     func move(cardID: UUID, to column: BoardColumn) {
         guard let idx = cards.firstIndex(where: { $0.id == cardID }) else { return }
+        let previousState = cards[idx].state
         cards[idx] = cards[idx].with(state: column.state)
+        if column == .done {
+            manuallyDoneCardIDs.insert(cardID)
+            manuallyReopenedDoneCardIDs.remove(cardID)
+        } else {
+            if previousState == .done {
+                manuallyReopenedDoneCardIDs.insert(cardID)
+            }
+            manuallyDoneCardIDs.remove(cardID)
+        }
         refresh()
     }
 
@@ -1231,9 +1406,10 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         drilledInCardID = card.id   // its surface owns the fd now; the pump skips it
         boardView.isHidden = true
         attention.isHidden = true
+        fontControls.isHidden = true
         quota.isHidden = true
         drillIn.isHidden = false
-        drillIn.focus(card: card, pty: pty)
+        drillIn.focus(card: card, pty: pty, terminalFontSize: terminalFontSize)
         drillIn.update(diffs: turnDiffs)
         drillIn.updateQuota(QuotaProjection.gauges(from: quotaSources))
     }
@@ -1248,6 +1424,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         drilledInCardID = nil   // surface is detaching; the pump resumes draining this fd
         boardView.isHidden = false
         attention.isHidden = false
+        fontControls.isHidden = false
         quota.isHidden = false
         drillIn.isHidden = true
         // Release the planning terminal's view (the pump resumes draining its fd) but
@@ -1438,15 +1615,30 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     /// working→at-rest live transitions prevents column jitter while keeping
     /// attention, blocked, done, and manual moves immediate.
     private func smoothLiveState(card: BoardCard, observed state: CardState) -> BoardCard {
+        let next = startedSafe(card: card, observed: state)
         guard state == .idle || state == .unknown,
               card.state == .running || card.state == .runningTests else {
             idleHoldUntil.removeValue(forKey: card.id)
-            return card.with(state: state)
+            return card.with(state: next)
         }
         let now = Date()
         let deadline = idleHoldUntil[card.id] ?? now.addingTimeInterval(Self.idleHoldInterval)
         idleHoldUntil[card.id] = deadline
-        return now < deadline ? card : card.with(state: state)
+        return now < deadline ? card : card.with(state: next)
+    }
+
+    /// Apply sticky terminal state without guessing attention. A stopped or stale
+    /// observation should render as idle/unknown, while a completed card stays
+    /// completed until the operator manually moves it. Explicit notification/permission
+    /// events carry `.waitingForInput` only for non-terminal cards.
+    private func startedSafe(card: BoardCard, observed state: CardState) -> CardState {
+        if manuallyReopenedDoneCardIDs.contains(card.id) {
+            if state == .done { return card.state }
+            if state == .running || state == .runningTests {
+                manuallyReopenedDoneCardIDs.remove(card.id)
+            }
+        }
+        return card.state.detectorFallback ?? state
     }
 
     /// The live state to show on an owned terminal card: the detected state of the

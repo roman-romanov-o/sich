@@ -20,6 +20,7 @@ final class PlanningStepButton: NSTextField {
     init(step: PlanningStep, status: PlanningStepStatus, isNext: Bool) {
         self.step = step
         super.init(frame: .zero)
+        useCenteredTextCell()
         stringValue = step.shortName
         toolTip = "\(step.rawValue) — \(step.command)"
         font = isNext ? BoardTheme.monoBold : BoardTheme.monoSmall
@@ -34,18 +35,18 @@ final class PlanningStepButton: NSTextField {
         switch (status, isNext) {
         case (.complete, _):
             textColor = done
-            layer?.backgroundColor = done.withAlphaComponent(0.10).cgColor
+            themedBackground = done.withAlphaComponent(0.10)
         case (_, true):
             textColor = BoardTheme.attention
-            layer?.backgroundColor = BoardTheme.attention.withAlphaComponent(0.12).cgColor
+            themedBackground = BoardTheme.attention.withAlphaComponent(0.12)
             layer?.borderWidth = 1
-            layer?.borderColor = BoardTheme.attention.withAlphaComponent(0.33).cgColor
+            themedBorder = BoardTheme.attention.withAlphaComponent(0.33)
         case (.malformed, _):
             textColor = BoardTheme.alert
-            layer?.backgroundColor = BoardTheme.alert.withAlphaComponent(0.08).cgColor
+            themedBackground = BoardTheme.alert.withAlphaComponent(0.08)
         default:
             textColor = BoardTheme.textDim
-            layer?.backgroundColor = BoardTheme.cardFill.cgColor
+            themedBackground = BoardTheme.cardFill
         }
     }
 
@@ -83,12 +84,17 @@ final class PlanningStepButton: NSTextField {
 final class PlanningReviewButton: NSTextField {
     let step: PlanningStep
     let url: URL?
-    var onClick: ((PlanningStep, URL?) -> Void)?
+    /// Stable review identity (saha/v2: a LikeC4 view id like `us-001-flow`; legacy:
+    /// the file name). Several v2 items share one `url` (the model file), so clicks
+    /// must disambiguate by this key, not the URL.
+    let reviewKey: String?
+    var onClick: ((PlanningReviewButton) -> Void)?
 
     init(step: PlanningStep, url: URL?, marker: String, title: String, selected: Bool,
-         commentCount: Int) {
+         commentCount: Int, reviewKey: String? = nil) {
         self.step = step
         self.url = url
+        self.reviewKey = reviewKey
         super.init(frame: .zero)
         let suffix = commentCount > 0 ? "   \(commentCount)●" : ""
         stringValue = "\(marker)  \(title)\(suffix)"
@@ -102,10 +108,10 @@ final class PlanningReviewButton: NSTextField {
         isSelectable = false
         drawsBackground = false
         wantsLayer = true
-        layer?.backgroundColor = selected
-            ? BoardTheme.attention.withAlphaComponent(0.08).cgColor : NSColor.clear.cgColor
+        themedBackground = selected
+            ? BoardTheme.attention.withAlphaComponent(0.08) : NSColor.clear
         layer?.borderWidth = selected ? 1 : 0
-        layer?.borderColor = BoardTheme.attention.withAlphaComponent(0.32).cgColor
+        themedBorder = BoardTheme.attention.withAlphaComponent(0.32)
         layer?.cornerRadius = 4
     }
 
@@ -120,7 +126,7 @@ final class PlanningReviewButton: NSTextField {
     }
 
     override func mouseDown(with event: NSEvent) {
-        onClick?(step, url)
+        onClick?(self)
     }
 }
 
@@ -130,6 +136,7 @@ final class PlanningActionPill: NSTextField {
 
     init(title: String, fill: NSColor?, text: NSColor, border: NSColor? = nil) {
         super.init(frame: .zero)
+        useCenteredTextCell()
         stringValue = title
         font = BoardTheme.monoBold
         textColor = text
@@ -139,9 +146,9 @@ final class PlanningActionPill: NSTextField {
         isSelectable = false
         drawsBackground = false
         wantsLayer = true
-        layer?.backgroundColor = (fill ?? NSColor.clear).cgColor
+        themedBackground = fill ?? NSColor.clear
         layer?.borderWidth = border == nil ? 0 : 1
-        layer?.borderColor = border?.cgColor
+        themedBorder = border
         layer?.cornerRadius = 5
     }
 
@@ -221,6 +228,7 @@ final class PlanningModeView: NSView {
     let reviewLeftField = NSTextField(labelWithString: "")
     let terminalStatusField = NSTextField(labelWithString: "")
     let railDraftField = NSTextField(labelWithString: "")
+    private let terminalFontControls = FontSizeControls(scope: .terminal)
     /// The design's span-comment composer, scoped to the selected file. Editable —
     /// the one stock text field here; typing is not a custom-drawn interaction.
     let commentField = NSTextField()
@@ -240,8 +248,13 @@ final class PlanningModeView: NSView {
         border: BoardTheme.brand.withAlphaComponent(0.36)
     )
     let architecturePane = ArchitecturePane()
+    /// saha/v2 story/diagram viewer: overlays only the document scroll area so the doc
+    /// header (approve) and comment composer stay usable while a LikeC4 view is up.
+    /// Torn down with the architecture pane (0 RAM after leaving Planning Mode).
+    let storyPane = ArchitecturePane()
     private var showingArchitecture = false
     private weak var panesView: NSView?
+    private weak var documentScrollView: NSScrollView?
     let sendFeedbackButton = PlanningActionPill(
         title: "Send feedback → terminal", fill: BoardTheme.attention,
         text: BoardTheme.canvas
@@ -268,6 +281,10 @@ final class PlanningModeView: NSView {
     private(set) var state: PlanningState?
     private(set) var selectedStep: PlanningStep?
     private(set) var selectedArtifactURL: URL?
+    /// Canonical selection identity (`PlanningArtifactState.reviewKey`): the view id
+    /// for saha/v2 diagram items, the file name for markdown items. `selectedArtifactURL`
+    /// is kept in sync but is ambiguous for v2 (many views share one model file).
+    private(set) var selectedReviewKey: String?
     private(set) var lastFeedback: String?
     /// Roots tried (in order) when resolving a `foo/Bar.swift` doc link to a file on disk.
     private var projectDir: String?
@@ -276,6 +293,8 @@ final class PlanningModeView: NSView {
     private(set) var isViewingFile = false
     var onReturn: (() -> Void)?
     var onSuggestCommand: ((String) -> Void)?
+    var onTerminalSmaller: (() -> Void)?
+    var onTerminalLarger: (() -> Void)?
 
     /// Test seam: the mounted terminal, so a registry/pool-firewall test can assert the
     /// planning pane hosts the very session registered elsewhere (US-004 AC2).
@@ -290,7 +309,7 @@ final class PlanningModeView: NSView {
         self.reader = reader
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = BoardTheme.documentChrome.cgColor
+        themedBackground = BoardTheme.documentChrome
         returnButton.onClick = { [weak self] in self?.onReturn?() }
         // A mermaid diagram renders off-main and swaps in when ready — re-render the
         // current doc so the fallback text is replaced by the finished image.
@@ -320,9 +339,9 @@ final class PlanningModeView: NSView {
         documentPane.autoresizingMask = [.width]
         documentPane.textContainer?.widthTracksTextView = true
         terminalContainer.wantsLayer = true
-        terminalContainer.layer?.backgroundColor = BoardTheme.documentChrome.cgColor
+        terminalContainer.themedBackground = BoardTheme.documentChrome
         terminalRail.wantsLayer = true
-        terminalRail.layer?.backgroundColor = BoardTheme.documentChrome.cgColor
+        terminalRail.themedBackground = BoardTheme.documentChrome
         feedbackField.font = BoardTheme.monoSmall
         feedbackField.textColor = BoardTheme.attention
         progressField.font = BoardTheme.monoSmall
@@ -344,6 +363,8 @@ final class PlanningModeView: NSView {
         commentField.target = self
         commentField.action = #selector(commentFieldEntered)
         terminalToggle.onClick = { [weak self] in self?.toggleTerminal() }
+        terminalFontControls.onTerminalSmaller = { [weak self] in self?.onTerminalSmaller?() }
+        terminalFontControls.onTerminalLarger = { [weak self] in self?.onTerminalLarger?() }
         architectureToggle.toolTip = "Architecture"
         architectureToggle.onClick = { [weak self] in self?.toggleArchitecture() }
         sendFeedbackButton.onClick = { [weak self] in self?.sendFeedbackDraft() }
@@ -384,6 +405,11 @@ final class PlanningModeView: NSView {
         panes.orientation = .horizontal
         panes.alignment = .top
         panes.spacing = 0
+        // The rails/terminal have fixed widths; the reader must absorb ALL spare
+        // width or the pane group floats centered with a hugged ~350pt reader —
+        // unusable for reviewing story diagrams.
+        panes.distribution = .fill
+        reader.setContentHuggingPriority(.init(1), for: .horizontal)
         panesView = panes
 
         let root = NSStackView(views: [header, headerRule, panes])
@@ -391,9 +417,9 @@ final class PlanningModeView: NSView {
         root.translatesAutoresizingMaskIntoConstraints = false
         root.spacing = 0
         root.wantsLayer = true
-        root.layer?.backgroundColor = BoardTheme.documentChrome.cgColor
+        root.themedBackground = BoardTheme.documentChrome
         root.layer?.borderWidth = 1
-        root.layer?.borderColor = BoardTheme.cardStroke.cgColor
+        root.themedBorder = BoardTheme.cardStroke
         root.layer?.cornerRadius = 10
         addSubview(root)
         terminalRail.isHidden = true
@@ -407,6 +433,10 @@ final class PlanningModeView: NSView {
             header.heightAnchor.constraint(equalToConstant: 48),
             headerRule.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             headerRule.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            // The root stack's default .centerX alignment would otherwise let the
+            // pane row hug its fitting width and float centered.
+            panes.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            panes.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             divider.heightAnchor.constraint(equalToConstant: 16),
             rail.widthAnchor.constraint(equalToConstant: 270),
             terminalWidthConstraint!,
@@ -416,6 +446,15 @@ final class PlanningModeView: NSView {
         ])
         buildTerminalRail()
         applyTerminalPresentation()
+        // The saha/v2 story pane covers only the doc scroll area — the doc header
+        // (approve) and comment composer stay interactive around it. It is frame-managed
+        // (see `layout()`), NEVER constraint-pinned: any required equality onto the
+        // scroll view gives it a tiny defined fitting width from the pane's internal
+        // labels, and the reader stack then hugs ~28pt instead of stretching to fill.
+        storyPane.autoresizingMask = []
+        storyPane.isHidden = true
+        documentScroll.addSubview(storyPane)
+        documentScrollView = documentScroll
         // The architecture pane overlays the three-pane content region (rail+reader+terminal),
         // added last so it draws on top when toggled on; hidden and weightless otherwise.
         architecturePane.translatesAutoresizingMaskIntoConstraints = false
@@ -436,15 +475,31 @@ final class PlanningModeView: NSView {
         architectureToggle.stringValue = showingArchitecture ? "◫✓" : "◫"
         if showingArchitecture {
             architecturePane.isHidden = false
-            if let projectDir {
+            if state?.isV2 == true, let taskFolder {
+                // v2: the task's own LikeC4 project is the architecture to show.
+                architecturePane.present(projectDir: taskFolder, modelDir: "model",
+                                         deepLinkView: currentArchitectureViewID())
+            } else if let projectDir {
                 architecturePane.present(
                     projectDir: URL(fileURLWithPath: projectDir),
-                    deepLinkView: taskFolder?.lastPathComponent)
+                    deepLinkView: currentArchitectureViewID())
             }
         } else {
             architecturePane.isHidden = true
             architecturePane.teardown()
         }
+    }
+
+    private func currentArchitectureViewID() -> String? {
+        if let viewID = selectedArtifact?.viewID { return viewID }
+        return taskFolder?.lastPathComponent
+    }
+
+    /// The artifact the selection identity currently points at (v2-safe: keyed by
+    /// `reviewKey`, never by the shared model-file URL).
+    private var selectedArtifact: PlanningArtifactState? {
+        guard let selectedReviewKey else { return nil }
+        return state?.artifacts.first { $0.reviewKey == selectedReviewKey }
     }
 
     private func makeReviewRail() -> NSView {
@@ -469,8 +524,8 @@ final class PlanningModeView: NSView {
         stack.edgeInsets = NSEdgeInsets(top: 14, left: 16, bottom: 14, right: 14)
         let view = NSView()
         view.wantsLayer = true
-        view.layer?.backgroundColor = BoardTheme.documentChrome.cgColor
-        view.layer?.borderColor = BoardTheme.hairline.cgColor
+        view.themedBackground = BoardTheme.documentChrome
+        view.themedBorder = BoardTheme.hairline
         view.layer?.borderWidth = 0
         stack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(stack)
@@ -503,8 +558,8 @@ final class PlanningModeView: NSView {
         stack.orientation = .vertical
         stack.spacing = 0
         stack.wantsLayer = true
-        stack.layer?.backgroundColor = BoardTheme.documentSurface.cgColor
-        stack.layer?.borderColor = BoardTheme.cardStrokeStrong.cgColor
+        stack.themedBackground = BoardTheme.documentSurface
+        stack.themedBorder = BoardTheme.cardStrokeStrong
         stack.layer?.borderWidth = 1
         header.edgeInsets = NSEdgeInsets(top: 8, left: 16, bottom: 8, right: 16)
         header.heightAnchor.constraint(equalToConstant: 40).isActive = true
@@ -515,7 +570,7 @@ final class PlanningModeView: NSView {
     private func makeTerminalPanel() -> NSView {
         let dot = NSView()
         dot.wantsLayer = true
-        dot.layer?.backgroundColor = BoardTheme.stateColor(.done).cgColor
+        dot.themedBackground = BoardTheme.stateColor(.done)
         dot.layer?.cornerRadius = 3
         let title = label("Claude Code · planning", font: BoardTheme.monoSmall,
                           color: BoardTheme.textMuted)
@@ -525,7 +580,7 @@ final class PlanningModeView: NSView {
         )
         collapse.onClick = { [weak self] in self?.toggleTerminal() }
         let spacer = NSView()
-        let header = NSStackView(views: [dot, title, spacer, collapse])
+        let header = NSStackView(views: [dot, title, spacer, terminalFontControls, collapse])
         header.orientation = .horizontal
         header.alignment = .centerY
         header.spacing = 8
@@ -533,8 +588,8 @@ final class PlanningModeView: NSView {
         stack.orientation = .vertical
         stack.spacing = 0
         stack.wantsLayer = true
-        stack.layer?.backgroundColor = BoardTheme.documentChrome.cgColor
-        stack.layer?.borderColor = BoardTheme.hairline.cgColor
+        stack.themedBackground = BoardTheme.documentChrome
+        stack.themedBorder = BoardTheme.hairline
         stack.layer?.borderWidth = 1
         header.edgeInsets = NSEdgeInsets(top: 8, left: 14, bottom: 8, right: 14)
         NSLayoutConstraint.activate([
@@ -548,7 +603,7 @@ final class PlanningModeView: NSView {
     private func buildTerminalRail() {
         let dot = NSView()
         dot.wantsLayer = true
-        dot.layer?.backgroundColor = BoardTheme.stateColor(.done).cgColor
+        dot.themedBackground = BoardTheme.stateColor(.done)
         dot.layer?.cornerRadius = 3
         terminalStatusField.stringValue = "Claude Code"
         railDraftField.stringValue = ""
@@ -604,9 +659,9 @@ final class PlanningModeView: NSView {
     /// Mount the card's already-registered interactive session as the planning terminal
     /// (US-004 AC2). This reuses the exact session in ``SessionRegistry`` — no new spawn,
     /// no `claude -p` — the same way ``DrillInPanel/focus(card:pty:)`` reuses one.
-    func attach(session: PTYSession) {
-        detachSurface()
-        let surface = TerminalSurface(session: session)
+    func attach(session: PTYSession, terminalFontSize: CGFloat = 20) {
+        detachTerminalSurface(shouldResetArchitecture: false)
+        let surface = TerminalSurface(session: session, fontSize: terminalFontSize)
         surface.onBack = { [weak self] in self?.onReturn?(); return true }
         surface.translatesAutoresizingMaskIntoConstraints = false
         terminalContainer.addSubview(surface)
@@ -620,14 +675,24 @@ final class PlanningModeView: NSView {
         self.surface = surface
     }
 
+    func updateTerminalFontSize(_ size: CGFloat) {
+        guard let session = surface?.ptySession else { return }
+        detachTerminalSurface(shouldResetArchitecture: false)
+        attach(session: session, terminalFontSize: size)
+    }
+
     /// Release the planning terminal's *view* on return — stop reading and unmount, but
     /// never terminate the session, so it stays registered exactly as drill-in leaves it
     /// (US-004 AC5 / TC-E2E-014).
     func detachSurface() {
+        detachTerminalSurface(shouldResetArchitecture: true)
+    }
+
+    private func detachTerminalSurface(shouldResetArchitecture: Bool) {
         surface?.stopReading()
         surface?.removeFromSuperview()
         surface = nil
-        resetArchitecture()
+        if shouldResetArchitecture { resetArchitecture() }
     }
 
     /// Close and free the Architecture pane (0 RAM on leave / card switch).
@@ -636,6 +701,8 @@ final class PlanningModeView: NSView {
         architectureToggle.stringValue = "◫"
         architecturePane.isHidden = true
         architecturePane.teardown()
+        storyPane.isHidden = true
+        storyPane.teardown()
     }
 
     /// Test seam: fire every armed folder watcher as if the kernel saw a write,
@@ -648,9 +715,9 @@ final class PlanningModeView: NSView {
         self.state = state
         rebuildStepper(state)
         rebuildReviewList(state)
-        if let selectedArtifactURL,
-           state.artifacts.contains(where: { $0.url == selectedArtifactURL }) {
-            selectArtifact(selectedArtifactURL)
+        if let selectedReviewKey,
+           let artifact = state.artifacts.first(where: { $0.reviewKey == selectedReviewKey }) {
+            selectArtifact(artifact)
         } else {
             selectStep(selectedStep ?? state.nextIncomplete?.step, preferArtifact: true)
         }
@@ -677,27 +744,28 @@ final class PlanningModeView: NSView {
         if artifacts.isEmpty {
             let button = PlanningReviewButton(
                 step: currentStep, url: nil, marker: "○", title: "\(currentStep.rawValue) draft",
-                selected: selectedArtifactURL == nil && selectedStep == currentStep,
+                selected: selectedReviewKey == nil && selectedStep == currentStep,
                 commentCount: 0
             )
-            button.onClick = { [weak self] step, url in self?.selectReviewItem(step: step, url: url) }
+            button.onClick = { [weak self] in self?.selectReviewItem($0) }
             reviewPane.addArrangedSubview(button)
             return
         }
         for artifact in artifacts {
-            let file = artifact.url.lastPathComponent
-            let approved = reviewStore?.isApproved(file) ?? false
-            let comments = reviewStore?.comments(for: file).count ?? 0
+            let key = artifact.reviewKey
+            let approved = reviewStore?.isApproved(key) ?? false
+            let comments = reviewStore?.comments(for: key).count ?? 0
             let reviewed = approved || comments > 0 || artifact.status == .complete
             let button = PlanningReviewButton(
                 step: artifact.step,
                 url: artifact.url,
                 marker: reviewed ? "✓" : "○",
-                title: file,
-                selected: selectedArtifactURL == artifact.url,
-                commentCount: comments
+                title: artifact.displayTitle,
+                selected: selectedReviewKey == key,
+                commentCount: comments,
+                reviewKey: key
             )
-            button.onClick = { [weak self] step, url in self?.selectReviewItem(step: step, url: url) }
+            button.onClick = { [weak self] in self?.selectReviewItem($0) }
             reviewPane.addArrangedSubview(button)
         }
     }
@@ -725,13 +793,15 @@ final class PlanningModeView: NSView {
         onSuggestCommand?(step.command)
     }
 
-    private func selectReviewItem(step: PlanningStep, url: URL?) {
-        selectedStep = step
-        if let url {
-            selectArtifact(url)
+    private func selectReviewItem(_ button: PlanningReviewButton) {
+        selectedStep = button.step
+        if let key = button.reviewKey,
+           let artifact = state?.artifacts.first(where: { $0.reviewKey == key }) {
+            selectArtifact(artifact)
         } else {
             selectedArtifactURL = nil
-            selectDoc(for: step)
+            selectedReviewKey = nil
+            selectDoc(for: button.step)
         }
         rebuildReviewListIfPossible()
     }
@@ -740,21 +810,28 @@ final class PlanningModeView: NSView {
         selectedStep = step
         if preferArtifact, let step,
            let artifact = state?.artifacts(for: step).first {
-            selectArtifact(artifact.url)
+            selectArtifact(artifact)
         } else {
             selectedArtifactURL = nil
+            selectedReviewKey = nil
             selectDoc(for: step)
         }
         rebuildReviewListIfPossible()
     }
 
-    private func selectArtifact(_ url: URL) {
+    private func selectArtifact(_ artifact: PlanningArtifactState) {
         clearFileViewChrome()
-        selectedArtifactURL = url
-        selectedStep = state?.artifacts.first { $0.url == url }?.step ?? selectedStep
-        documentHeaderField.stringValue = url.lastPathComponent
-        commentField.placeholderString = "Comment on \(FeedbackDraft.stem(url.lastPathComponent))…"
-        let markdown = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        selectedArtifactURL = artifact.url
+        selectedReviewKey = artifact.reviewKey
+        selectedStep = artifact.step
+        documentHeaderField.stringValue = artifact.displayTitle
+        commentField.placeholderString = "Comment on \(FeedbackDraft.stem(artifact.reviewKey))…"
+        if let viewID = artifact.viewID {
+            presentStory(viewID)
+            return
+        }
+        hideStoryPane()
+        let markdown = (try? String(contentsOf: artifact.url, encoding: .utf8)) ?? ""
         documentPane.textStorage?.setAttributedString(
             renderer.render(markdown.isEmpty ? "_Empty planning artifact._" : markdown)
         )
@@ -762,6 +839,7 @@ final class PlanningModeView: NSView {
 
     private func selectDoc(for step: PlanningStep?) {
         clearFileViewChrome()
+        hideStoryPane()
         let markdown = step
             .flatMap { s in state?.steps.first { $0.step == s }?.artifact }
             .flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
@@ -771,11 +849,35 @@ final class PlanningModeView: NSView {
         )
     }
 
+    /// Show a saha/v2 LikeC4 view over the doc area: the task's `model/` project,
+    /// deep-linked to the item's view id. Re-presenting the same model with another
+    /// view id only renavigates the hash (ArchitecturePane's fast path), so clicking
+    /// through stories is cheap.
+    private func presentStory(_ viewID: String) {
+        guard let taskFolder else { return }
+        storyPane.isHidden = false
+        if let documentScrollView { storyPane.frame = documentScrollView.bounds }
+        storyPane.present(projectDir: taskFolder, modelDir: "model", deepLinkView: viewID)
+    }
+
+    /// Keep the frame-managed story pane glued to the doc scroll area (see `buildLayout`
+    /// for why it must not be constraint-pinned).
+    override func layout() {
+        super.layout()
+        if let documentScrollView { storyPane.frame = documentScrollView.bounds }
+    }
+
+    /// Hide (but keep warm) the story pane while a markdown item is up; `resetArchitecture`
+    /// does the real teardown when Planning Mode is left (0-RAM rule).
+    private func hideStoryPane() {
+        storyPane.isHidden = true
+    }
+
     /// Re-render whatever the doc pane is currently showing (used when a mermaid image
     /// finishes rendering asynchronously and needs to replace its fallback text).
     private func refreshCurrentDoc() {
         if isViewingFile { return }   // a source file is up; don't clobber it
-        if let selectedArtifactURL { selectArtifact(selectedArtifactURL) }
+        if let selectedArtifact { selectArtifact(selectedArtifact) }
         else { selectDoc(for: selectedStep) }
     }
 
@@ -790,6 +892,7 @@ final class PlanningModeView: NSView {
             return
         }
         let code = (try? String(contentsOf: url, encoding: .utf8)) ?? "Could not read \(url.path)"
+        hideStoryPane()
         documentPane.textStorage?.setAttributedString(renderSource(code, highlight: lines))
         documentHeaderField.stringValue = ref
         isViewingFile = true
@@ -916,24 +1019,24 @@ final class PlanningModeView: NSView {
     @objc private func commentFieldEntered() { addComment() }
 
     private func addComment() {
-        guard let selectedArtifactURL, let reviewStore else { return }
+        guard let selectedReviewKey, let reviewStore else { return }
         let text = commentField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        reviewStore.addComment(file: selectedArtifactURL.lastPathComponent, text: text)
+        reviewStore.addComment(file: selectedReviewKey, text: text)
         commentField.stringValue = ""
         rebuildReviewListIfPossible()
     }
 
     private func approveSelectedArtifact() {
-        guard let selectedArtifactURL else { return }
-        reviewStore?.approve(selectedArtifactURL.lastPathComponent)
+        guard let selectedReviewKey else { return }
+        reviewStore?.approve(selectedReviewKey)
         rebuildReviewListIfPossible()
     }
 
     private func approveRemaining() {
         guard let state, let reviewStore else { return }
         for artifact in state.artifacts(for: selectedStep ?? state.nextIncomplete?.step ?? .research) {
-            reviewStore.approve(artifact.url.lastPathComponent)
+            reviewStore.approve(artifact.reviewKey)
         }
         rebuildReviewListIfPossible()
     }
@@ -989,11 +1092,11 @@ final class PlanningModeView: NSView {
     private func moveFileSelection(by delta: Int) {
         guard let state else { return }
         let step = selectedStep ?? state.nextIncomplete?.step ?? .research
-        let urls = state.artifacts(for: step).map(\.url)
-        guard !urls.isEmpty else { return }
-        let current = selectedArtifactURL.flatMap { urls.firstIndex(of: $0) } ?? -1
-        let next = min(max(current + delta, 0), urls.count - 1)
-        selectArtifact(urls[next])
+        let items = state.artifacts(for: step)
+        guard !items.isEmpty else { return }
+        let current = items.firstIndex { $0.reviewKey == selectedReviewKey } ?? -1
+        let next = min(max(current + delta, 0), items.count - 1)
+        selectArtifact(items[next])
         rebuildReviewListIfPossible()
     }
 
@@ -1009,7 +1112,7 @@ final class PlanningModeView: NSView {
         let step = selectedStep ?? state.nextIncomplete?.step ?? .research
         let position = (PlanningStep.allCases.firstIndex(of: step) ?? 0) + 1
         let artifacts = state.artifacts(for: step)
-        let files = artifacts.map(\.url.lastPathComponent)
+        let files = artifacts.map(\.reviewKey)
         let reviewed = files.filter {
             (reviewStore?.isApproved($0) ?? false) || !(reviewStore?.comments(for: $0).isEmpty ?? true)
         }.count
@@ -1028,7 +1131,7 @@ final class PlanningModeView: NSView {
     private func currentQueuedComments() -> [ReviewComment] {
         guard let state, let reviewStore else { return [] }
         let step = selectedStep ?? state.nextIncomplete?.step ?? .research
-        let files = Set(state.artifacts(for: step).map(\.url.lastPathComponent))
+        let files = Set(state.artifacts(for: step).map(\.reviewKey))
         return reviewStore.queued.filter { files.contains($0.file) }
     }
 }

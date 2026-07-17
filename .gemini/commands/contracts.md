@@ -1,12 +1,15 @@
 ---
-description: Define code changes and interface specifications
-argument-hint: [task-path] [--type=rest|graphql|grpc|event]
-allowed-tools: Read, Write, Glob, Grep, AskUserQuestion, Task, mcp__context7__resolve-library-id, mcp__context7__query-docs
+description: Define code changes as component contracts in the task model
+argument-hint: [task-path]
+allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, Task, mcp__context7__resolve-library-id, mcp__context7__query-docs
 ---
 
-# Code Changes
+# Code Changes (Contracts)
 
-Define interfaces, API endpoints, and data contracts.
+Define the interfaces the implementation must honor as **LikeC4 components with
+contract metadata** (`model/contracts.c4`). The reviewer sees each contract as a
+node wired into the system it extends — signatures and payloads live in
+`metadata`, not in a separate document.
 
 ## Arguments
 
@@ -15,269 +18,111 @@ Define interfaces, API endpoints, and data contracts.
     1. Current task from `.sahaidachny/current-task` (set via `saha use`)
     2. Most recent task folder in `docs/tasks/`
   - If no context found, asks the user
-- `--type=<type>`: Contract type (rest, graphql, grpc, event)
 
 ## Prerequisites
 
-- Task folder must exist
-- User stories and design decisions should be defined
-- Only available in **full mode**
-
-Check mode in `{task_path}/README.md`. If minimal mode, inform user this step is skipped.
+- Task model exists (`model/task.c4`)
+- User stories defined (`model/stories.c4` + progress.yaml stories)
+- Design decisions documented (recommended, `model/decisions.c4`)
 
 ## Execution
 
-### 1. Identify Interfaces
+### 1. Analyze Requirements
 
-Review artifacts to find interfaces that need contracts:
-- `{task_path}/user-stories/*.md` - Features requiring APIs
-- `{task_path}/design-decisions/*.md` - Architectural choices
-- `{task_path}/research/*.md` - Existing API patterns
+Read:
+- `{task_path}/model/task.c4` - The element vocabulary (`sys`, its components)
+- `{task_path}/model/stories.c4` + `{task_path}/progress.yaml` - What flows exist
+- `{task_path}/model/decisions.c4` - Constraints already decided
+- `.claude/templates/contracts.c4` - Template/conventions for this artifact
 
-Types of contracts:
-- **REST endpoints** - HTTP APIs
-- **GraphQL schemas** - Query/Mutation definitions
-- **gRPC services** - Protobuf definitions
-- **Event schemas** - Message queue contracts
-- **Internal interfaces** - Module boundaries
+### 2. Identify Contract Surfaces
 
-### 2. Gather Requirements
+From the story flows, list every interface the implementation will create or
+change:
+- **API endpoints** (REST/GraphQL/RPC): route, request, response, errors
+- **Events** (published/consumed): topic, payload, ordering/delivery
+- **Functions/methods** (internal seams other code will call): signature, behavior
+- **Data schemas** (tables, files, config): shape, migration
 
-For each interface, determine:
-- Who consumes it? (frontend, mobile, other services)
-- What data is exchanged?
-- What are the error cases?
-- Authentication/authorization requirements?
-- Rate limiting or quotas?
+Present the list to the user; confirm which surfaces need explicit contracts.
+Skip surfaces that are pure implementation detail — a contract is only worth
+writing where getting the interface wrong is expensive.
 
-### 3. Create Contract Files
+### 3. Author Contract Components
 
-Create `{task_path}/code-changes/{name}.md`:
+Add each contract to `{task_path}/model/contracts.c4`
+(following `.claude/templates/contracts.c4`):
 
-#### REST Code Change
+```likec4
+model {
+  // Contracts attach INSIDE existing task.c4 elements. Re-opening a nested
+  // element from another file requires the `extend` keyword:
+  extend sys.new_part {
+    api = component 'POST /sessions' {
+      description 'Registers a session and returns its board card id.'
+      metadata {
+        contract_kind 'rest'         // rest | event | function | schema
+        file 'app/Sources/GhostlingCore/SessionRegistry.swift'
+        contract '''
+          POST /sessions
+          Request:  { "cwd": "string — absolute repo path", "pid": "int" }
+          Response: 201 { "card_id": "string" }
+          Errors:   400 invalid cwd; 409 already registered
+        '''
+        stories 'US-001; US-002'
+      }
+    }
+  }
 
-```markdown
-# Code Change: [Resource Name]
-
-**Type:** REST
-**Base Path:** `/api/v1/[resource]`
-**Authentication:** Bearer Token | API Key | None
-**Status:** Draft | Review | Approved
-
-## Overview
-
-[What this API does and who uses it]
-
-## Endpoints
-
-### POST /api/v1/[resource]
-
-**Description:** Create a new [resource]
-
-**Authentication:** Required
-
-**Request:**
-
-```json
-{
-  "field1": "string (required) - Description",
-  "field2": "number (optional) - Description",
-  "nested": {
-    "subfield": "string"
+  // Relations show WHO calls the contract; payload summaries go on the relation:
+  sys.existing_part -> sys.new_part.api 'registers on launch' {
+    metadata { payload '{ cwd, pid }' }
   }
 }
 ```
 
-**Response (201 Created):**
+Rules:
+- `contract_kind` is the key name — `kind` is a **reserved word** inside
+  `metadata {}` and will not compile.
+- The `contract` block is the normative text: exact signatures, request/response
+  shapes with field types, error cases. Write it with the same rigor the old
+  markdown contract docs demanded — it renders in the element's detail panel.
+- `file` names where the contract will live in code — the implementer and the
+  DoD reachability check both use it.
+- `stories` lists every US the contract serves; if a contract reveals a missing
+  step in a story flow, fix the flow (spec is not frozen until execution starts).
+- Every contract component must have at least one relation — a contract nobody
+  calls is dead spec.
+- Maintain the `contracts` view: all contract components + their callers.
 
-```json
-{
-  "id": "string - Unique identifier",
-  "field1": "string",
-  "field2": "number",
-  "createdAt": "ISO 8601 datetime"
-}
+Use Context7 to check current library/framework API conventions when a contract
+wraps an external dependency.
+
+### 4. Contract Quality Checklist
+
+For each contract verify:
+- [ ] Every error case has a defined response/behavior
+- [ ] Field types are explicit (not "object" / "any")
+- [ ] Naming is consistent with the existing codebase
+- [ ] Breaking changes to existing interfaces are called out in `description`
+- [ ] Related stories are referenced and consistent with the story flows
+
+### 5. Compile Gate + Progress
+
+```bash
+likec4 validate {task_path}/model
 ```
 
-**Errors:**
+Fix any errors, then update `{task_path}/progress.yaml`:
 
-| Status | Code | Description |
-|--------|------|-------------|
-| 400 | VALIDATION_ERROR | Invalid request body |
-| 401 | UNAUTHORIZED | Missing or invalid token |
-| 409 | CONFLICT | Resource already exists |
-
----
-
-### GET /api/v1/[resource]/{id}
-
-**Description:** Retrieve a [resource] by ID
-
-**Path Parameters:**
-- `id` (string, required): Resource identifier
-
-**Response (200 OK):**
-
-```json
-{
-  "id": "string",
-  "field1": "string",
-  ...
-}
+```yaml
+planning:
+  code_changes: { status: done, views: [contracts] }
 ```
 
-**Errors:**
+## 6. Review Artifacts
 
-| Status | Code | Description |
-|--------|------|-------------|
-| 404 | NOT_FOUND | Resource does not exist |
-
----
-
-### GET /api/v1/[resource]
-
-**Description:** List [resources] with pagination
-
-**Query Parameters:**
-- `page` (number, optional, default: 1): Page number
-- `limit` (number, optional, default: 20, max: 100): Items per page
-- `sort` (string, optional): Sort field
-- `order` (string, optional): asc | desc
-
-**Response (200 OK):**
-
-```json
-{
-  "data": [...],
-  "pagination": {
-    "page": 1,
-    "limit": 20,
-    "total": 100,
-    "totalPages": 5
-  }
-}
-```
-
-## Data Models
-
-### [Resource]
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| id | string | Yes | UUID v4 |
-| field1 | string | Yes | ... |
-| field2 | number | No | ... |
-| createdAt | datetime | Yes | ISO 8601 |
-| updatedAt | datetime | Yes | ISO 8601 |
-
-### Enums
-
-**Status:**
-- `active` - Resource is active
-- `inactive` - Resource is disabled
-- `deleted` - Soft deleted
-
-## Rate Limiting
-
-| Endpoint | Limit | Window |
-|----------|-------|--------|
-| POST /resource | 100 | 1 hour |
-| GET /resource | 1000 | 1 hour |
-
-## Related
-
-- **Stories:** US-XXX, US-YYY
-- **Decisions:** DD-XXX
-```
-
-#### Event Contract
-
-```markdown
-# Event Contract: [Event Name]
-
-**Type:** Event (Kafka/RabbitMQ/SQS)
-**Topic:** `domain.entity.action`
-**Status:** Draft | Review | Approved
-
-## Overview
-
-[When this event is published and who consumes it]
-
-## Event Schema
-
-```json
-{
-  "eventId": "string - UUID",
-  "eventType": "domain.entity.action",
-  "timestamp": "ISO 8601",
-  "version": "1.0",
-  "payload": {
-    "entityId": "string",
-    "data": { ... }
-  },
-  "metadata": {
-    "correlationId": "string",
-    "causationId": "string"
-  }
-}
-```
-
-## Producers
-
-- [Service that publishes this event]
-
-## Consumers
-
-- [Service that subscribes] - [What it does with the event]
-
-## Guarantees
-
-- **Ordering:** [Per-partition | None]
-- **Delivery:** [At least once | Exactly once]
-- **Retention:** [Duration]
-```
-
-### 4. Update Code Changes README
-
-Update `{task_path}/code-changes/README.md`:
-
-```markdown
-# Code Changes
-
-Interface definitions and API specifications.
-
-## Contents
-
-| Name | Type | Status |
-|------|------|--------|
-| Users API | REST | Draft |
-| Auth Events | Event | Draft |
-
-## API Map
-
-### Public APIs
-- [users.md](users.md) - User management
-
-### Internal APIs
-- [...]
-
-### Events
-- [auth-events.md](auth-events.md) - Authentication events
-```
-
-## Contract Guidelines
-
-Good contracts:
-- [ ] Define all request/response fields with types
-- [ ] Document all error cases
-- [ ] Include authentication requirements
-- [ ] Specify validation rules
-- [ ] Are versioned
-- [ ] Match existing API patterns in the codebase
-
-## 5. Review Artifacts
-
-Launch the reviewer agent to validate code changes:
+Launch the reviewer agent to validate contracts:
 
 ```
 Task tool:
@@ -288,9 +133,9 @@ Task tool:
 
     Review mode: contracts
     Task path: {task_path}
-    Artifacts to review: {task_path}/code-changes/*.md (exclude README)
+    Artifacts to review: {task_path}/model/contracts.c4
 
-    Review the code changes and report any issues.
+    Review the contracts and report any issues.
 ```
 
 If the reviewer finds blockers (🔴), fix before proceeding.
@@ -299,5 +144,10 @@ If the reviewer finds blockers (🔴), fix before proceeding.
 
 ```
 /saha:contracts docs/tasks/task-01-auth
-/saha:contracts --type=rest
 ```
+
+## Output
+
+Creates or updates:
+- `{task_path}/model/contracts.c4` (view `contracts`)
+- `{task_path}/progress.yaml` (planning.code_changes)

@@ -84,8 +84,11 @@ public final class StaticFileServer: @unchecked Sendable {   // all mutable stat
     /// Map a URL path to an existing file under `root`, guarding against `..` traversal.
     private func resolve(_ path: String) -> URL? {
         let rel = path == "/" ? "index.html" : String(path.drop { $0 == "/" })
+        let rootPath = root.standardizedFileURL.path
         let candidate = root.appendingPathComponent(rel).standardizedFileURL
-        guard candidate.path.hasPrefix(root.standardizedFileURL.path) else { return nil }
+        guard candidate.path == rootPath || candidate.path.hasPrefix(rootPath + "/") else {
+            return nil
+        }
         var isDir: ObjCBool = false
         let exists = FileManager.default.fileExists(atPath: candidate.path, isDirectory: &isDir)
         return exists && !isDir.boolValue ? candidate : nil

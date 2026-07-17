@@ -13,6 +13,8 @@ public enum KeyInput: Sendable, Equatable {
     /// Shift+Enter to send. We do it natively so no per-terminal setup is needed.
     case newline
     case tab
+    /// Shift+Tab / BackTab — used by TUIs such as Claude Code for mode changes.
+    case backtab
     case backspace
     case escape
     case up
@@ -46,6 +48,7 @@ public enum KeyEncoder {
         case .enter: return [0x0D]                 // CR — submit
         case .newline: return [0x0A]               // LF — insert a newline, don't submit
         case .tab: return [0x09]
+        case .backtab: return csi("Z")             // ESC [ Z — xterm BackTab / Shift+Tab
         case .backspace: return [0x7F]             // DEL, what xterm sends for ⌫
         case .escape: return [0x1B]
         case .up: return csi("A")

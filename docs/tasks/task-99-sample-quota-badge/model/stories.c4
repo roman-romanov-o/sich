@@ -1,0 +1,87 @@
+// stories.c4 — task-99 user stories as dynamic views.
+
+model {
+  us-001 = story 'US-001: Card shows its quota share' {
+    #must
+    description '''
+      As a board operator, I want each card to show its quota share so that I can
+      spot the expensive session without drilling in.
+    '''
+    metadata {
+      priority 'must'
+      depends_on ''
+      decisions 'DD-001'
+      edge_cases 'share unknown -> badge shows em-dash; share > 40% -> badge turns attention-colored'
+    }
+  }
+  us-001 -> sys.badge 'delivered by'
+
+  us-002 = story 'US-002: Badge refreshes with the quota poll' {
+    #should
+    description '''
+      As a board operator, I want the badge to update when the quota poll lands so
+      that the number on screen is never staler than one poll cycle.
+    '''
+    metadata {
+      priority 'should'
+      depends_on 'US-001'
+      decisions 'DD-001'
+      edge_cases 'poll fails -> keep last value, mark stale'
+    }
+  }
+  us-002 -> sys.quota 'observes'
+}
+
+views {
+  dynamic view us-001-flow {
+    title 'US-001: Card shows its quota share'
+    description '''
+      The badge is read-only decoration on SessionCard: it renders whatever share
+      QuotaStore already knows — no new probes.
+    '''
+
+    user -> sys.badge 'glances at a card' {
+      notes '''
+        The badge sits in the card corner, custom-drawn like the rest of the card
+        chrome (never a stock control — the invisible-pill lesson).
+
+        **AC-1** — every card with a known share renders "N%" within one poll cycle.
+      '''
+    }
+    sys.badge -> sys.quota 'reads share(for: cardID)' {
+      notes '''
+        Pure read of published state; the badge never triggers a poll.
+      '''
+    }
+    sys.badge <- sys.quota 'share or nil'
+    user <- sys.badge 'sees "23%" or an em-dash' {
+      notes '''
+        **AC-2** — an unknown share renders as an em-dash, never "0%" (no silent zeros).
+      '''
+    }
+  }
+
+  dynamic view us-002-flow {
+    title 'US-002: Badge refreshes with the quota poll'
+    description '''
+      One publisher, many badges: the existing poll fan-out drives every card.
+    '''
+
+    sys.quota -> claude 'scheduled poll (existing)' {
+      notes '''
+        No new network path — the badge rides the poll that already exists.
+      '''
+    }
+    sys.quota <- claude 'measured usage'
+    sys.quota -> sys.badge 'publishes new shares' {
+      notes '''
+        **AC-1** — a landed poll updates every visible badge in the same run loop turn.
+      '''
+    }
+    user <- sys.badge 'sees the fresh number' {
+      notes '''
+        **AC-2** — a failed poll keeps the last value and marks it stale (dimmed).
+      '''
+    }
+  }
+}

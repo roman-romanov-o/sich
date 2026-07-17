@@ -65,4 +65,9 @@ struct KeyEncoderTests {
         #expect(KeyEncoder.bytes(for: .backspace) == [0x7F])
         #expect(KeyEncoder.bytes(for: .escape) == [0x1B])
     }
+
+    @Test("Shift+Tab encodes to xterm BackTab")
+    func backtabIsCSIBacktab() {
+        #expect(KeyEncoder.bytes(for: .backtab) == [0x1B, 0x5B, 0x5A])
+    }
 }

@@ -291,6 +291,59 @@ struct SessionResumeTests {
         #expect(!resume.contains("--print") && !resume.contains(" -p"))
     }
 
+    @Test("codex restore resumes the last interactive Codex session")
+    func codexRestoreCommandUsesCodexResumeLast() {
+        let resume = BoardShell.resumeCodexCommand()
+        #expect(resume == "\(HookInstaller.codexShimPath())/codex resume --last\n")
+        #expect(!resume.contains(" exec "))
+        #expect(!resume.contains("--print"))
+    }
+
+    @Test("restored agent command chooses Claude ids or Codex resume")
+    func restoredAgentCommandChoosesAgentResume() {
+        let claudeID = UUID(uuidString: "AABBCCDD-1122-3344-5566-778899AABBCC")!
+        let claude = PaneSnapshot(
+            sessionID: UUID(), cwd: "/w", agentType: .claude,
+            flowTag: .interactive, childPID: 1, claudeSessionID: claudeID
+        )
+        let codex = PaneSnapshot(
+            sessionID: UUID(), cwd: "/w", agentType: .codex,
+            flowTag: .interactive, childPID: 1
+        )
+        let shell = PaneSnapshot(
+            sessionID: UUID(), cwd: "/w", agentType: .shell,
+            flowTag: .interactive, childPID: 1
+        )
+
+        #expect(BoardShell.restoredAgentCommand(for: claude) == BoardShell.resumeClaudeCommand(sessionID: claudeID))
+        #expect(BoardShell.restoredAgentCommand(for: codex) == BoardShell.resumeCodexCommand())
+        #expect(BoardShell.restoredAgentCommand(for: shell) == nil)
+    }
+
+    @Test("restore chooses explicit claudeSessionID, or pane id for legacy Claude panes")
+    func claudeResumeIDUsesExplicitThenLegacyPaneID() {
+        let paneID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+        let claudeID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+
+        let explicit = PaneSnapshot(
+            sessionID: paneID, cwd: "/w", agentType: .claude,
+            flowTag: .interactive, childPID: 1, claudeSessionID: claudeID
+        )
+        #expect(BoardShell.claudeResumeID(for: explicit) == claudeID)
+
+        let legacyClaude = PaneSnapshot(
+            sessionID: paneID, cwd: "/w", agentType: .claude,
+            flowTag: .interactive, childPID: 1
+        )
+        #expect(BoardShell.claudeResumeID(for: legacyClaude) == paneID)
+
+        let shell = PaneSnapshot(
+            sessionID: paneID, cwd: "/w", agentType: .shell,
+            flowTag: .interactive, childPID: 1
+        )
+        #expect(BoardShell.claudeResumeID(for: shell) == nil)
+    }
+
     /// A pane's pinned Claude id survives the persist→restore JSON round-trip (so a
     /// restart CAN resume it); a bare-shell pane persists nil. And a pre-resume snapshot
     /// with no such key still decodes (→ nil) — the back-compat that skips a version bump.

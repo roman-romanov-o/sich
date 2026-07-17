@@ -39,10 +39,12 @@ public final class QuotaShell: NSObject, NSApplicationDelegate {
         window.title = "Ghostling — quota"
         panel.frame = NSRect(origin: .zero, size: window.frame.size)
         panel.autoresizingMask = [.width, .height]
-        let root = NSView(frame: panel.frame)
-        root.wantsLayer = true
-        root.layer?.backgroundColor = BoardTheme.canvas.cgColor
-        root.appearance = NSAppearance(named: .darkAqua)
+        // A `ThemedRootView` so this standalone window gets the same live light/dark
+        // re-resolve as the board's: its own appearance hook drives the whole subtree.
+        let root = ThemedRootView(frame: panel.frame)
+        root.themedBackground = BoardTheme.canvas
+        // Follow the system appearance (don't pin `.darkAqua`) — `BoardTheme`'s tokens
+        // resolve light/dark themselves, so the standalone quota window follows too.
         root.addSubview(panel)
         window.contentView = root
         window.center()

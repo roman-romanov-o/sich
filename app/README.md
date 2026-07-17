@@ -12,10 +12,9 @@ the first slice of **Phase 01 / US-001**, built directly on the Phase 00 spike
 | `GhosttyVt` | binary (xcframework) | vendored libghostty-vt; `Frameworks/ghostty-vt.xcframework` |
 | `CPtySupport` | C | `forkpty()` + `execvp()` in C so the forked child never touches the Swift runtime |
 | `GhostlingCore` | Swift lib | `Terminal` (safe libghostty-vt wrapper + `lines()`), `PTYSession` (in-app PTY read + `send()`/`pollExit()`), `PoolFirewall`, `KeyEncoder`, `Session`/`SessionRegistry` |
-| `GhostlingApp` | Swift lib (AppKit) | `TerminalSurface` (renders one PTY, routes keys), `AppShell` (window/app lifecycle), the Phase 03 board surface (`BoardView`, `SessionCard`, `AttentionIndicator`, `DrillInPanel`, `BoardShell`) |
+| `GhostlingApp` | Swift lib (AppKit) | `TerminalSurface` (renders one PTY, routes keys), the board surface (`BoardView`, `SessionCard`, `AttentionIndicator`, `DrillInPanel`, `BoardShell` — window/app lifecycle) |
 | `ghostling-probe` | executable | runnable demo: open a session, read its pty in-process, print the screen |
-| `ghostling-app` | executable (AppKit) | launchable single-window shell pane (the screenshottable surface) |
-| `ghostling-board` | executable (AppKit) | launchable Phase 03 mission-control board: state columns × two-flow swimlanes + "who needs me" count + drill-in (the screenshottable board surface) |
+| `ghostling` | executable (AppKit) | the launchable app: mission-control board (state columns × two-flow swimlanes + "who needs me" count + drill-in) hosting the live embedded terminal |
 | `GhostlingCoreTests` | tests | PTY-read + pool-firewall + key encoding + grid lines + registry lifecycle + **board view-model** (placement, attention, drill-in selection) |
 
 ## The two load-bearing pieces
@@ -44,6 +43,29 @@ swift run ghostling-app claude -p x              # refused by the firewall befor
 swift run ghostling-board                        # the mission-control board, seeded with fake-agent sessions (firewall-clean)
 ```
 
+## Dev hot reload
+
+Ghostling supports DEBUG-only hot code swapping through InjectionIII:
+
+```bash
+cd app
+./dev.sh
+```
+
+`dev.sh` runs `swift run -Xlinker -interposable ghostling`, which is the launch
+mode InjectionIII needs for Swift method-body replacement. It starts
+`InjectionIII.app` automatically when it is installed in `/Applications` or
+`~/Applications`; select this `app/` directory in InjectionIII. If the app
+bundle lives somewhere else, point Ghostling at its loader bundle explicitly:
+
+```bash
+GHOSTLING_INJECTION_BUNDLE=/path/to/InjectionIII.app/Contents/Resources/macOSInjection.bundle ./dev.sh
+```
+
+Hot reload is intentionally narrow: changes to method/function bodies can swap
+in; adding stored properties, changing type layout, adding/removing files, or
+editing C targets still needs a rebuild and relaunch.
+
 ## The Phase 03 board (US-002/003/005)
 
 `ghostling-board` renders the **mission-control board**: every session as a card
@@ -66,7 +88,7 @@ Requires the vendored xcframework's static archives — see
 
 ## Window surface vs. testable seams
 
-`TerminalSurface`/`AppShell` (the `ghostling-app` target) render the
+`TerminalSurface`/`BoardShell` (the `ghostling` target) render the
 `libghostty-vt` screen and route keystrokes back into the pty. The on-screen
 *pixel* rendering is verified by a human screenshot (it needs a real Aqua GUI
 session — a CLI binary launched headlessly creates the window object and stays
@@ -79,6 +101,6 @@ desktop). Everything that does **not** need a window is unit-tested in
 - **Session lifecycle** (`SessionRegistry`): register→running, clean exit→`exited`,
   abrupt kill→`crashed` (never left `running`) — TC-E2E-104 at the logic level.
 
-The surface's `keyDown` delegates to the same `KeyEncoder`, and `AppShell`
+The surface's `keyDown` delegates to the same `KeyEncoder`, and `BoardShell`
 launches through `SessionRegistry` so the **pool firewall** still guards the
 windowed launch path (refuses `claude -p` before a window is shown).

@@ -4,7 +4,7 @@ import GhostlingCore
 /// A custom-drawn back affordance (US-002 AC#2): a rounded "← board" pill that
 /// returns to the board on click. It is the EXACT view kind ``SessionCard``'s
 /// `flowBadge` is — a **layer-backed `NSTextField`** that draws its own text *and*
-/// background on a single view (`wantsLayer` + a raw `layer.backgroundColor` +
+/// background on a single view (`wantsLayer` + a `themedBackground` layer fill +
 /// `cornerRadius`, `drawsBackground = false`). That is the only render path proven
 /// to composite on this hand-painted dark UI: every card shows its flow badge this
 /// way.
@@ -22,6 +22,7 @@ final class BackPill: NSTextField {
 
     init() {
         super.init(frame: .zero)
+        useCenteredTextCell()              // 26pt pill around a 15pt line — centre it
         stringValue = "← board"
         font = BoardTheme.monoBold
         textColor = BoardTheme.textPrimary
@@ -31,10 +32,10 @@ final class BackPill: NSTextField {
         isSelectable = false
         drawsBackground = false            // the LAYER paints the fill, like flowBadge
         wantsLayer = true
-        layer?.backgroundColor = BoardTheme.cardFillRaised.cgColor
+        themedBackground = BoardTheme.cardFillRaised
         layer?.cornerRadius = 6
         layer?.borderWidth = 1             // crisp edge so the pill doesn't melt into the panel
-        layer?.borderColor = BoardTheme.cardStrokeStrong.cgColor
+        themedBorder = BoardTheme.cardStrokeStrong
     }
 
     required init?(coder: NSCoder) { nil }
@@ -75,6 +76,7 @@ final class BackPill: NSTextField {
 final class StatusPill: NSTextField {
     init() {
         super.init(frame: .zero)
+        useCenteredTextCell()
         font = NSFont.systemFont(ofSize: 11, weight: .semibold)
         alignment = .center
         isBezeled = false
@@ -98,8 +100,8 @@ final class StatusPill: NSTextField {
     func show(text: String, color: NSColor, pulsing: Bool) {
         stringValue = "● \(text)"
         textColor = color
-        layer?.backgroundColor = color.withAlphaComponent(0.08).cgColor
-        layer?.borderColor = color.withAlphaComponent(0.27).cgColor
+        themedBackground = color.withAlphaComponent(0.08)
+        themedBorder = color.withAlphaComponent(0.27)
         layer?.removeAnimation(forKey: "pulse")
         guard pulsing else { return }
         let pulse = CABasicAnimation(keyPath: "opacity")
@@ -121,6 +123,7 @@ final class StatusPill: NSTextField {
 final class WorktreePill: NSTextField {
     init() {
         super.init(frame: .zero)
+        useCenteredTextCell()
         font = BoardTheme.monoSmall
         alignment = .center
         isBezeled = false
@@ -131,8 +134,8 @@ final class WorktreePill: NSTextField {
         textColor = BoardTheme.attention
         layer?.cornerRadius = 5
         layer?.borderWidth = 1
-        layer?.backgroundColor = BoardTheme.attention.withAlphaComponent(0.10).cgColor
-        layer?.borderColor = BoardTheme.attention.withAlphaComponent(0.42).cgColor
+        themedBackground = BoardTheme.attention.withAlphaComponent(0.10)
+        themedBorder = BoardTheme.attention.withAlphaComponent(0.42)
     }
 
     required init?(coder: NSCoder) { nil }
@@ -153,13 +156,15 @@ final class WorktreePill: NSTextField {
 /// list on the right. Single responsibility: present one focused session and a
 /// way back.
 ///
-/// Built to mirror ``SessionCard`` exactly — `wantsLayer` + raw
-/// `layer.backgroundColor` + stacks of label fields — because that is the render
-/// path the operator demonstrably sees on the board.
+/// Built to mirror ``SessionCard`` exactly — `wantsLayer` + a `themedBackground`
+/// layer fill + stacks of label fields — because that is the render path the
+/// operator demonstrably sees on the board.
 @MainActor
 final class DrillInPanel: NSView {
     /// Invoked when the operator returns to the board (US-002 AC#2).
     var onClose: (() -> Void)?
+    var onTerminalSmaller: (() -> Void)?
+    var onTerminalLarger: (() -> Void)?
 
     // Internal so a real mouseDown-event test can drive the click path (the
     // Interaction-AC Binding Rule: a click AC must be exercised by a dispatched
@@ -170,6 +175,7 @@ final class DrillInPanel: NSView {
     private let statusPill = StatusPill()
     private let quotaField = NSTextField(labelWithString: "")
     private let tagField = NSTextField(labelWithString: "")
+    private let terminalFontControls = FontSizeControls(scope: .terminal)
     // Internal so a focus test can assert the worktree indicator is shown/hidden.
     let worktreeTag = WorktreePill()
     private let banner = NSView()
@@ -181,6 +187,7 @@ final class DrillInPanel: NSView {
     private let changesView = ChangesView()
     private var surface: TerminalSurface?
     private var focusedCard: BoardCard?
+    private var terminalFontSize: CGFloat = 20
     private var availableDiffs: [TurnDiff] = []
     /// The breadcrumb header (← board / status pill / quota). Collapsed while the
     /// diff pane is open so ChangesView's own "← Terminal" is the only nav there.
@@ -189,8 +196,10 @@ final class DrillInPanel: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = BoardTheme.canvas.cgColor
+        themedBackground = BoardTheme.canvas
         backPill.onClick = { [weak self] in self?.goBack() }
+        terminalFontControls.onTerminalSmaller = { [weak self] in self?.onTerminalSmaller?() }
+        terminalFontControls.onTerminalLarger = { [weak self] in self?.onTerminalLarger?() }
         sidebar.onOpenDiff = { [weak self] turns, iteration, file in
             self?.openDiff(turns: turns, iteration: iteration, file: file)
         }
@@ -240,7 +249,7 @@ final class DrillInPanel: NSView {
         worktreeTag.isHidden = true
         let header = NSStackView(views: [
             backPill, slash, dirField, titleField, statusPill, spring,
-            worktreeTag, quotaField, tagField,
+            worktreeTag, terminalFontControls, quotaField, tagField,
         ])
         header.orientation = .horizontal
         header.alignment = .centerY
@@ -253,7 +262,7 @@ final class DrillInPanel: NSView {
     /// is waiting for input. Warm card fill + attention text, like a NEEDS YOU card.
     private func buildBanner() -> NSView {
         banner.wantsLayer = true
-        banner.layer?.backgroundColor = BoardTheme.needsYouCard.cgColor
+        banner.themedBackground = BoardTheme.needsYouCard
         configure(bannerField, font: NSFont.systemFont(ofSize: 12, weight: .semibold),
                   color: BoardTheme.attention)
         bannerField.translatesAutoresizingMaskIntoConstraints = false
@@ -298,8 +307,9 @@ final class DrillInPanel: NSView {
     /// Focus a card's session: show its live embedded terminal, ready for input
     /// (US-002 AC#1). The previous surface is detached first so only the focused
     /// terminal is foreground-rendered (US-002 edge case #2 / TC-E2E-007).
-    func focus(card: BoardCard, pty: PTYSession) {
+    func focus(card: BoardCard, pty: PTYSession, terminalFontSize: CGFloat = 20) {
         focusedCard = card
+        self.terminalFontSize = terminalFontSize
         closeDiff()
         titleField.stringValue = card.title ?? BoardTheme.shortPath(card.projectDir)
         dirField.stringValue = BoardTheme.projectLabel(card.projectDir)
@@ -307,7 +317,7 @@ final class DrillInPanel: NSView {
         showWorktreeTag(for: card.projectDir)
         update(state: card.state)
         detachSurface()
-        let surface = TerminalSurface(session: pty)
+        let surface = TerminalSurface(session: pty, fontSize: terminalFontSize)
         // Esc belongs to the child (Claude Code interrupt / edit), so "back to board"
         // is ⌘[ — routed via the surface's `performKeyEquivalent`. The click pill is
         // the other way back.
@@ -427,6 +437,12 @@ final class DrillInPanel: NSView {
         banner.isHidden = true
     }
 
+    func updateTerminalFontSize(_ size: CGFloat) {
+        terminalFontSize = size
+        guard let card = focusedCard, let pty = surface?.ptySession else { return }
+        focus(card: card, pty: pty, terminalFontSize: size)
+    }
+
     /// Return to the board (US-002 AC#2). Internal so the interaction is driven by a
     /// real view-level test, not just the `BoardSelection` value type.
     @objc func goBack() {
@@ -440,7 +456,7 @@ final class DrillInPanel: NSView {
         let holder = NSView()
         let hairline = NSView()
         hairline.wantsLayer = true
-        hairline.layer?.backgroundColor = BoardTheme.hairline.cgColor
+        hairline.themedBackground = BoardTheme.hairline
         for sub in [view, hairline] {
             sub.translatesAutoresizingMaskIntoConstraints = false
             holder.addSubview(sub)

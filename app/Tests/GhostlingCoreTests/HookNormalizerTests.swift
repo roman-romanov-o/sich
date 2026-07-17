@@ -35,4 +35,31 @@ struct HookNormalizerTests {
         #expect(entry.state == .waitingForInput)
         #expect(entry.state.needsAttention)
     }
+
+    @Test func codexSessionStartIsIdleUntilPromptSubmit() throws {
+        let start = try #require(
+            normalize(#"{"hook_event_name":"SessionStart","ghostling_agent":"codex","session_id":"C","cwd":"/repo"}"#))
+        #expect(start.agent == .codex)
+        #expect(start.kind == .sessionStart)
+
+        let store = HookSessionStore()
+        store.ingest([start])
+        #expect(store.entry(for: "C")?.state == .idle)
+
+        let prompt = try #require(
+            normalize(#"{"hook_event_name":"UserPromptSubmit","ghostling_agent":"codex","session_id":"C","cwd":"/repo"}"#))
+        store.ingest([prompt])
+        #expect(store.entry(for: "C")?.state == .running)
+    }
+
+    @Test func codexSnakeCasePermissionRequestSetsAttention() throws {
+        let event = try #require(
+            normalize(#"{"hook_event_name":"permission_request","ghostling_agent":"codex","session_id":"C"}"#))
+        #expect(event.kind == .permissionRequest)
+        #expect(event.agent == .codex)
+
+        let store = HookSessionStore()
+        store.ingest([event])
+        #expect(store.entry(for: "C")?.state == .waitingForInput)
+    }
 }

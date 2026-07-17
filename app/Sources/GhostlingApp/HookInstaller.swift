@@ -1,15 +1,16 @@
 import Foundation
 
-/// Installs the Ghostling hook forwarder into `<repoRoot>/.claude/settings.json` so
-/// REAL interactive Claude Code sessions in this project surface on the board (flow
-/// B) — the "no hooks in claude code" gap. The **app** does this at launch, which is
-/// a different process from the agent, so it is not the self-modification the agent
-/// is firewalled from doing. A faithful Swift port of
-/// `.claude/scripts/enable-board-hooks.sh`: idempotent, reuses a `matcher: ""`
-/// group, and preserves every hook already there (notably SessionStart's
-/// welcome.sh). Best-effort — a write failure just means hooks aren't auto-wired.
+/// Installs Ghostling's observe-only agent hook plumbing. Current app startup uses
+/// scoped PATH shims (`~/.ghostling/bin/claude` and `codex`) for managed terminals;
+/// the repo/global settings installers remain for legacy/manual cleanup tests and
+/// preserve user hooks when used.
 enum HookInstaller {
     static let forward = "bash .claude/scripts/ghostling-forward.sh"
+    static let codexBinDirName = ".ghostling/bin"
+    static let codexHookDirName = ".ghostling/hooks"
+    static let codexShimName = "codex"
+    static let claudeShimName = "claude"
+    static let codexProfileName = "ghostling-hooks"
     /// Lifecycle events the board cares about: appear → run → wait (Stop = turn end) →
     /// done (SessionEnd = the session actually closed — the only real Done).
     static let events = [
@@ -40,6 +41,87 @@ enum HookInstaller {
         else { return false }
         return install(settings: home.appendingPathComponent(".claude/settings.json"),
                        command: "bash \(script.path)")
+    }
+
+    @discardableResult
+    static func uninstallGlobal(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Bool {
+        let settings = home.appendingPathComponent(".claude/settings.json")
+        let command = "bash \(home.appendingPathComponent(".ghostling/ghostling-forward.sh").path)"
+        var cfg = readConfig(settings)
+        guard var hooks = cfg["hooks"] as? [String: Any] else { return false }
+        var changed = false
+        for event in events {
+            guard let groups = hooks[event] as? [[String: Any]] else { continue }
+            let cleaned = groups.compactMap { group -> [String: Any]? in
+                var group = group
+                let before = group["hooks"] as? [[String: Any]] ?? []
+                let after = before.filter { $0["command"] as? String != command }
+                if after.count != before.count { changed = true }
+                guard !after.isEmpty else { return nil }
+                group["hooks"] = after
+                return group
+            }
+            if cleaned.isEmpty {
+                hooks.removeValue(forKey: event)
+            } else {
+                hooks[event] = cleaned
+            }
+        }
+        guard changed else { return false }
+        if hooks.isEmpty {
+            cfg.removeValue(forKey: "hooks")
+        } else {
+            cfg["hooks"] = hooks
+        }
+        return writeConfig(cfg, to: settings)
+    }
+
+    @discardableResult
+    static func installCodexShim(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Bool {
+        let binDir = home.appendingPathComponent(codexBinDirName, isDirectory: true)
+        let hookDir = home.appendingPathComponent(codexHookDirName, isDirectory: true)
+        let shim = binDir.appendingPathComponent(codexShimName, isDirectory: false)
+        let codexHome = home.appendingPathComponent(".codex", isDirectory: true)
+        let profile = codexHome.appendingPathComponent("\(codexProfileName).config.toml")
+        do {
+            try FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: hookDir, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+            try codexWrapperScript.write(to: shim, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: shim.path)
+            for event in codexEvents {
+                let path = hookDir.appendingPathComponent("ghostling-codex-\(event).sh")
+                try codexHookScript(event: event).write(to: path, atomically: true, encoding: .utf8)
+                try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path.path)
+            }
+            try codexProfile(hookDir: hookDir).write(to: profile, atomically: true, encoding: .utf8)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    @discardableResult
+    static func installClaudeShim(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Bool {
+        let binDir = home.appendingPathComponent(codexBinDirName, isDirectory: true)
+        let shim = binDir.appendingPathComponent(claudeShimName, isDirectory: false)
+        let forwarder = home.appendingPathComponent(".ghostling/ghostling-forward.sh")
+        do {
+            try FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(
+                at: forwarder.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try forwarderScript.write(to: forwarder, atomically: true, encoding: .utf8)
+            try claudeWrapperScript.write(to: shim, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: shim.path)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: forwarder.path)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    static func codexShimPath(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String {
+        home.appendingPathComponent(codexBinDirName, isDirectory: true).path
     }
 
     private static func install(settings path: URL, command: String) -> Bool {
@@ -223,3 +305,305 @@ if [ "${size:-0}" -gt "$max_bytes" ] 2>/dev/null; then
 fi
 exit 0
 """#
+
+private let codexEvents = [
+    "SessionStart", "UserPromptSubmit", "Stop",
+    "PreToolUse", "PostToolUse", "PermissionRequest", "SessionEnd",
+]
+
+private func codexProfile(hookDir: URL) -> String {
+    func command(_ event: String) -> String {
+        hookDir.appendingPathComponent("ghostling-codex-\(event).sh").path
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
+    return """
+    [features]
+    hooks = true
+
+    [[hooks.SessionStart]]
+    matcher = "startup|resume"
+    [[hooks.SessionStart.hooks]]
+    type = "command"
+    command = "\(command("SessionStart"))"
+    timeout = 10
+
+    [[hooks.UserPromptSubmit]]
+    [[hooks.UserPromptSubmit.hooks]]
+    type = "command"
+    command = "\(command("UserPromptSubmit"))"
+    timeout = 10
+
+    [[hooks.Stop]]
+    [[hooks.Stop.hooks]]
+    type = "command"
+    command = "\(command("Stop"))"
+    timeout = 10
+
+    [[hooks.PreToolUse]]
+    [[hooks.PreToolUse.hooks]]
+    type = "command"
+    command = "\(command("PreToolUse"))"
+    timeout = 120
+
+    [[hooks.PostToolUse]]
+    [[hooks.PostToolUse.hooks]]
+    type = "command"
+    command = "\(command("PostToolUse"))"
+    timeout = 10
+
+    [[hooks.PermissionRequest]]
+    [[hooks.PermissionRequest.hooks]]
+    type = "command"
+    command = "\(command("PermissionRequest"))"
+    timeout = 120
+
+    [[hooks.SessionEnd]]
+    matcher = "stop"
+    [[hooks.SessionEnd.hooks]]
+    type = "command"
+    command = "\(command("SessionEnd"))"
+    timeout = 10
+    """
+}
+
+private let claudeWrapperScript = #"""
+#!/usr/bin/env bash
+# Ghostling Claude wrapper: inject per-invocation Claude hooks only inside
+# Ghostling-owned terminals, then exec the user's real Claude binary.
+
+is_self_or_shim() {
+    candidate="$1"
+    [ -n "$candidate" ] || return 1
+    [ -e "$candidate" ] && [ "$candidate" -ef "$0" ] && return 0
+    case "$candidate" in
+        */.ghostling/bin/claude) return 0 ;;
+    esac
+    return 1
+}
+
+find_real_claude() {
+    old_ifs="$IFS"
+    IFS=:
+    for d in $PATH; do
+        candidate="$d/claude"
+        is_self_or_shim "$candidate" && continue
+        if [ -x "$candidate" ]; then
+            IFS="$old_ifs"
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
+    IFS="$old_ifs"
+    return 1
+}
+
+known_command() {
+    case "$1" in
+        agents|config|doctor|help|install|mcp|migrate-installer|plugin|plugins|setup-token|\
+        uninstall|update|upgrade|vim|completion)
+            return 0 ;;
+    esac
+    return 1
+}
+
+option_consumes_value() {
+    case "$1" in
+        --add-dir|--agent|--agents|--allowedTools|--allowed-tools|--append-system-prompt|\
+        --betas|--debug|--debug-file|--disallowedTools|--disallowed-tools|--effort|\
+        --fallback-model|--file|--from-pr|--input-format|--max-budget-usd|--mcp-config|\
+        --model|--output-format|--permission-mode|--plugin-dir|--plugin-marketplace-url|\
+        --plugin-url|--resume|-r|--session-id|--setting-sources|--settings|--system-prompt|\
+        --system-prompt-file)
+            return 0 ;;
+    esac
+    return 1
+}
+
+should_inject() {
+    [ "$GHOSTLING_CLAUDE_HOOKS_DISABLED" = "1" ] && return 1
+    [ -n "$GHOSTLING_CARD_ID" ] || return 1
+    [ "$#" -eq 0 ] && return 0
+    skip_next=0
+    for arg in "$@"; do
+        if [ "$skip_next" = "1" ]; then
+            skip_next=0
+            continue
+        fi
+        case "$arg" in
+            --) return 0 ;;
+            -p|--print|--help|-h|--version|-v|--bare|--safe-mode|--background|--bg)
+                return 1 ;;
+            -*)
+                case "$arg" in *=*) ;; *) option_consumes_value "$arg" && skip_next=1 ;; esac
+                continue ;;
+            *)
+                known_command "$arg" && return 1
+                return 0 ;;
+        esac
+    done
+    return 0
+}
+
+REAL_CLAUDE="$(find_real_claude)" || { echo "Error: claude not found in PATH" >&2; exit 127; }
+
+if ! should_inject "$@"; then
+    exec "$REAL_CLAUDE" "$@"
+fi
+
+settings='{"hooks":{"SessionStart":[{"matcher":"","hooks":[{"type":"command","command":"bash '"$HOME"'/.ghostling/ghostling-forward.sh","timeout":10}]}],"UserPromptSubmit":[{"matcher":"","hooks":[{"type":"command","command":"bash '"$HOME"'/.ghostling/ghostling-forward.sh","timeout":10}]}],"PreToolUse":[{"matcher":"","hooks":[{"type":"command","command":"bash '"$HOME"'/.ghostling/ghostling-forward.sh","timeout":120}]}],"PostToolUse":[{"matcher":"","hooks":[{"type":"command","command":"bash '"$HOME"'/.ghostling/ghostling-forward.sh","timeout":10}]}],"Notification":[{"matcher":"","hooks":[{"type":"command","command":"bash '"$HOME"'/.ghostling/ghostling-forward.sh","timeout":10}]}],"PermissionRequest":[{"matcher":"","hooks":[{"type":"command","command":"bash '"$HOME"'/.ghostling/ghostling-forward.sh","timeout":120}]}],"Stop":[{"matcher":"","hooks":[{"type":"command","command":"bash '"$HOME"'/.ghostling/ghostling-forward.sh","timeout":10}]}],"SessionEnd":[{"matcher":"","hooks":[{"type":"command","command":"bash '"$HOME"'/.ghostling/ghostling-forward.sh","timeout":10}]}]}}}'
+
+exec "$REAL_CLAUDE" --settings "$settings" "$@"
+"""#
+
+private let codexWrapperScript = #"""
+#!/usr/bin/env bash
+# Ghostling Codex wrapper: inject per-invocation Codex hooks for managed
+# Ghostling terminals, then exec the user's real Codex binary.
+
+is_self_or_shim() {
+    candidate="$1"
+    [ -n "$candidate" ] || return 1
+    [ -e "$candidate" ] && [ "$candidate" -ef "$0" ] && return 0
+    case "$candidate" in
+        */.ghostling/bin/codex) return 0 ;;
+    esac
+    return 1
+}
+
+find_real_codex() {
+    old_ifs="$IFS"
+    IFS=:
+    for d in $PATH; do
+        candidate="$d/codex"
+        is_self_or_shim "$candidate" && continue
+        if [ -x "$candidate" ]; then
+            IFS="$old_ifs"
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
+    IFS="$old_ifs"
+    return 1
+}
+
+known_subcommand() {
+    case "$1" in
+        exec|e|resume|review|login|logout|mcp|plugin|mcp-server|app-server|\
+        remote-control|app|completion|update|doctor|sandbox|debug|apply|a|\
+        archive|delete|unarchive|fork|cloud|exec-server|features|help)
+            return 0 ;;
+    esac
+    return 1
+}
+
+session_subcommand() {
+    case "$1" in exec|e|resume) return 0 ;; esac
+    return 1
+}
+
+option_consumes_value() {
+    case "$1" in
+        -c|--config|-m|--model|-p|--profile|-C|--cd|--remote|-a|--ask-for-approval|\
+        -s|--sandbox|--output-last-message|--enable|--disable)
+            return 0 ;;
+    esac
+    return 1
+}
+
+should_inject() {
+    [ "$CMUX_CODEX_HOOKS_DISABLED" = "1" ] && return 1
+    [ "$GHOSTLING_CODEX_HOOKS_DISABLED" = "1" ] && return 1
+    [ -n "$GHOSTLING_CARD_ID" ] || return 1
+    [ "$#" -eq 0 ] && return 0
+    skip_next=0
+    for arg in "$@"; do
+        if [ "$skip_next" = "1" ]; then
+            skip_next=0
+            continue
+        fi
+        case "$arg" in
+            --) return 0 ;;
+            --help|-h|-V|--version) return 1 ;;
+            -*)
+                case "$arg" in *=*) ;; *) option_consumes_value "$arg" && skip_next=1 ;; esac
+                continue ;;
+            *)
+                if known_subcommand "$arg"; then
+                    session_subcommand "$arg"
+                    return $?
+                fi
+                return 0 ;;
+        esac
+    done
+    return 0
+}
+
+REAL_CODEX="$(find_real_codex)" || { echo "Error: codex not found in PATH" >&2; exit 127; }
+
+if ! should_inject "$@"; then
+    exec "$REAL_CODEX" "$@"
+fi
+
+export GHOSTLING_CODEX_PID=$$
+export GHOSTLING_AGENT_LAUNCH_EXECUTABLE="$REAL_CODEX"
+export GHOSTLING_AGENT_LAUNCH_CWD="$PWD"
+
+profile="${GHOSTLING_CODEX_PROFILE:-ghostling-hooks}"
+profile_path="${CODEX_HOME:-$HOME/.codex}/$profile.config.toml"
+if [ ! -f "$profile_path" ]; then
+    exec "$REAL_CODEX" "$@"
+fi
+
+exec "$REAL_CODEX" --profile "$profile" --dangerously-bypass-hook-trust "$@"
+"""#
+
+private func codexHookScript(event: String) -> String {
+    """
+    #!/usr/bin/env bash
+    # Append one Codex hook event to Ghostling's observe-only event file.
+    file="${GHOSTLING_EVENTS_FILE:-$HOME/.ghostling/events.jsonl}"
+    mkdir -p "$(dirname "$file")" 2>/dev/null
+    payload=$(mktemp "${TMPDIR:-/tmp}/ghostling-codex.XXXXXX" 2>/dev/null || mktemp -t ghostling-codex)
+    cat > "$payload" || true
+
+    extract() {
+        /usr/bin/plutil -extract "$1" raw -o - "$payload" 2>/dev/null
+    }
+    json_escape() {
+        sed -e 's/\\\\/\\\\\\\\/g' -e 's/"/\\\\"/g' -e ':a' -e 'N' -e '$!ba' -e 's/\\n/\\\\n/g'
+    }
+    field() {
+        key="$1"
+        value="$2"
+        [ -n "$value" ] || return 0
+        escaped=$(printf '%s' "$value" | json_escape)
+        printf ',"%s":"%s"' "$key" "$escaped"
+    }
+
+    session=$(extract session_id)
+    [ -n "$session" ] || session=$(extract conversation_id)
+    cwd=$(extract cwd)
+    [ -n "$cwd" ] || cwd="$PWD"
+    timestamp=$(extract timestamp)
+    transcript=$(extract transcript_path)
+    [ -n "$transcript" ] || transcript=$(extract transcriptPath)
+    tool=$(extract tool_name)
+    [ -n "$tool" ] || tool=$(extract toolName)
+
+    event_name="\(event)"
+    printf '{"hook_event_name":"%s","ghostling_agent":"codex"' "$event_name" >> "$file" 2>/dev/null
+    field session_id "$session" >> "$file" 2>/dev/null
+    field cwd "$cwd" >> "$file" 2>/dev/null
+    field timestamp "$timestamp" >> "$file" 2>/dev/null
+    field transcript_path "$transcript" >> "$file" 2>/dev/null
+    field tool_name "$tool" >> "$file" 2>/dev/null
+    field ghostling_card_id "$GHOSTLING_CARD_ID" >> "$file" 2>/dev/null
+    field ghostling_pid "${GHOSTLING_CODEX_PID:-$PPID}" >> "$file" 2>/dev/null
+    printf '}\\n' >> "$file" 2>/dev/null
+    rm -f "$payload"
+    echo '{}'
+    exit 0
+    """
+}

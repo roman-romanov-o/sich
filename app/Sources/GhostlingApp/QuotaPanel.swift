@@ -19,7 +19,7 @@ public final class QuotaPanel: NSView {
     public override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = BoardTheme.canvas.cgColor
+        themedBackground = BoardTheme.canvas
         buildScaffold()
     }
 
@@ -94,10 +94,10 @@ public final class QuotaPanel: NSView {
         card.spacing = 6
         card.edgeInsets = NSEdgeInsets(top: 14, left: 16, bottom: 14, right: 16)
         card.wantsLayer = true
-        card.layer?.backgroundColor = accent.withAlphaComponent(0.10).cgColor
+        card.themedBackground = accent.withAlphaComponent(0.10)
         card.layer?.cornerRadius = 8
         card.layer?.borderWidth = 1
-        card.layer?.borderColor = accent.withAlphaComponent(0.55).cgColor
+        card.themedBorder = accent.withAlphaComponent(0.55)
         card.widthAnchor.constraint(equalToConstant: QuotaLayout.cardWidth).isActive = true
 
         card.addArrangedSubview(label(rec.headline, font: BoardTheme.monoBold, color: accent))
@@ -116,10 +116,10 @@ public final class QuotaPanel: NSView {
         card.spacing = 12
         card.edgeInsets = NSEdgeInsets(top: 18, left: 16, bottom: 16, right: 16)
         card.wantsLayer = true
-        card.layer?.backgroundColor = BoardTheme.cardFill.cgColor
+        card.themedBackground = BoardTheme.cardFill
         card.layer?.cornerRadius = 8
         card.layer?.borderWidth = 1
-        card.layer?.borderColor = BoardTheme.cardStroke.cgColor
+        card.themedBorder = BoardTheme.cardStroke
         card.widthAnchor.constraint(equalToConstant: QuotaLayout.cardWidth).isActive = true
 
         card.addArrangedSubview(columnHeader())
@@ -249,8 +249,12 @@ enum QuotaLayout {
     static let innerWidth: CGFloat = 264
     static let providerWidth: CGFloat = 56
     static let cellWidth: CGFloat = 94
-    static let cellHeight: CGFloat = 50
-    static let barHeight: CGFloat = 8
+    /// Bar (18) + spacing (4) + countdown line (~13). The percent moved inside the bar,
+    /// so the cell lost a whole text row and gained a bar you can actually read.
+    static let cellHeight: CGFloat = 36
+    static let barHeight: CGFloat = 18
+    static let barCornerRadius: CGFloat = 5
+    static let barTextInset: CGFloat = 7
     static let columnGap: CGFloat = 10
 }
 
@@ -271,7 +275,7 @@ private enum QuotaPlaceholderKind {
 }
 
 @MainActor
-private final class QuotaPlaceholderCell: NSView {
+private final class QuotaPlaceholderCell: NSView, ThemeReapplying {
     private let kind: QuotaPlaceholderKind
     private let track = CALayer()
     private let fill = CALayer()
@@ -293,25 +297,42 @@ private final class QuotaPlaceholderCell: NSView {
 
     override func layout() {
         super.layout()
-        let bar = NSRect(x: 0, y: 0,
+        // Top of the cell, matching where `QuotaGaugeRow`'s stack puts its bar — the view
+        // is unflipped, so that's `height - barHeight`, not zero.
+        let bar = NSRect(x: 0, y: bounds.height - QuotaLayout.barHeight,
                          width: bounds.width, height: QuotaLayout.barHeight)
         track.frame = bar
-        track.cornerRadius = QuotaLayout.barHeight / 2
-        track.backgroundColor = NSColor(white: 0.15, alpha: 1).cgColor
+        track.cornerRadius = QuotaLayout.barCornerRadius
 
         switch kind {
         case .measuring:
             fill.frame = bar
-            fill.cornerRadius = QuotaLayout.barHeight / 2
-            fill.backgroundColor = BoardTheme.brand.withAlphaComponent(0.22).cgColor
+            fill.cornerRadius = QuotaLayout.barCornerRadius
             shimmer.frame = NSRect(x: -bar.width * 0.35, y: bar.minY, width: bar.width * 0.35, height: bar.height)
-            shimmer.cornerRadius = QuotaLayout.barHeight / 2
-            shimmer.backgroundColor = BoardTheme.brand.withAlphaComponent(0.65).cgColor
+            shimmer.cornerRadius = QuotaLayout.barCornerRadius
             startMeasuringAnimation()
         case .empty:
             fill.frame = .zero
             shimmer.frame = .zero
             shimmer.removeAllAnimations()
+        }
+        applyColors()
+    }
+
+    /// Raw sublayers again: no `themedBackground` for the appearance walk to re-resolve,
+    /// so the walk calls this instead. Geometry is left to ``layout()`` — a flip only
+    /// changes colour.
+    func reapplyTheme(under appearance: NSAppearance) { applyColors(under: appearance) }
+
+    /// Resolved against the appearance in force now, since a CALayer keeps whatever
+    /// plain `cgColor` it was last handed. Mid-flip the walk hands the new appearance in,
+    /// since `effectiveAppearance` hasn't caught up yet.
+    private func applyColors(under appearance: NSAppearance? = nil) {
+        (appearance ?? effectiveAppearance).performAsCurrentDrawingAppearance {
+            track.backgroundColor = BoardTheme.gaugeTrack.cgColor
+            guard kind == .measuring else { return }
+            fill.backgroundColor = BoardTheme.brand.withAlphaComponent(0.22).cgColor
+            shimmer.backgroundColor = BoardTheme.brand.withAlphaComponent(0.65).cgColor
         }
     }
 

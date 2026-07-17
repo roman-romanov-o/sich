@@ -31,6 +31,42 @@ public final class Terminal {
         ghostty_terminal_free(handle)
     }
 
+    // MARK: - Colour theme
+
+    /// Push a colour theme into the emulator: default fg/bg/cursor plus the 256-entry
+    /// palette that ANSI colour indices resolve through.
+    ///
+    /// Safe to call at any time — libghostty resolves a cell's palette index when the
+    /// render state is *read*, so re-applying on a light/dark flip re-colours existing
+    /// scrollback rather than only new output. Per-index OSC 4 overrides a program set
+    /// for itself are preserved; only untouched indices are updated.
+    public func apply(theme: TerminalTheme) {
+        setColor(GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, theme.background)
+        setColor(GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, theme.foreground)
+        setColor(GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, theme.cursor)
+        let entries = theme.palette.map { GhosttyColorRgb(r: $0.r, g: $0.g, b: $0.b) }
+        entries.withUnsafeBufferPointer {
+            _ = ghostty_terminal_set(handle, GHOSTTY_TERMINAL_OPT_COLOR_PALETTE, $0.baseAddress)
+        }
+    }
+
+    private func setColor(_ option: GhosttyTerminalOption, _ rgb: RGB) {
+        var c = GhosttyColorRgb(r: rgb.r, g: rgb.g, b: rgb.b)
+        _ = ghostty_terminal_set(handle, option, &c)
+    }
+
+    /// The emulator's live 256-entry palette (including any OSC 4 overrides a program
+    /// applied). Empty only if the read fails. The read-back that proves a theme
+    /// actually landed in libghostty rather than just being held in Swift.
+    public func currentPalette() -> [RGB] {
+        var entries = [GhosttyColorRgb](repeating: GhosttyColorRgb(), count: 256)
+        let r = entries.withUnsafeMutableBufferPointer {
+            ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_COLOR_PALETTE, $0.baseAddress)
+        }
+        guard r == GHOSTTY_SUCCESS else { return [] }
+        return entries.map { RGB(r: $0.r, g: $0.g, b: $0.b) }
+    }
+
     /// Feed raw output bytes (including VT escape sequences) into the emulator.
     public func write(_ bytes: [UInt8]) {
         bytes.withUnsafeBufferPointer { buf in

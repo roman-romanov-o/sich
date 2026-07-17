@@ -6,6 +6,16 @@ import GhostlingCore
 /// view and the mockup read identically.
 @MainActor
 enum DiffTheme {
+    /// The file-header band: a raised surface + a bright rule above it, so the
+    /// boundary between two files reads as a hard break rather than one more row
+    /// in the stream. Deliberately *lighter* than the canvas — the code rows below
+    /// it are all darker, so the band is the only thing that steps forward.
+    static let headerBand = BoardTheme.dynamic(dark: BoardTheme.hex(0x00304A),
+                                               light: BoardTheme.hex(0xD8CFB4))
+    static let headerRule = BoardTheme.hex(0x3A9ADE)    // solarized blue — the file edge
+    static let headerPath = BoardTheme.textPrimary
+    static let headerDir = BoardTheme.textDim
+
     static let addedText = BoardTheme.hex(0xCBE08F)     // solarized green-tinted light
     static let removedText = BoardTheme.hex(0xE4B3AC)   // solarized red-tinted light
     static let contextText = BoardTheme.hex(0x728797)   // base00
@@ -55,6 +65,9 @@ enum DiffTheme {
 /// `.backgroundColor` attribute drawn behind glyphs only — the POC's two layers.
 extension NSAttributedString.Key {
     static let diffRowWash = NSAttributedString.Key("ghostling.diffRowWash")
+    /// Paints a full-width rule along the TOP edge of the line's fragment — the hard
+    /// edge that starts a new file, which a background wash alone can't draw.
+    static let diffRuleAbove = NSAttributedString.Key("ghostling.diffRuleAbove")
 }
 
 @MainActor
@@ -336,12 +349,57 @@ final class DiffTextView: NSScrollView {
         return NSAttributedString(string: "       \(label)\n", attributes: attributes)
     }
 
+    /// The band that starts a file: a gap of canvas, a bright rule, then a raised
+    /// row carrying `dir/` dim + `name.ext` bright + this file's ± counts. Four cues
+    /// at once (gap, rule, surface step, weight) because the single faint wash the
+    /// header used to have was lost among 24 files of near-identical rows.
     private func fileHeader(_ file: DiffFile) -> NSAttributedString {
-        var attributes = attrs(foreground: BoardTheme.textMuted,
-                               wash: BoardTheme.canvasSunken,
-                               font: NSFont.monospacedSystemFont(ofSize: 11, weight: .semibold))
-        attributes[.paragraphStyle] = Self.paragraph(spacing: 8)
-        return NSAttributedString(string: "  \(file.displayPath)\n", attributes: attributes)
+        let header = NSMutableAttributedString(attributedString: gap())
+        let (dir, name) = Self.split(path: file.displayPath)
+        var band = attrs(foreground: DiffTheme.headerDir, wash: DiffTheme.headerBand,
+                         font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular))
+        band[.paragraphStyle] = Self.paragraph(spacing: 7)
+        band[.diffRuleAbove] = DiffTheme.headerRule
+        header.append(NSAttributedString(string: "  \(dir)", attributes: band))
+        var leaf = band
+        leaf[.foregroundColor] = DiffTheme.headerPath
+        leaf[.font] = NSFont.monospacedSystemFont(ofSize: 11, weight: .bold)
+        header.append(NSAttributedString(string: name, attributes: leaf))
+        header.append(stats(of: file, band: band))
+        header.append(NSAttributedString(string: "\n", attributes: band))
+        return header
+    }
+
+    /// "  +12 −3" trailing the path, each count in its own ± colour.
+    private func stats(of file: DiffFile, band: [NSAttributedString.Key: Any]) -> NSAttributedString {
+        let lines = file.hunks.flatMap(\.lines)
+        let added = lines.filter { $0.kind == .addition }.count
+        let removed = lines.filter { $0.kind == .deletion }.count
+        let row = NSMutableAttributedString(string: "   ", attributes: band)
+        var plus = band
+        plus[.foregroundColor] = DiffTheme.addedText
+        row.append(NSAttributedString(string: "+\(added)", attributes: plus))
+        var minus = band
+        minus[.foregroundColor] = DiffTheme.removedText
+        row.append(NSAttributedString(string: " −\(removed)", attributes: minus))
+        return row
+    }
+
+    /// A blank canvas row above a file header — the breathing room that makes the
+    /// rule below it read as a boundary instead of a border on the previous line.
+    private func gap() -> NSAttributedString {
+        NSAttributedString(
+            string: "\n",
+            attributes: [.font: NSFont.monospacedSystemFont(ofSize: 7, weight: .regular),
+                         .foregroundColor: BoardTheme.canvas])
+    }
+
+    /// Split "app/Sources/Foo.swift" into ("app/Sources/", "Foo.swift") so the leaf —
+    /// the part a reviewer scans for — can be the bright, bold half.
+    private static func split(path: String) -> (dir: String, name: String) {
+        guard let slash = path.lastIndex(of: "/") else { return ("", path) }
+        let cut = path.index(after: slash)
+        return (String(path[..<cut]), String(path[cut...]))
     }
 
     private func attrs(
@@ -365,21 +423,45 @@ final class DiffTextView: NSScrollView {
 /// Paints the `.diffRowWash` attribute across the full pane width (the faint
 /// row tint), then lets AppKit draw the standard glyph-bounded `.backgroundColor`
 /// runs on top (the denser code ribbon and word-diff highlights).
+private let diffRuleThickness: CGFloat = 2
+
 @MainActor
 private final class FullWidthDiffLayoutManager: NSLayoutManager {
     override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
         if let storage = textStorage, let container = textContainers.first {
             let chars = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+            let width = container.containerSize.width
             storage.enumerateAttribute(.diffRowWash, in: chars) { value, range, _ in
                 guard let color = value as? NSColor else { return }
-                let glyphRange = self.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-                self.enumerateLineFragments(forGlyphRange: glyphRange) { _, used, _, _, _ in
+                self.fillFragments(of: range, origin: origin, width: width) { color.setFill(); return $0 }
+            }
+            // Rules paint after every wash so a file header's top edge is never
+            // covered by the wash of the row that follows it.
+            storage.enumerateAttribute(.diffRuleAbove, in: chars) { value, range, _ in
+                guard let color = value as? NSColor else { return }
+                self.fillFragments(of: range, origin: origin, width: width) { used in
                     color.setFill()
-                    NSRect(x: origin.x, y: origin.y + used.minY,
-                           width: container.containerSize.width, height: used.height).fill()
+                    return NSRect(x: used.minX, y: used.minY,
+                                  width: used.width, height: diffRuleThickness)
                 }
             }
         }
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
+    }
+
+    /// Fill one rect per line fragment of `range`, letting `shape` set the colour and
+    /// narrow the full-width row rect down to what it actually wants painted.
+    /// `nonisolated` to match the drawing callbacks it runs inside — every call it
+    /// makes is an inherited (nonisolated) NSLayoutManager method.
+    private nonisolated func fillFragments(
+        of range: NSRange, origin: NSPoint, width: CGFloat,
+        shape: @escaping (NSRect) -> NSRect
+    ) {
+        let glyphs = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        enumerateLineFragments(forGlyphRange: glyphs) { _, used, _, _, _ in
+            let row = NSRect(x: origin.x, y: origin.y + used.minY,
+                             width: width, height: used.height)
+            shape(row).fill()
+        }
     }
 }

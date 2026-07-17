@@ -18,16 +18,24 @@ public enum HookNormalizer {
     /// prompt or idle nudge), so it maps to `permissionRequest` and lights attention.
     static let hookKind: [String: SignalKind] = [
         "SessionStart": .sessionStart,
+        "session_start": .sessionStart,
         "UserPromptSubmit": .userInput,
+        "user_prompt_submit": .userInput,
         "PreToolUse": .toolUse,
+        "pre_tool_use": .toolUse,
         "PostToolUse": .toolUse,
+        "post_tool_use": .toolUse,
         "PostToolUseFailure": .errorExit,
         "PermissionRequest": .permissionRequest,
+        "permission_request": .permissionRequest,
         "Notification": .permissionRequest,
+        "notification": .permissionRequest,
         "PermissionDenied": .errorExit,
         "Stop": .stop,
+        "stop": .stop,
         "StopFailure": .errorExit,
         "SessionEnd": .sessionEnd,
+        "session_end": .sessionEnd,
     ]
 
     /// Substrings in a Bash command that mean "this tool call is a test run".
@@ -44,6 +52,7 @@ public enum HookNormalizer {
         return SignalEvent(
             kind: resolveKind(payload),
             source: .hook,
+            agent: resolveAgent(payload),
             sessionID: payload["session_id"] as? String ?? "",
             timestamp: SignalTimestamp.parse(payload["timestamp"], arrival: arrival),
             cwd: payload["cwd"] as? String,
@@ -66,6 +75,14 @@ public enum HookNormalizer {
             return .testRunStart
         }
         return hookKind[name] ?? .unknown
+    }
+
+    private static func resolveAgent(_ payload: [String: Any]) -> CardAgent {
+        let raw = payload["ghostling_agent"] as? String
+            ?? payload["_ghostling_agent"] as? String
+            ?? payload["_source"] as? String
+            ?? payload["source"] as? String
+        return raw.flatMap(CardAgent.init(rawValue:)) ?? .claude
     }
 
     /// True when a `PreToolUse` Bash command invokes a known test runner

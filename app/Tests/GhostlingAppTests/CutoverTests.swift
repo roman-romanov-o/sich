@@ -142,7 +142,7 @@ struct CutoverTests {
 
     // MARK: - TC-E2E-320: append a Stop line → board reflects it within one poll, no server
 
-    @Test("TC-E2E-320: append a Stop line to the event file → board shows it waiting within one poll")
+    @Test("TC-E2E-320: append a Stop line to the event file → board shows it idle within one poll")
     @MainActor
     func appendStopReachesBoardNoServer() throws {
         let file = makeEventsFile()
@@ -157,8 +157,8 @@ struct CutoverTests {
 
         let card = snapshot.first { $0.sessionID == "S" }
         #expect(card != nil, "the appended session must appear on the board")
-        #expect(card?.state == .waitingForInput,
-                "the Stop line ends the turn → board shows it awaiting your reply — no server involved")
+        #expect(card?.state == .idle,
+                "the Stop line clears running status — no server involved")
     }
 
     // MARK: - Fixture helpers

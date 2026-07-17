@@ -1,0 +1,46 @@
+// contracts.c4 — code changes / interface contracts as components + typed relations.
+// Replaces code-changes/*.md (REST, event, and function contracts alike).
+//
+// Conventions:
+//   - One component per interface/module this task creates or changes (#new / #existing).
+//   - The SHAPE of the contract (signatures, request/response, error cases) goes in
+//     `metadata {}` — multi-line strings hold embedded YAML/JSON so it stays structured.
+//   - Relations carry the call/message: `caller -> callee 'METHOD /path'` or
+//     `producer -> broker 'publishes event.name'`.
+
+model {
+  // `extend` re-opens an element declared in task.c4 to nest the new interface inside it.
+  extend sys.new_part {
+    api = component '{{interface_name}}' {
+      #new
+      description '{{what_this_interface_does}}'
+      metadata {
+        contract_kind 'function'        // function | rest | event | cli
+        file '{{path/to/file}}'
+        contract '''
+          {{signature_or_endpoint}}
+          input:
+            {{field}}: {{type}} — {{meaning}}
+          output:
+            {{field}}: {{type}} — {{meaning}}
+          errors:
+            {{error_case}}: {{behaviour}}
+        '''
+        stories '{{US-001}}'
+      }
+    }
+  }
+
+  sys.existing_part -> sys.new_part.api '{{call_or_message}}' {
+    metadata {
+      payload '{{what_crosses_this_boundary}}'
+    }
+  }
+}
+
+views {
+  view contracts {
+    title '{{task_id}}: contracts'
+    include sys.new_part, sys.new_part.*, sys.existing_part
+  }
+}

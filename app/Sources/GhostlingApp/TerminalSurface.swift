@@ -13,7 +13,7 @@ import GhostlingCore
 public final class TerminalSurface: NSView {
     private let session: PTYSession
     private var readTimer: Timer?
-    private let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    private let font: NSFont
     private let inset: CGFloat = 9
     /// Back policy. When set, `⌘[` (the macOS "Back" idiom) is offered here; returning
     /// `true` means "this surface is hosted (e.g. drilled-in)" so the combo is consumed
@@ -60,11 +60,12 @@ public final class TerminalSurface: NSView {
         return CGSize(width: w, height: h)
     }()
 
-    public init(session: PTYSession) {
+    public init(session: PTYSession, fontSize: CGFloat = 20) {
         self.session = session
+        self.font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
         super.init(frame: .zero)
-        wantsLayer = true
-        applyBackgroundColor()
+        themedBackground = BoardTheme.termBg
+        applyTerminalTheme()
         // Clip drawing to our own bounds. Without this, a flipped, layer-backed
         // surface composites its black fill across the WHOLE host window (the dirty
         // rect it is handed spans the host, and an unclipped layer paints all of it),
@@ -81,19 +82,24 @@ public final class TerminalSurface: NSView {
     public override var acceptsFirstResponder: Bool { true }
     public override var isFlipped: Bool { true }
 
-    /// System light/dark flipped: the dynamic `termBg` cgColor was resolved for the old
-    /// appearance, so re-resolve the layer fill and repaint (draw()'s own `.setFill()`
-    /// calls already resolve live, but the layer backing needs a nudge).
+    /// System light/dark flipped. The layer fill re-resolves itself (`themedBackground`),
+    /// and `draw()`'s own `.setFill()` calls already resolve live — but the emulator sits
+    /// below AppKit and can't see an NSColor, so its palette has to be re-pushed by hand.
+    /// That's what keeps the child's *content* colours flipping with the surface instead
+    /// of leaving dark-console ANSI stranded on light paper.
     public override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        applyBackgroundColor()
+        applyTerminalTheme()
+        refresh()   // cells re-resolve their palette indices through the new theme
         needsDisplay = true
     }
 
-    private func applyBackgroundColor() {
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = BoardTheme.termBg.cgColor
-        }
+    /// Push this appearance's colour theme into the emulator so the child's ANSI
+    /// colours are *ours*, not libghostty's built-in dark-oriented defaults. libghostty
+    /// resolves a cell's palette index when the render state is read, so this re-colours
+    /// existing scrollback as well as new output — the flip is retroactive, no reflow.
+    private func applyTerminalTheme() {
+        session.terminal.apply(theme: BoardTheme.terminalTheme(for: effectiveAppearance))
     }
 
     // MARK: - Geometry → live resize
@@ -461,7 +467,7 @@ public final class TerminalSurface: NSView {
         // up by hand. We map it natively so it works out of the box.
         case 36, 76:
             return flags.contains(.shift) || flags.contains(.option) ? .newline : .enter
-        case 48: return .tab
+        case 48: return flags.contains(.shift) ? .backtab : .tab
         case 51 where flags.contains(.command): return .deleteLine
         case 51 where word: return .deleteWord
         case 51: return .backspace

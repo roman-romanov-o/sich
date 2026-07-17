@@ -17,14 +17,49 @@ struct ArchitecturePaneTests {
         return root
     }
 
+    /// The built SPA (hash history) serves views at `#/view/<id>/`; the bare `#/<id>`
+    /// shape loads its 404 page — caught live in the task-99 dogfood capture.
+    @Test func deepLinkUsesTheSPAsViewRoute() throws {
+        let base = try #require(URL(string: "http://127.0.0.1:5500"))
+        #expect(ArchitecturePane.deepLinkURL(base: base, view: "us-001-flow").absoluteString
+            == "http://127.0.0.1:5500/#/view/us-001-flow/")
+        #expect(ArchitecturePane.deepLinkURL(base: base, view: nil) == base)
+    }
+
     /// With no `likec4` CLI and no cached build, the pane degrades exactly like mermaid:
     /// it shows the `.c4` source and an install hint — never blank, never a crash.
     @Test func degradesToSourceWhenNoCLIandNoBuild() throws {
-        try #require(LikeC4.cliPath() == nil, "test asserts the degrade path; skip if likec4 is installed")
-        let pane = ArchitecturePane()
+        let pane = ArchitecturePane(cliPath: { nil })
         pane.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
         pane.present(projectDir: try projectWithModel(), deepLinkView: "task-01")
         if case .degraded = pane.lastContent {} else { Issue.record("expected .degraded") }
+        pane.teardown()
+    }
+
+    @Test func failedRebuildKeepsLastGoodBuild() async throws {
+        let project = try projectWithModel()
+        let cacheBase = FileManager.default.temporaryDirectory
+            .appendingPathComponent("arch-pane-cache-\(UUID().uuidString)")
+        let firstHash = try #require(LikeC4.hash(of: LikeC4.sources(projectDir: project)))
+        let firstBuild = LikeC4.cacheDir(hash: firstHash, base: cacheBase)
+        try FileManager.default.createDirectory(at: firstBuild, withIntermediateDirectories: true)
+        try "<html>OLD</html>".write(to: firstBuild.appendingPathComponent("index.html"),
+                                     atomically: true, encoding: .utf8)
+
+        let pane = ArchitecturePane(cliPath: { "/bin/false" }, cacheBase: cacheBase)
+        pane.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+        pane.present(projectDir: project, deepLinkView: "task-01")
+        if case .ready = pane.lastContent {} else { Issue.record("expected cached build") }
+
+        try "specification { element system }\nmodel { system edited }"
+            .write(to: project.appendingPathComponent("docs/architecture/model.c4"),
+                   atomically: true, encoding: .utf8)
+        pane.present(projectDir: project, deepLinkView: "task-01")
+        for _ in 0..<20 where pane.lastWarning == nil {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(pane.lastWarning == "Build failed — showing last good architecture build.")
         pane.teardown()
     }
 

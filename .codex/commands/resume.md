@@ -23,8 +23,20 @@ incomplete phase. All subagent calls run in this session (subscription-billed).
 2. Read state file: `.sahaidachny/<task_id>-execution-state.yaml`.
    If missing: tell the user there's nothing to resume, suggest `/saha:execute <task_id>`, stop.
 3. Parse the YAML. Validate `current_phase` is **not** in
-   `{completed, failed, stopped}` — if it is, tell the user the task already
-   finished and exit. Show `state.error_message` if present.
+   `{completed, completed_pending_manual, failed, stopped}` — if it is, tell the
+   user the task already finished and exit. For `completed_pending_manual`, print the
+   pending manual checklist from `state.context.pending_manual_checks` so they still
+   see what needs human sign-off. Show `state.error_message` if present.
+4. **Validate the task is saha/v2**: `state.task_path` must contain `progress.yaml`
+   with `format: saha/v2`. If not, this state predates the v2 format — tell the user
+   to re-run with the legacy path (`saha resume`) or re-plan, and stop.
+5. **Ensure the toolchain is resolved**: if `state.context.stack` is missing (older
+   state file), run Step 0 of `/saha:execute` to resolve and stash it before
+   continuing. Likewise ensure `state.context.pending_manual_checks` exists (default `[]`).
+6. **Ensure the spec fingerprint exists**: if `state.context.spec_fingerprint` is
+   missing, compute it now (`cd <task_path> && shasum model/*.c4`) and stash it,
+   noting in your output that spec-freeze integrity is only tracked from this
+   resume point onward.
 
 ### Step 2 — Determine resume point
 
@@ -62,10 +74,14 @@ SAHA EXECUTION FINISHED
   Task: <task_id>
   Final phase: <current_phase>
   Iterations: <current_iteration> / <max_iterations>
-  [if completed]      DoD: ✓ Met
-  [if failed/stopped] Reason: <error_message>
+  [if completed]                 DoD: ✓ Met
+  [if completed_pending_manual]  DoD: ✓ Code-complete — manual sign-off pending
+  [if failed/stopped]            Reason: <error_message>
 ═══════════════════════════════════════════════
 ```
+
+For `completed_pending_manual`, also print the manual checklist (same format as
+`/saha:execute` Step 4).
 
 ## Notes
 

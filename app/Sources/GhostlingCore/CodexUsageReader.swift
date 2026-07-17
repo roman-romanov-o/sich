@@ -3,9 +3,11 @@ import Foundation
 /// Measured Codex quota from the CLI's OWN persisted telemetry — the on-disk
 /// sibling of the Claude `/usage` scrape. Codex writes a `rate_limits` snapshot
 /// into every session rollout (`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`,
-/// inside `payload.rate_limits` of the `token_count` event) on every API call:
-/// `primary` is the 5h rolling window, `secondary` the weekly cap, each with
-/// `used_percent` and an epoch-seconds `resets_at`. Reading the newest snapshot
+/// inside `payload.rate_limits` of the `token_count` event) on every API call.
+/// Each constraint carries `used_percent`, `window_minutes`, and an epoch-seconds
+/// `resets_at`; do not infer the window from the `primary`/`secondary` key because
+/// some plans currently persist a weekly-only `primary` with `secondary: null`.
+/// Reading the newest snapshot
 /// is a pure file read — no credentials, no prompt, no spawn (watcher-pure) —
 /// and yields a real `measured` gauge for the codex pool.
 ///
@@ -35,8 +37,8 @@ public enum CodexUsageReader {
         }
     }
 
-    /// The last persisted `rate_limits` snapshot: primary (5h window) + secondary
-    /// (weekly). Either may be absent in a partial write; never both.
+    /// The last persisted `rate_limits` snapshot. Either constraint may be absent
+    /// in a partial write; `window_minutes`, not the key name, identifies 5h vs weekly.
     public struct Snapshot: Sendable, Equatable {
         public let primary: Constraint?
         public let secondary: Constraint?
@@ -54,15 +56,12 @@ public enum CodexUsageReader {
     public static func source(
         now: Date = Date(), sessionsDir: URL = defaultSessionsDir
     ) -> QuotaSourceInput? {
-        // ponytail: scan the 5 newest rollouts — the current session's file
+        // ponytail: scan the newest rollouts — the current session's file
         // virtually always carries the snapshot; widen if a snapshot-less
         // rollout backlog ever shows up in practice.
-        for file in rolloutFiles(in: sessionsDir).prefix(5) {
-            if let snapshot = lastSnapshot(in: file) {
-                return source(from: snapshot, now: now)
-            }
+        return mergedSnapshot(in: rolloutFiles(in: sessionsDir).prefix(10)).flatMap {
+            source(from: $0, now: now)
         }
-        return nil
     }
 
     // MARK: - Mapping (mirrors ClaudeUsagePanel.interactiveSource binding logic)
@@ -94,28 +93,28 @@ public enum CodexUsageReader {
     public static func displaySources(
         now: Date = Date(), sessionsDir: URL = defaultSessionsDir
     ) -> [QuotaSourceInput]? {
-        for file in rolloutFiles(in: sessionsDir).prefix(5) {
-            if let snapshot = lastSnapshot(in: file) {
-                return displaySources(from: snapshot, now: now)
-            }
+        mergedSnapshot(in: rolloutFiles(in: sessionsDir).prefix(10)).flatMap {
+            displaySources(from: $0, now: now)
         }
-        return nil
     }
 
     public static func displaySources(from snapshot: Snapshot, now: Date) -> [QuotaSourceInput]? {
         var sources: [QuotaSourceInput] = []
         if let primary = snapshot.primary {
-            sources.append(splitSource(pool: "codex_5h", effective(primary, now: now)))
+            sources.append(splitSource(primary, now: now))
         }
         if let secondary = snapshot.secondary {
-            sources.append(splitSource(pool: "codex_weekly", effective(secondary, now: now)))
+            let source = splitSource(secondary, now: now)
+            if !sources.contains(where: { $0.pool == source.pool }) {
+                sources.append(source)
+            }
         }
         return sources.isEmpty ? nil : sources
     }
 
-    private static func splitSource(
-        pool: String, _ view: (used: Double, reset: Date?, refill: QuotaRefillKind)
-    ) -> QuotaSourceInput {
+    private static func splitSource(_ constraint: Constraint, now: Date) -> QuotaSourceInput {
+        let view = effective(constraint, now: now)
+        let pool = view.refill == .rollingWindow ? "codex_5h" : "codex_weekly"
         let remaining = max(0.0, min(1.0, 1.0 - view.used / 100.0))
         return QuotaSourceInput(
             provider: "codex", pool: pool,
@@ -164,19 +163,49 @@ public enum CodexUsageReader {
     /// scan lines backwards. A line truncated by the chunk boundary just fails
     /// the JSON parse and is skipped.
     static func lastSnapshot(in file: URL, tailBytes: UInt64 = 262_144) -> Snapshot? {
-        guard let handle = try? FileHandle(forReadingFrom: file) else { return nil }
+        snapshots(in: file, tailBytes: tailBytes).first
+    }
+
+    static func snapshots(in file: URL, tailBytes: UInt64 = 262_144) -> [Snapshot] {
+        guard let handle = try? FileHandle(forReadingFrom: file) else { return [] }
         defer { try? handle.close() }
-        guard let size = try? handle.seekToEnd() else { return nil }
+        guard let size = try? handle.seekToEnd() else { return [] }
         try? handle.seek(toOffset: size > tailBytes ? size - tailBytes : 0)
-        guard let data = try? handle.readToEnd(), !data.isEmpty else { return nil }
+        guard let data = try? handle.readToEnd(), !data.isEmpty else { return [] }
         let marker = Data("\"rate_limits\"".utf8)
+        var snapshots: [Snapshot] = []
         for line in data.split(separator: UInt8(ascii: "\n")).reversed() {
             guard line.firstRange(of: marker) != nil,
                   let snapshot = parseLine(Data(line))
             else { continue }
-            return snapshot
+            snapshots.append(snapshot)
         }
-        return nil
+        return snapshots
+    }
+
+    /// Newer Codex builds may emit only the changed quota window in a given
+    /// `rate_limits` event (for example weekly-only `primary` with `secondary:
+    /// null`). Merge recent tail snapshots by window so a weekly-only event does
+    /// not erase the newest 5h reading from a neighbouring line/session.
+    static func mergedSnapshot<S: Sequence>(in files: S) -> Snapshot? where S.Element == URL {
+        var rolling: Constraint?
+        var weekly: Constraint?
+        for file in files {
+            for snapshot in snapshots(in: file) {
+                for constraint in [snapshot.primary, snapshot.secondary].compactMap({ $0 }) {
+                    if constraint.windowMinutes < 1440 {
+                        rolling = rolling ?? constraint
+                    } else {
+                        weekly = weekly ?? constraint
+                    }
+                }
+                if rolling != nil, weekly != nil {
+                    return Snapshot(primary: rolling, secondary: weekly)
+                }
+            }
+        }
+        guard rolling != nil || weekly != nil else { return nil }
+        return Snapshot(primary: rolling, secondary: weekly)
     }
 
     /// One rollout line → snapshot. The event shape is

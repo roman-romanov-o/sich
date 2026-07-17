@@ -1,12 +1,18 @@
 ---
 description: Generate phased implementation plan
 argument-hint: [task-path]
-allowed-tools: Read, Write, Glob, Grep, AskUserQuestion, Task
+allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, Task
 ---
 
 # Implementation Plan
 
-Generate a phased implementation plan from all planning artifacts.
+Generate a phased implementation plan from all planning artifacts. The plan is
+authored twice, in lockstep:
+
+1. **`model/phases.c4`** — the reviewable overview: phase elements, dependency
+   arrows, which stories each phase delivers (view `phases`).
+2. **`progress.yaml` `phases:`** — the authoritative machine record the
+   execution loop walks and ticks.
 
 ## Arguments
 
@@ -18,12 +24,9 @@ Generate a phased implementation plan from all planning artifacts.
 
 ## Prerequisites
 
-All prior planning steps should be complete:
-- Task description
-- User stories
-- Design decisions (full mode)
-- code changes (full mode)
-- Test specifications
+All prior planning steps should be complete (check `planning:` in
+`{task_path}/progress.yaml`):
+- Task description, user stories, design decisions, code changes, test specs
 
 Run `/saha:status` to verify readiness.
 
@@ -32,16 +35,14 @@ Run `/saha:status` to verify readiness.
 ### 1. Gather All Artifacts
 
 Read and synthesize:
-- `{task_path}/task-description.md` - Scope and constraints
-- `{task_path}/user-stories/*.md` - Features to implement
-- `{task_path}/design-decisions/*.md` - Technical approach
-- `{task_path}/code-changes/*.md` - Interfaces to build
-- `{task_path}/test-specs/**/*.md` - Test requirements
+- `{task_path}/model/*.c4` - The full spec (task, stories, decisions, contracts, test scenarios)
+- `{task_path}/progress.yaml` - Stories, ACs, dependencies
 - `{task_path}/research/*.md` - Technical context
+- `.claude/templates/phases.c4` - Template/conventions for this artifact
 
 ### 2. Identify Dependencies
 
-Build dependency graph:
+Build the dependency graph from stories' `depends_on` and the contracts:
 - Which stories depend on others?
 - What infrastructure is needed first?
 - What can be parallelized?
@@ -51,7 +52,7 @@ Build dependency graph:
 Group work into logical phases:
 
 **Phase Criteria:**
-- Each phase should be deployable/testable independently
+- Each phase should be buildable/testable independently
 - Earlier phases establish foundation for later ones
 - Critical path items go first
 - Related stories are grouped together
@@ -62,148 +63,67 @@ Group work into logical phases:
 3. **Extended Features** - Should-have functionality
 4. **Polish** - Could-have, edge cases, optimization
 
-### 4. Create Phase Files
+### 4. Author the Phase Overview
 
-Create `{task_path}/implementation-plan/phase-XX-{name}.md`:
+Add to `{task_path}/model/phases.c4` (following `.claude/templates/phases.c4`):
 
-```markdown
-# Phase XX: [Phase Name]
-
-**Status:** Not Started | In Progress | Complete
-**Estimated Effort:** [T-shirt size: S/M/L/XL]
-**Dependencies:** Phase XX-1 (if applicable)
-
-## Objective
-
-[What this phase accomplishes - 1-2 sentences]
-
-## Scope
-
-### Stories Included
-
-| Story | Priority | Complexity |
-|-------|----------|------------|
-| US-XXX | Must Have | M |
-| US-YYY | Must Have | S |
-
-### Out of Scope (Deferred to Later Phases)
-
-- US-ZZZ (Phase 3)
-
-## Implementation Steps
-
-### Step 1: [Component/Feature Name]
-
-**Description:** [What to build]
-
-**Files to Create/Modify:**
-- `src/path/to/new-file.ts` - [Purpose]
-- `src/path/to/existing.ts` - [What changes]
-
-**Technical Notes:**
-- [Implementation guidance]
-- [Patterns to follow]
-
-**Acceptance Criteria:**
-- [ ] [Verifiable outcome]
-- [ ] [Another outcome]
-
-**Tests:**
-- TC-UNIT-XXX
-- TC-INT-XXX
-
----
-
-### Step 2: [Next Component]
-
-[...]
-
-## Definition of Done
-
-Phase is complete when:
-- [ ] All stories implemented
-- [ ] All tests passing
-- [ ] Code reviewed
-- [ ] Documentation updated
-- [ ] Deployed to staging
-
-## Risks
-
-| Risk | Likelihood | Impact | Mitigation |
-|------|------------|--------|------------|
-| [Risk] | Medium | High | [How to handle] |
-
-## Notes
-
-[Any additional context or decisions made during planning]
-
-## Related
-
-- **Stories:** US-XXX, US-YYY
-- **Decisions:** DD-XXX
-- **Contracts:** [code-change.md]
-- **Tests:** [test-spec.md]
+```likec4
+model {
+  phase-01 = phase 'Phase 01: Foundation' {
+    description '''
+      **Objective:** {1-2 sentences on what this phase accomplishes}
+    '''
+    metadata {
+      effort 'M'                       // S | M | L | XL
+      stories 'US-001'
+      risks '{main risk} — {mitigation}'
+    }
+  }
+  phase-01 -> phase-02 'unblocks'      // dependency arrows = the critical path
+  phase-01 -> us-001 'delivers'        // wire each phase to its stories
+}
 ```
 
-### 5. Create Implementation Plan README
+Maintain the `phases` view: every phase, its dependency arrows, and the stories
+delivered. The arrows ARE the dependency graph — no separate diagram needed.
 
-Create `{task_path}/implementation-plan/README.md`:
+### 5. Record Phases in progress.yaml
 
-```markdown
-# Implementation Plan
+For each phase, append to `phases:` in `{task_path}/progress.yaml`:
 
-Phased execution plan for [Task Name].
-
-## Overview
-
-| Phase | Name | Status | Stories |
-|-------|------|--------|---------|
-| 01 | Foundation | Not Started | US-001 |
-| 02 | Core Features | Not Started | US-002, US-003 |
-| 03 | Extended Features | Not Started | US-004, US-005 |
-
-## Dependency Graph
-
-```
-Phase 01: Foundation
-    ↓
-Phase 02: Core Features
-    ↓
-Phase 03: Extended Features
+```yaml
+phases:
+  - id: phase-01
+    title: "Foundation"
+    view: phases
+    stories: [US-001]
+    status: pending          # pending | in_progress | done
+    steps:
+      - name: "Create SessionRegistry model"
+        files: [app/Sources/GhostlingCore/SessionRegistry.swift]
+        status: pending
+      - name: "Wire registry into BoardShell lifecycle"
+        files: [app/Sources/GhostlingApp/BoardShell.swift]
+        status: pending
 ```
 
-## Timeline
+Steps are the implementer's work items: concrete, file-scoped, ordered. A step
+without a `files` list is usually under-specified. Technical guidance that
+doesn't fit a step name belongs in the phase element's `description` in
+`phases.c4` — the YAML stays terse and machine-walkable.
 
-```
-Phase 01 ████████░░░░░░░░░░░░░░░░
-Phase 02 ░░░░░░░░████████████░░░░
-Phase 03 ░░░░░░░░░░░░░░░░████████
-```
+### 6. Compile Gate + Progress
 
-## Critical Path
-
-The following items block all downstream work:
-1. [Critical item from Phase 1]
-2. [Foundation component]
-
-## Risks Summary
-
-| Phase | Key Risks |
-|-------|-----------|
-| 01 | [Main risk] |
-| 02 | [Main risk] |
-
-## Execution Notes
-
-- [Guidance for executing the plan]
-- [Dependencies on external teams/resources]
+```bash
+likec4 validate {task_path}/model
 ```
 
-### 6. Update Task README
+Fix any errors, then update `{task_path}/progress.yaml`:
 
-Update `{task_path}/README.md`:
-- Set "Implementation Plan" to complete
-- Add phase summary to overview
+```yaml
+planning:
+  implementation_plan: { status: done, views: [phases] }
+```
 
 ## Planning Guidelines
 
@@ -211,9 +131,10 @@ Good implementation plans:
 - [ ] Have clear phase boundaries
 - [ ] Can be executed incrementally
 - [ ] Account for testing at each phase
-- [ ] Identify the critical path
+- [ ] Identify the critical path (the arrow chain in the `phases` view)
+- [ ] Cover every `must` story in some phase
 - [ ] Are realistic about complexity
-- [ ] Include rollback considerations
+- [ ] Include rollback considerations for risky steps
 
 ## 7. Review Artifacts
 
@@ -228,7 +149,8 @@ Task tool:
 
     Review mode: plan
     Task path: {task_path}
-    Artifacts to review: {task_path}/implementation-plan/phase-*.md
+    Artifacts to review: {task_path}/model/phases.c4 and the phases section
+    of {task_path}/progress.yaml
 
     Review the implementation plan and report any issues.
 ```
@@ -243,7 +165,6 @@ If the reviewer finds blockers (🔴), fix before proceeding.
 
 ## Output
 
-Creates:
-- `{task_path}/implementation-plan/phase-XX-{name}.md` (one per phase)
-- `{task_path}/implementation-plan/README.md`
-- Updates `{task_path}/README.md`
+Creates or updates:
+- `{task_path}/model/phases.c4` (view `phases`)
+- `{task_path}/progress.yaml` (phases records + planning.implementation_plan)

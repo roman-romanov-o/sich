@@ -13,11 +13,9 @@ import Testing
 ///     forwarder is only installed in this repo, so realistically every task shares
 ///     its dir — the collision is the common case, not the edge case).
 ///
-///  2. **"Done" instead of "waiting for your response."** A Claude `Stop` hook fires
-///     at the END OF EVERY TURN — the agent has yielded the turn back to you — yet it
-///     is classified as `done`. So a session that is really *awaiting your next
-///     message* reads as finished (and reads it the instant a turn like "wait 20
-///     seconds, then say hello" yields, while you still expect work).
+///  2. **"Done" instead of "idle."** A Claude `Stop` hook fires at the end of a turn.
+///     It clears running status; it is not a terminal session end and not the explicit
+///     "needs input" signal (that is `Notification`/permission).
 ///
 /// Deterministic: no real `claude`, no wall clock. The reported end-to-end scenario is
 /// driven through the exact seams that decide card placement (`BoardShell.applySessions`
@@ -72,7 +70,26 @@ struct TerminalStateBugReproTests {
                 "the untouched task must not be marked done when a DIFFERENT task's agent finishes")
     }
 
-    // MARK: - Bug 2: after a turn, the agent is WAITING FOR YOU, not DONE
+    @Test func completedTaskInSameRepoDoesNotReopenToNeedsYou() throws {
+        let shell = twoTasksInOneRepo()
+        let completed = try #require(shell.cards.first { $0.sessionID == "task-a-untouched" })
+
+        shell.move(cardID: completed.id, to: .done)
+        shell.applySessions([
+            BoardCard(
+                sessionID: "stale-notification", projectDir: "/repo", agent: .claude,
+                flow: .b, state: .waitingForInput,
+                updatedAt: base.addingTimeInterval(200),
+                boundCardID: completed.id.uuidString
+            )
+        ])
+
+        let actual = try #require(shell.cards.first { $0.id == completed.id })
+        #expect(actual.state == .done,
+                "a manually completed task must not reopen to NEEDS YOU from a later hook observation")
+    }
+
+    // MARK: - Bug 2: after a turn, the agent is IDLE, not DONE or attention
 
     /// The hook stream a real "wait 20 seconds, then say hello" turn produces, each
     /// event its own coalesce burst (>1s apart) so the whole transition path is applied.
@@ -88,20 +105,19 @@ struct TerminalStateBugReproTests {
             ev("UserPromptSubmit", 2),   // you typed "wait 20 seconds, then say hello"
             ev("PreToolUse", 4),         // claude runs `sleep 20`
             ev("PostToolUse", 26),       // …done sleeping
-            ev("Stop", 27),              // claude said hello and YIELDED THE TURN BACK TO YOU
+            ev("Stop", 27),              // Claude ended the active turn
         ])
 
         let state = try #require(store.entry(for: "turn")?.state)
-        #expect(state == .waitingForInput,
-                "a Stop hook means the agent finished its turn and is awaiting your reply — not that the task is done")
-        #expect(state.needsAttention, "an awaiting-you session must light the attention signal")
-        #expect(BoardColumn(state: state) == .waitingForInput)
+        #expect(state == .idle,
+                "a Stop hook clears running; it is not done and not an attention signal")
+        #expect(!state.needsAttention)
+        #expect(BoardColumn(state: state) == .idle)
     }
 
-    /// And "waiting for your response" must persist — it must NOT decay to `unknown`
-    /// after 30s of (expected) silence while you are away, or the notification vanishes
-    /// exactly when you need it.
-    @Test func awaitingYourResponseSurvivesSilence() throws {
+    /// And idle must persist — it must NOT decay to `unknown` after the turn has
+    /// already stopped.
+    @Test func idleAfterStopSurvivesSilence() throws {
         let store = HookSessionStore(staleThreshold: 30)
         store.ingest([
             HookNormalizer.normalize(
@@ -109,7 +125,7 @@ struct TerminalStateBugReproTests {
                 arrival: base)!,
         ])
         store.sweepStale(now: base.addingTimeInterval(120))   // you stepped away for 2 min
-        #expect(store.entry(for: "turn")?.state == .waitingForInput,
-                "an awaiting-you session must stay lit through silence, not decay to unknown")
+        #expect(store.entry(for: "turn")?.state == .idle,
+                "a stopped session should stay idle through silence, not decay to unknown")
     }
 }

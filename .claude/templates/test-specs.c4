@@ -1,0 +1,42 @@
+// test-specs.c4 — test scenarios as dynamic views: preconditions -> steps -> expected.
+// Replaces test-specs/{e2e,integration,unit}/*.md.
+//
+// Conventions:
+//   - View id encodes the level: `ts-e2e-01`, `ts-int-01`, `ts-unit-01`.
+//   - Preconditions + environment go in the view `description`; each step's expected
+//     observation goes in its `notes`.
+//   - Name the AC each scenario proves (**US-001.AC-1**) — the execution loop binds
+//     the real test to that AC in progress.yaml `tests:`.
+//   - A test scenario walks the SAME elements as the story flow it verifies; add a
+//     `harness` element only when the test infrastructure itself matters (fixtures,
+//     containers, fakes).
+
+model {
+  harness = external '{{test_harness}}' {
+    description '{{runner_and_fixtures_eg_pytest_testcontainers_or_swift_test}}'
+  }
+}
+
+views {
+  dynamic view ts-e2e-01 {
+    title 'E2E: {{scenario_name}}'
+    description '''
+      **Proves:** US-001.AC-1
+      **Preconditions:** {{state_that_must_hold_before_the_test}}
+      **Environment:** {{how_the_harness_is_set_up}}
+    '''
+
+    harness -> sys.new_part '{{arrange_and_act}}' {
+      notes '''
+        {{setup_detail}}
+      '''
+    }
+    sys.new_part -> sys.existing_part '{{observed_internal_effect}}'
+    harness <- sys.new_part '{{assert}}' {
+      notes '''
+        **Expected:** {{exact_observable_outcome}}
+        **Edge cases:** {{edge_case_variants_this_scenario_also_covers}}
+      '''
+    }
+  }
+}

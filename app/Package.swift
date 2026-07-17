@@ -15,6 +15,10 @@ import PackageDescription
 let package = Package(
     name: "Ghostling",
     platforms: [.macOS(.v13)],
+    dependencies: [
+        // YAML parsing for saha/v2 task tracking (`progress.yaml`).
+        .package(url: "https://github.com/jpsim/Yams.git", from: "5.1.0"),
+    ],
     targets: [
         .binaryTarget(
             name: "GhosttyVt",
@@ -25,9 +29,10 @@ let package = Package(
         ),
         .target(
             name: "GhostlingCore",
-            dependencies: ["GhosttyVt", "CPtySupport"]
+            dependencies: ["GhosttyVt", "CPtySupport",
+                           .product(name: "Yams", package: "Yams")]
         ),
-        // AppKit window layer: `TerminalSurface` (renders one PTY) + `AppShell`
+        // AppKit window layer: `TerminalSurface` (renders one PTY) + `BoardShell`
         // (window/app lifecycle). Kept thin — the testable transforms live in
         // GhostlingCore (KeyEncoder, Terminal.lines, SessionRegistry).
         .target(

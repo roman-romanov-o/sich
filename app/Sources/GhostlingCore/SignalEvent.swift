@@ -37,6 +37,7 @@ public enum SignalSource: String, Sendable, Equatable {
 public struct SignalEvent: Sendable, Equatable {
     public let kind: SignalKind
     public let source: SignalSource
+    public let agent: CardAgent
     public let sessionID: String
     public let timestamp: Date
     /// The project dir a hook carries (`cwd`), if any — used to label the card.
@@ -50,6 +51,7 @@ public struct SignalEvent: Sendable, Equatable {
     public init(
         kind: SignalKind,
         source: SignalSource,
+        agent: CardAgent = .claude,
         sessionID: String,
         timestamp: Date,
         cwd: String? = nil,
@@ -57,6 +59,7 @@ public struct SignalEvent: Sendable, Equatable {
     ) {
         self.kind = kind
         self.source = source
+        self.agent = agent
         self.sessionID = sessionID
         self.timestamp = timestamp
         self.cwd = cwd

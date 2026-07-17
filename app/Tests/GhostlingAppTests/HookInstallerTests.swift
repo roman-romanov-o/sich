@@ -72,6 +72,174 @@ final class HookInstallerTests: XCTestCase {
         }
     }
 
+    func testGlobalUninstallRemovesOnlyGhostlingForwarder() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ghostling-home-cleanup-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let settings = home.appendingPathComponent(".claude/settings.json")
+        try FileManager.default.createDirectory(
+            at: settings.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let ghostling = "bash \(home.appendingPathComponent(".ghostling/ghostling-forward.sh").path)"
+        let seed = """
+        {"model":"opus","hooks":{"Stop":[{"matcher":"","hooks":[\
+        {"type":"command","command":"\(ghostling)"},\
+        {"type":"command","command":"bash ~/.claude/hooks/ntfy-stop.sh"}]}],\
+        "SessionStart":[{"matcher":"","hooks":[{"type":"command","command":"\(ghostling)"}]}]}}
+        """
+        try seed.write(to: settings, atomically: true, encoding: .utf8)
+
+        XCTAssertTrue(HookInstaller.uninstallGlobal(home: home))
+        XCTAssertFalse(HookInstaller.uninstallGlobal(home: home), "second cleanup is a no-op")
+
+        let cfg = try XCTUnwrap(try JSONSerialization.jsonObject(
+            with: Data(contentsOf: settings)) as? [String: Any])
+        XCTAssertEqual(cfg["model"] as? String, "opus")
+        let hooks = try XCTUnwrap(cfg["hooks"] as? [String: Any])
+        XCTAssertFalse(commands(in: hooks["Stop"]).contains(ghostling))
+        XCTAssertTrue(commands(in: hooks["Stop"]).contains("bash ~/.claude/hooks/ntfy-stop.sh"))
+        XCTAssertNil(hooks["SessionStart"], "empty Ghostling-only event is removed")
+    }
+
+    func testCodexShimInstallWritesWrapperAndEventHooks() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ghostling-codex-home-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        XCTAssertTrue(HookInstaller.installCodexShim(home: home))
+
+        let shim = home.appendingPathComponent(".ghostling/bin/codex")
+        let shimBody = try String(contentsOf: shim, encoding: .utf8)
+        XCTAssertTrue(shimBody.contains("Ghostling Codex wrapper"))
+        XCTAssertTrue(shimBody.contains("--profile"))
+        XCTAssertTrue(shimBody.contains("ghostling-hooks"))
+
+        let attrs = try FileManager.default.attributesOfItem(atPath: shim.path)
+        XCTAssertEqual((attrs[.posixPermissions] as? NSNumber)?.intValue, 0o755)
+
+        let hook = home.appendingPathComponent(".ghostling/hooks/ghostling-codex-PermissionRequest.sh")
+        let hookBody = try String(contentsOf: hook, encoding: .utf8)
+        XCTAssertTrue(hookBody.contains(#""ghostling_agent":"codex""#))
+        XCTAssertTrue(hookBody.contains(#"event_name="PermissionRequest""#))
+
+        let profile = home.appendingPathComponent(".codex/ghostling-hooks.config.toml")
+        let profileBody = try String(contentsOf: profile, encoding: .utf8)
+        XCTAssertTrue(profileBody.contains("[features]"))
+        XCTAssertTrue(profileBody.contains("hooks = true"))
+        XCTAssertTrue(profileBody.contains("[[hooks.SessionStart]]"))
+        XCTAssertTrue(profileBody.contains("matcher = \"startup|resume\""))
+        XCTAssertTrue(profileBody.contains(hook.path))
+    }
+
+    func testCodexShimInjectsHooksOnlyInsideBoundGhostlingTerminal() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ghostling-codex-wrapper-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        XCTAssertTrue(HookInstaller.installCodexShim(home: home))
+
+        let realDir = home.appendingPathComponent("real-bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: realDir, withIntermediateDirectories: true)
+        let log = home.appendingPathComponent("codex-argv.log")
+        let realCodex = realDir.appendingPathComponent("codex")
+        try """
+        #!/usr/bin/env bash
+        : > "$GHOSTLING_TEST_ARGV_LOG"
+        for arg in "$@"; do printf '%s\\n' "$arg" >> "$GHOSTLING_TEST_ARGV_LOG"; done
+        exit 0
+        """.write(to: realCodex, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: realCodex.path)
+
+        let shim = home.appendingPathComponent(".ghostling/bin/codex")
+        let baseEnv = [
+            "HOME": home.path,
+            "PATH": "\(shim.deletingLastPathComponent().path):\(realDir.path):/usr/bin:/bin",
+            "GHOSTLING_TEST_ARGV_LOG": log.path,
+        ]
+
+        _ = try run(shim.path, ["hello"], env: baseEnv)
+        XCTAssertEqual(try loggedArgs(log), ["hello"], "unbound shells pass through unchanged")
+
+        var boundEnv = baseEnv
+        boundEnv["GHOSTLING_CARD_ID"] = UUID().uuidString
+        _ = try run(shim.path, ["hello"], env: boundEnv)
+        let bound = try loggedArgs(log)
+        XCTAssertEqual(Array(bound.prefix(3)), ["--profile", "ghostling-hooks", "--dangerously-bypass-hook-trust"])
+        XCTAssertTrue(bound.contains("--dangerously-bypass-hook-trust"))
+        XCTAssertEqual(bound.last, "hello")
+
+        _ = try run(shim.path, ["--help"], env: boundEnv)
+        XCTAssertEqual(try loggedArgs(log), ["--help"], "help/version commands must not inject hooks")
+    }
+
+    func testClaudeShimInstallWritesScopedWrapperWithoutGlobalSettings() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ghostling-claude-home-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        XCTAssertTrue(HookInstaller.installClaudeShim(home: home))
+
+        let shim = home.appendingPathComponent(".ghostling/bin/claude")
+        let shimBody = try String(contentsOf: shim, encoding: .utf8)
+        XCTAssertTrue(shimBody.contains("Ghostling Claude wrapper"))
+        XCTAssertTrue(shimBody.contains("GHOSTLING_CARD_ID"))
+        XCTAssertTrue(shimBody.contains("--settings"))
+        XCTAssertTrue(shimBody.contains("SessionStart"))
+        XCTAssertTrue(shimBody.contains("PermissionRequest"))
+
+        let forwarder = home.appendingPathComponent(".ghostling/ghostling-forward.sh")
+        let forwarderBody = try String(contentsOf: forwarder, encoding: .utf8)
+        XCTAssertTrue(forwarderBody.contains("GHOSTLING_CARD_ID"))
+
+        let attrs = try FileManager.default.attributesOfItem(atPath: shim.path)
+        XCTAssertEqual((attrs[.posixPermissions] as? NSNumber)?.intValue, 0o755)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: home.appendingPathComponent(".claude/settings.json").path),
+            "scoped shim install must not mutate global Claude settings")
+    }
+
+    func testClaudeShimInjectsOnlyInsideBoundGhostlingTerminal() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ghostling-claude-wrapper-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        XCTAssertTrue(HookInstaller.installClaudeShim(home: home))
+
+        let realDir = home.appendingPathComponent("real-bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: realDir, withIntermediateDirectories: true)
+        let log = home.appendingPathComponent("argv.log")
+        let realClaude = realDir.appendingPathComponent("claude")
+        try """
+        #!/usr/bin/env bash
+        : > "$GHOSTLING_TEST_ARGV_LOG"
+        for arg in "$@"; do printf '%s\\n' "$arg" >> "$GHOSTLING_TEST_ARGV_LOG"; done
+        exit 0
+        """.write(to: realClaude, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: realClaude.path)
+
+        let shim = home.appendingPathComponent(".ghostling/bin/claude")
+        let baseEnv = [
+            "HOME": home.path,
+            "PATH": "\(shim.deletingLastPathComponent().path):\(realDir.path):/usr/bin:/bin",
+            "GHOSTLING_TEST_ARGV_LOG": log.path,
+        ]
+
+        _ = try run(shim.path, ["hello"], env: baseEnv)
+        XCTAssertEqual(try loggedArgs(log), ["hello"], "unbound shells pass through unchanged")
+
+        var boundEnv = baseEnv
+        boundEnv["GHOSTLING_CARD_ID"] = UUID().uuidString
+        _ = try run(shim.path, ["hello"], env: boundEnv)
+        let bound = try loggedArgs(log)
+        XCTAssertEqual(bound.first, "--settings")
+        XCTAssertTrue(bound.dropFirst(2).contains("hello"))
+        XCTAssertTrue(bound[1].contains(#""SessionStart""#))
+        XCTAssertTrue(bound[1].contains(#""PermissionRequest""#))
+
+        _ = try run(shim.path, ["--help"], env: boundEnv)
+        XCTAssertEqual(try loggedArgs(log), ["--help"], "help/version commands must not inject hooks")
+
+        _ = try run(shim.path, ["--print", "hello"], env: boundEnv)
+        XCTAssertEqual(try loggedArgs(log), ["--print", "hello"], "headless Claude must not be hook-wrapped")
+    }
+
     private func loadHooks(_ url: URL) throws -> [String: Any] {
         let data = try Data(contentsOf: url)
         let cfg = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -83,5 +251,24 @@ final class HookInstallerTests: XCTestCase {
         let groups = event as? [[String: Any]] ?? []
         return groups.flatMap { ($0["hooks"] as? [[String: Any]]) ?? [] }
             .compactMap { $0["command"] as? String }
+    }
+
+    private func run(_ executable: String, _ args: [String], env: [String: String]) throws -> Int32 {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = args
+        process.environment = env
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        process.waitUntilExit()
+        return process.terminationStatus
+    }
+
+    private func loggedArgs(_ url: URL) throws -> [String] {
+        let text = try String(contentsOf: url, encoding: .utf8)
+        return text.split(separator: "\n", omittingEmptySubsequences: false)
+            .dropLast()
+            .map(String.init)
     }
 }

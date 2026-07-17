@@ -1,0 +1,84 @@
+# progress.yaml — THE single mutable tracking file for a saha task (format saha/v2).
+#
+# Contract:
+#   - Everything under model/*.c4 is FROZEN SPEC once execution starts. The execution
+#     loop (manager agent included) may edit ONLY this file. Never tick, annotate, or
+#     "update status" inside a .c4 file.
+#   - Tools (saha commands, the ghostling kanban app, the execution loop) read state
+#     from here — never by scraping markdown.
+#   - View ids referenced below must exist in the task's model/ (likec4 build passes).
+#
+# Replace every {{placeholder}}. Delete comments you don't need; keep the structure.
+
+format: saha/v2
+task: "{{task_id}}"            # e.g. task-11-likec4-planning
+title: "{{task_title}}"
+created: "{{yyyy-mm-dd}}"
+mode: full                     # full | minimal (minimal skips decisions/contracts/test-specs)
+
+# Overall lifecycle of the task.
+# planning -> executing -> completed | completed_pending_manual | failed
+status: planning
+
+# ── Planning steps ──────────────────────────────────────────────────────────
+# One entry per planning step (replaces the old README progress table).
+# status: pending | in_progress | done | skipped
+# views:  LikeC4 view ids this step produced (reviewable in the kanban app).
+# artifacts: non-diagram files this step produced (research prose stays markdown).
+planning:
+  research:            { status: pending, artifacts: [] }   # e.g. [research/codebase-analysis.md]
+  task_description:    { status: pending, views: [] }       # e.g. [task-context]
+  user_stories:        { status: pending, views: [] }       # e.g. [us-001-flow, us-002-flow]
+  design_decisions:    { status: pending, views: [] }       # e.g. [decisions]
+  code_changes:        { status: pending, views: [] }       # e.g. [contracts]
+  test_specs:          { status: pending, views: [], gaps: [] }  # views e.g. [ts-e2e-01, ts-int-01];
+                                                            # gaps: [{story: US-003, reason: "…"}] for stories without E2E coverage
+  implementation_plan: { status: pending, views: [] }       # e.g. [phases]
+  verify:              { status: pending }
+
+# ── User stories ────────────────────────────────────────────────────────────
+# The authoritative story/AC records. The .c4 dynamic view is the human-review
+# rendering of the SAME story; ids must match (story id us-001 <-> view us-001-flow).
+stories:
+  - id: US-001
+    title: "{{story_title}}"
+    view: us-001-flow          # dynamic view id in model/stories.c4
+    priority: must             # must | should | could
+    status: draft              # draft | ready | in_progress | done
+    story: "As a {{role}}, I want {{feature}} so that {{benefit}}."
+    acceptance_criteria:
+      - id: AC-1
+        text: "Given {{context}}, when {{action}}, then {{outcome}}"
+        # How the execution loop proves this AC:
+        #   automated — bound named test(s) go red->green
+        #   build     — compilation/linking proves it
+        #   manual    — needs human eyes; give exact instructions
+        verify: automated
+        status: pending        # pending | in_progress | done
+        specs: []              # planned coverage, filled by /saha:test-specs: [ts-e2e-01]
+        tests: []              # filled by the loop: [SomeTests.testName, tests/test_x.py::test_y]
+      - id: AC-2
+        text: "{{criterion}}"
+        verify: manual
+        manual_instructions: "{{exact_steps_for_a_human}}"
+        status: pending
+        tests: []
+    edge_cases:
+      - { name: "{{edge_case}}", trigger: "{{when}}", expected: "{{behaviour}}" }
+    depends_on: []             # e.g. [US-000]
+    decisions: []              # e.g. [DD-001]
+
+# ── Implementation phases ───────────────────────────────────────────────────
+phases:
+  - id: phase-01
+    title: "{{phase_title}}"
+    view: phases               # overview view in model/phases.c4
+    stories: [US-001]
+    status: pending            # pending | in_progress | done
+    steps:
+      - { name: "{{step_name}}", files: ["{{path}}"], status: pending }
+
+# ── Execution history ───────────────────────────────────────────────────────
+# Appended by the execution loop (was the per-story markdown history tables).
+iterations: []
+# - { iteration: 1, phase: implementation, result: passed, notes: "{{summary}}", files_changed: [] }

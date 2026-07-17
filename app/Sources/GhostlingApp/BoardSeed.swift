@@ -87,7 +87,8 @@ public struct BoardSeed: Sendable {
         // several task cards share one project dir.
         let id = cardID ?? UUID().uuidString   // every live terminal is bindable
         let bind = "GHOSTLING_CARD_ID=\(shellQuoted(id)) "
-        let launch = "cd \(shellQuoted(projectDir)) && \(bind)exec \(shellQuoted(shell)) -il"
+        let path = "PATH=\(shellQuoted(HookInstaller.codexShimPath())):\"$PATH\" "
+        let launch = "cd \(shellQuoted(projectDir)) && \(path)\(bind)exec \(shellQuoted(shell)) -il"
         return BoardSeed(
             sessionID: sessionID, title: title, projectDir: projectDir,
             agent: agent, flow: .b, state: .idle, scrollback: "",

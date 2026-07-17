@@ -1,0 +1,37 @@
+// decisions.c4 — design decisions (DD-XXX) as model elements wired to what they shape.
+// Replaces design-decisions/DD-XXX-*.md. The reviewer sees each decision NEXT TO the
+// components it affects, not in a separate document.
+//
+// Conventions:
+//   - element id `dd-001` <-> "DD-001" references in progress.yaml stories[].decisions
+//   - Context/decision go in `description`; rationale + alternatives in `notes` via the
+//     decisions view; structured facts (status, alternatives) in `metadata {}`.
+//   - Draw a relation to every component the decision constrains.
+
+model {
+  dd-001 = decision 'DD-001: {{decision_title}}' {
+    description '''
+      **Context:** {{problem_that_motivates_this_decision}}
+
+      **Decision:** {{what_we_are_doing}}
+    '''
+    metadata {
+      status 'accepted'                 // proposed | accepted | superseded
+      rationale '{{why_this_beats_the_alternatives}}'
+      alternatives '{{alt_1_and_why_rejected}}; {{alt_2_and_why_rejected}}'
+      consequences '{{positive}}; {{negative}}'
+      stories '{{US-001}}'
+    }
+  }
+
+  dd-001 -> sys.new_part 'shapes'
+  // dd-001 -> dep 'chooses'
+}
+
+views {
+  view decisions {
+    title '{{task_id}}: design decisions'
+    include dd-001, sys.new_part
+    // include every dd-* and each component it shapes
+  }
+}

@@ -1,12 +1,19 @@
 ---
-description: Generate user stories from task description
+description: Generate user stories as step-by-step LikeC4 workflows
 argument-hint: [task-path] [--count=N]
-allowed-tools: Read, Write, Glob, AskUserQuestion, Task
+allowed-tools: Read, Write, Edit, Glob, Bash, AskUserQuestion, Task
 ---
 
 # User Stories
 
-Generate user stories from the task description.
+Generate user stories from the task description. Each story is authored twice, in
+lockstep:
+
+1. **`model/stories.c4`** — a `dynamic view us-NNN-flow` per story: the step-by-step
+   workflow the human actually reviews (this is the point of saha — a reviewable,
+   walkable flow, not a wall of markdown).
+2. **`progress.yaml`** — the authoritative story/AC records the execution loop
+   binds tests to and ticks.
 
 ## Arguments
 
@@ -19,7 +26,7 @@ Generate user stories from the task description.
 
 ## Prerequisites
 
-Task description must exist. Check for `{task_path}/task-description.md`.
+Task model must exist. Check for `{task_path}/model/task.c4`.
 If missing, suggest running `/saha:task` first.
 
 ## Execution
@@ -27,16 +34,21 @@ If missing, suggest running `/saha:task` first.
 ### 1. Analyze Task
 
 Read and understand:
-- `{task_path}/task-description.md` - Core requirements
+- `{task_path}/model/task.c4` - Core requirements + the element vocabulary
+- `{task_path}/progress.yaml` - Task state
 - `{task_path}/research/*.md` - Technical context
+- `.claude/templates/stories.c4` - Template/conventions for this artifact
 
 ### 2. Identify User Personas
 
-From the task description, identify who will use this feature:
+From the task model, identify who will use this feature:
 - End users
 - Administrators
 - Developers (if internal tooling)
 - System actors (automated processes)
+
+Personas should already exist as `actor` elements in `task.c4`; add missing ones
+in `stories.c4`.
 
 ### 3. Generate Story Candidates
 
@@ -53,103 +65,82 @@ So that [benefit].
 
 Present story candidates and ask user to:
 1. Confirm/reject each story
-2. Adjust priority (Must Have / Should Have / Could Have / Won't Have)
+2. Adjust priority (must / should / could)
 3. Add missing stories
 
-### 5. Create Story Files
+### 5. Author the Story Flows
 
-For each approved story, create `{task_path}/user-stories/US-XXX-{slug}.md`:
+For each approved story, add to `{task_path}/model/stories.c4`
+(following `.claude/templates/stories.c4`):
 
-```markdown
-# US-XXX: [Short Title]
+- A `story` element `us-NNN` with the "As a… I want… so that…" in `description`,
+  priority tag (`#must`/`#should`/`#could`) and
+  `metadata { priority / depends_on / decisions / edge_cases }`.
+- A **`dynamic view us-NNN-flow`** walking the story step by step:
+  - Steps reference elements from `task.c4` (`user -> sys.part '…'`); use `<-`
+    for responses and `parallel {}` for concurrency.
+  - Every step that proves an acceptance criterion cites it in `notes`
+    (`**AC-1** — …`) so the reviewer sees WHERE each AC is satisfied.
+  - The flow must cover the story end-to-end: trigger → internal effects →
+    observable outcome. A story whose view has fewer than 3 steps is usually
+    under-specified.
 
-**Priority:** Must Have | Should Have | Could Have
-**Status:** Draft | Ready | Approved
-**Persona:** [User type]
-**Estimated Complexity:** S | M | L | XL
+### 6. Record Stories in progress.yaml
 
-## User Story
+For each story, append to `stories:` in `{task_path}/progress.yaml`:
 
-As a **[persona]**,
-I want to **[action]**,
-So that **[benefit]**.
-
-## Acceptance Criteria
-
-Conditions that must be true for this story to be complete:
-
-1. **Given** [initial context]
-   **When** [action is taken]
-   **Then** [expected outcome]
-
-2. **Given** [context]
-   **When** [action]
-   **Then** [outcome]
-
-## Edge Cases
-
-Scenarios that need explicit handling:
-
-1. **[Edge case name]**
-   - Trigger: [What causes this]
-   - Expected behavior: [What should happen]
-
-2. **[Edge case name]**
-   - Trigger: [...]
-   - Expected behavior: [...]
-
-## Technical Notes
-
-[Any technical considerations from research]
-
-## Dependencies
-
-- **Requires:** [Other stories this depends on]
-- **Enables:** [Stories that depend on this]
-
-## Questions
-
-- [ ] [Open question to resolve]
-
-## Related
-
-- Task: [Link to task-description.md]
-- Research: [Link to relevant research]
-- Design Decision: [DD-XXX if applicable]
+```yaml
+- id: US-001
+  title: "Short title"
+  view: us-001-flow
+  priority: must            # must | should | could
+  status: draft             # draft until reviewed, ready when approved
+  story: "As a …, I want …, so that …."
+  acceptance_criteria:
+    - id: AC-1
+      text: "Given …, when …, then …"
+      verify: automated     # automated | build | manual
+      status: pending
+      tests: []
+      specs: []             # ts-* view ids, filled by /saha:test-specs
+    - id: AC-2
+      text: "…"
+      verify: manual
+      manual_instructions: "exact steps a human follows"
+      status: pending
+      tests: []
+      specs: []
+  edge_cases:
+    - { name: "…", trigger: "…", expected: "…" }
+  depends_on: []
+  decisions: []
 ```
 
-### 6. Update User Stories README
+**Verify method — pick the WEAKEST that still gives real confidence:**
+- `automated` (default): a headless test asserts it. Logic, APIs, data.
+- `build`: it's enough that the project compiles/launches. "App builds", "module links".
+- `manual` + `manual_instructions`: no headless test can confirm it (UI rendering,
+  visual layout, drill-in feel). The loop routes it to a human and will NOT churn on it.
+  Reserve manual for things a machine genuinely cannot check.
 
-Update `{task_path}/user-stories/README.md`:
+The AC ids cited in the view's step notes and the AC ids here MUST match — the
+view is the human rendering, the YAML is the machine record of the same story.
 
-```markdown
-# User Stories
+### 7. Compile Gate + Progress
 
-User stories define features from the user's perspective.
-
-## Contents
-
-| ID | Title | Priority | Status |
-|----|-------|----------|--------|
-| US-001 | [Title] | Must Have | Draft |
-| US-002 | [Title] | Should Have | Draft |
-
-## Story Map
-
-[Visual grouping by persona or feature area]
-
-### [Persona 1]
-- US-001: [Title]
-- US-002: [Title]
-
-### [Persona 2]
-- US-003: [Title]
+```bash
+likec4 validate {task_path}/model
 ```
 
-### 7. Update Task README
+Fix any errors, then update `{task_path}/progress.yaml`:
 
-Update `{task_path}/README.md` progress table:
-- Set "User Stories" row to status based on count
+```yaml
+planning:
+  user_stories: { status: in_progress, views: [us-001-flow, us-002-flow, …] }
+```
+
+Keep `in_progress` here — `done` is written only in step 8, after the review
+passes and the user approves.
 
 ## Story Writing Guidelines
 
@@ -166,6 +157,7 @@ Update `{task_path}/README.md` progress table:
 - Compound stories (multiple features in one)
 - Stories without clear acceptance criteria
 - Stories that can't be demonstrated
+- Flows that skip the failure/edge path when the story is about handling it
 
 ## 8. Review Artifacts
 
@@ -180,12 +172,16 @@ Task tool:
 
     Review mode: stories
     Task path: {task_path}
-    Artifacts to review: {task_path}/user-stories/US-*.md
+    Artifacts to review: {task_path}/model/stories.c4 and the stories section
+    of {task_path}/progress.yaml
 
-    Review the user stories and report any issues.
+    Review the story flows and AC records and report any issues.
 ```
 
-If the reviewer finds blockers (🔴), fix before proceeding.
+If the reviewer finds blockers (🔴), fix before proceeding. When the review
+passes and the user approves, flip each approved story from `status: draft` to
+`status: ready` and set `planning.user_stories.status: done` — a `done` step
+with `draft` stories means the review never happened.
 
 ## Example Usage
 
@@ -196,7 +192,6 @@ If the reviewer finds blockers (🔴), fix before proceeding.
 
 ## Output
 
-Creates:
-- `{task_path}/user-stories/US-XXX-{slug}.md` (one per story)
-- Updates `{task_path}/user-stories/README.md`
-- Updates `{task_path}/README.md`
+Creates or updates:
+- `{task_path}/model/stories.c4` (one `us-NNN` element + `us-NNN-flow` dynamic view per story)
+- `{task_path}/progress.yaml` (stories records + planning.user_stories)

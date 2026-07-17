@@ -77,17 +77,27 @@ public final class SessionRegistry {
     /// The registry's sessions as a restore snapshot's windows (US-003 save side).
     /// Core has no window layout of its own, so this yields a single window; the app
     /// layer may regroup into several windows before persisting. A pane records the
-    /// session's cwd + identity and its live child PID (used only for reopen-vs-dead
-    /// on restore) — never the agent command.
-    public func snapshotWindows() -> [WindowSnapshot] {
+    /// session's cwd + identity and whether its child was alive right now — never the
+    /// agent command.
+    ///
+    /// Liveness is probed **here**, at snapshot time, because this is the last moment
+    /// it is knowable: by the next launch the recorded PID is dead by construction.
+    /// The probe is injectable so tests need no real process.
+    public func snapshotWindows(
+        isAlive: (Int32) -> Bool = PTYSession.isProcessAlive
+    ) -> [WindowSnapshot] {
         let panes = all.map { session in
-            PaneSnapshot(
+            let pid = session.pty.childPID > 0 ? session.pty.childPID : nil
+            return PaneSnapshot(
                 sessionID: session.id,
                 cwd: session.projectDir,
                 agentType: session.agentType,
                 flowTag: session.flowTag,
-                childPID: session.pty.childPID > 0 ? session.pty.childPID : nil,
-                claudeSessionID: session.claudeSessionID
+                childPID: pid,
+                claudeSessionID: session.claudeSessionID,
+                // No PID to probe → assume alive, matching the restore side's long-standing
+                // "unknown liveness is not a reason to drop a card" default.
+                wasAlive: pid.map(isAlive) ?? true
             )
         }
         return panes.isEmpty ? [] : [WindowSnapshot(panes: panes)]
@@ -219,22 +229,49 @@ public final class SessionRestorer {
 
     private func restore(pane: PaneSnapshot) -> RestoredPane {
         let (cwd, fellBack) = resolveCwd(pane.cwd)
-        let alive = pane.childPID.map(isAlive) ?? true
         let restored = RestoredPane(
             snapshot: pane, cwd: cwd, cwdFellBackToHome: fellBack,
-            liveness: alive ? .reopened : .dead
+            liveness: wasAliveAtQuit(pane) ? .reopened : .dead
         )
         if restored.liveness == .reopened { reopenShell(for: restored) }
         return restored
     }
 
-    /// Re-open a plain interactive shell at the pane's cwd. The agent command is
-    /// intentionally absent and the shell command is routed through the pool
-    /// firewall, so restore can never resurrect a headless agent.
+    /// Prefer the liveness recorded at snapshot time; fall back to probing the recorded
+    /// PID only for pre-`wasAlive` snapshots. The probe is a poor substitute — the PID is
+    /// normally dead by now — but it preserves US-003 edge case 3 for old files.
+    private func wasAliveAtQuit(_ pane: PaneSnapshot) -> Bool {
+        pane.wasAlive ?? (pane.childPID.map(isAlive) ?? true)
+    }
+
+    /// Re-open a plain interactive shell at the pane's cwd, carrying the card binding.
+    /// The agent command is intentionally absent and the command is routed through the
+    /// pool firewall, so restore can never resurrect a headless agent.
     private func reopenShell(for pane: RestoredPane) {
-        let command = [shellPath, "-il"]
+        let command = Self.shellCommand(
+            shell: shellPath, cwd: pane.cwd, cardID: pane.snapshot.cardID
+        )
         guard (try? PoolFirewall.classify(command)) != nil else { return }
         reopen(pane, command)
+    }
+
+    /// The reopen command, in the same shape the board uses when it first creates a card
+    /// (`BoardSeed.liveTerminal`): `cd` into the pane's dir, export the card binding, then
+    /// `exec` the login shell. Both parts are load-bearing — a PTY does not chdir for us,
+    /// so without the `cd` the shell opens wherever the app was launched from, and without
+    /// `GHOSTLING_CARD_ID` the hook feed can never bind this card's agent again.
+    static func shellCommand(shell: String, cwd: String, cardID: UUID?) -> [String] {
+        let bind = cardID.map { "GHOSTLING_CARD_ID=\(shellQuoted($0.uuidString)) " } ?? ""
+        let codexShim = "\(NSHomeDirectory())/.ghostling/bin"
+        let path = "PATH=\(shellQuoted(codexShim)):\"$PATH\" "
+        let launch = "cd \(shellQuoted(cwd)) && \(path)\(bind)exec \(shellQuoted(shell)) -il"
+        return ["/bin/sh", "-c", launch]
+    }
+
+    /// Single-quote for `/bin/sh`, escaping embedded quotes — the paths come from disk
+    /// and may contain spaces.
+    private static func shellQuoted(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     private func resolveCwd(_ cwd: String) -> (path: String, fellBack: Bool) {

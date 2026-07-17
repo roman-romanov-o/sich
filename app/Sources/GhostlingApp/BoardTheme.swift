@@ -9,33 +9,42 @@ import GhostlingCore
 @MainActor
 enum BoardTheme {
     // MARK: - Surfaces (theme-aware Solarized: Osaka Night dark ramp / canonical
-    // Solarized-light `base3→base2` ramp — resolved per system appearance so the
+    // a neutral high-contrast light ramp — resolved per system appearance so the
     // whole board follows light/dark live, not just the terminal). Accents below are
     // deliberately shared across both modes (Solarized accents are dual-scheme).
-    static let canvas = dynamic(dark: hex(0x000D1A), light: hex(0xEEE8D5))          // base04 / base2
-    static let canvasSunken = dynamic(dark: hex(0x00111F), light: hex(0xE4DCC5))    // sunken tracks/rails
-    static let cardFill = dynamic(dark: hex(0x001A2E), light: hex(0xFDF6E3))        // cards above the canvas (base3 in light)
-    static let cardFillRaised = dynamic(dark: hex(0x00304A), light: hex(0xFFFDF5))  // raised / hover
-    static let documentSurface = dynamic(dark: hex(0x00182B), light: hex(0xFDF6E3))
-    static let documentChrome = dynamic(dark: hex(0x00080F), light: hex(0xE4DCC5))  // chrome below the canvas
-    static let cardStroke = dynamic(dark: hex(0x003D52), light: hex(0xD8CFB4))       // base02 / warm light edge
-    static let cardStrokeStrong = dynamic(dark: hex(0x0A506B), light: hex(0xC4B998))
-    static let hairline = dynamic(dark: hex(0x00263D), light: hex(0xDDD5BD))
+    static let canvas = dynamic(dark: hex(0x000D1A), light: hex(0xF1F4F7))          // base04 / cool page
+    static let canvasSunken = dynamic(dark: hex(0x00111F), light: hex(0xE5EBF0))    // sunken tracks/rails
+    static let cardFill = dynamic(dark: hex(0x001A2E), light: hex(0xFFFFFF))        // cards above the canvas
+    static let cardFillRaised = dynamic(dark: hex(0x00304A), light: hex(0xF8FBFD))  // raised / hover
+    static let documentSurface = dynamic(dark: hex(0x00182B), light: hex(0xFFFFFF))
+    static let documentChrome = dynamic(dark: hex(0x00080F), light: hex(0xE7EDF2))  // chrome below the canvas
+    static let cardStroke = dynamic(dark: hex(0x003D52), light: hex(0xC8D2DA))      // cool light edge
+    static let cardStrokeStrong = dynamic(dark: hex(0x0A506B), light: hex(0x9EACB8))
+    static let hairline = dynamic(dark: hex(0x00263D), light: hex(0xD3DCE3))
     /// The NEEDS YOU column's warm-tinted background — the whole column reads amber.
-    static let needsYouColumn = dynamic(dark: hex(0x1A0F03), light: hex(0xFBF0DC))
+    static let needsYouColumn = dynamic(dark: hex(0x1A0F03), light: hex(0xFFF7E8))
     /// A NEEDS YOU card's warm fill; stroke is `attention` (fresh) or `needsYouStroke` (aging).
-    static let needsYouCard = dynamic(dark: hex(0x2B1908), light: hex(0xF7E6C8))
+    static let needsYouCard = dynamic(dark: hex(0x2B1908), light: hex(0xFFF1D9))
     static let needsYouStroke = hex(0xB35C1F)   // orange700 — shared accent
     /// A done card's faint green-tinted stroke.
-    static let doneStroke = dynamic(dark: hex(0x1E2E0A), light: hex(0xCFE0A8))
+    static let doneStroke = dynamic(dark: hex(0x1E2E0A), light: hex(0xB8CE86))
+    /// The unfilled part of a quota gauge — the groove the fill runs in. Must read as
+    /// *recessed* against the panel in both modes, so it darkens the dark canvas and
+    /// darkens the light one too (a lighter-than-paper groove would vanish).
+    static let gaugeTrack = dynamic(dark: hex(0x262626), light: hex(0xCBD5DD))
+    /// Text drawn *on top of* a gauge fill. Every fill colour the bar can take (green
+    /// `done`, orange `attention`, red `alert`) is bright in both appearances, so this
+    /// stays a fixed near-black rather than flipping with the theme.
+    static let gaugeLabelOnFill = hex(0x08121C)
 
-    // MARK: - Text (Solarized base tones — dark: light-on-dark; light: base01→base1 on paper)
-    static let textPrimary = dynamic(dark: hex(0xB3BAC4), light: hex(0x586E75))      // base1 / base01
-    static let textMuted = dynamic(dark: hex(0x8794A0), light: hex(0x657B83))         // / base00
-    static let textFaint = dynamic(dark: hex(0x667980), light: hex(0x93A1A1))         // base01 / base1
-    static let documentText = dynamic(dark: hex(0xA6ADBA), light: hex(0x586E75))      // base0 / base01
+    // MARK: - Text (dark: light-on-dark; light: deliberately darker than Solarized
+    // base greys so dense board labels stay readable on the neutral surface).
+    static let textPrimary = dynamic(dark: hex(0xB3BAC4), light: hex(0x24313A))
+    static let textMuted = dynamic(dark: hex(0x8794A0), light: hex(0x3A4A54))
+    static let textFaint = dynamic(dark: hex(0x667980), light: hex(0x586975))
+    static let documentText = dynamic(dark: hex(0xA6ADBA), light: hex(0x24313A))
     /// Dimmest tier — card meta lines and footnotes.
-    static let textDim = dynamic(dark: hex(0x4A5A63), light: hex(0x93A1A1))
+    static let textDim = dynamic(dark: hex(0x4A5A63), light: hex(0x4F606B))
 
     // MARK: - Accents (Solarized accents)
     /// The interactive brand blue — create affordance, drop ring. Kept distinct
@@ -54,9 +63,67 @@ enum BoardTheme {
 
     // MARK: - Terminal surface (theme-aware: a rich Solarized console in the dark,
     // a warm Solarized-light paper one in the light — resolved per system appearance).
-    static let termBg = dynamic(dark: hex(0x001F33), light: hex(0xF5F1E8))   // base03 / base3
-    static let termFg = dynamic(dark: hex(0xA6ADBA), light: hex(0x556B72))   // base0 / base01
+    static let termBg = dynamic(dark: hex(0x001F33), light: hex(0xFAFBFC))   // base03 / neutral paper
+    static let termFg = dynamic(dark: hex(0xA6ADBA), light: hex(0x24313A))   // base0 / ink
     static let termCursor = dynamic(dark: hex(0x20A896), light: hex(0x009966)) // cyan / cyan700
+
+    // MARK: - Terminal ANSI palette
+    //
+    // The 16 colours a child's SGR indices (`\e[31m`, `ls --color`, any TUI) resolve
+    // through. Drawn from the same Solarized accent family as the board's own accents
+    // so a coloured shell reads as part of the app rather than a foreign window.
+    //
+    // The two ramps are NOT lighter/darker twins of each other. On the dark console a
+    // "bright" colour is genuinely brighter; on light paper brightening would erase it,
+    // so the light ramp's brights are *deeper and more saturated* instead — the
+    // emphasis a program asks for, delivered the way paper delivers it. Same reason
+    // light's white/bright-white (7/15) are text greys, not the near-white they are in
+    // the dark ramp: canonical Solarized Light maps them onto the paper itself, where
+    // `printf '\e[97mhi'` would come out invisible.
+
+    /// ANSI order: black, red, green, yellow, blue, magenta, cyan, white, then the
+    /// eight bright variants.
+    private static let ansiDark = [
+        hex(0x00141F), hex(0xE84C3D), hex(0x99CC00), hex(0xB39900),
+        hex(0x3A9ADE), hex(0xD4599F), hex(0x20A896), hex(0xA6ADBA),
+        hex(0x4A5A63), hex(0xFF6E63), hex(0xB4E82B), hex(0xD9B826),
+        hex(0x6BB6EA), hex(0xE87CBA), hex(0x4CCFBE), hex(0xE6EAF0),
+    ]
+
+    private static let ansiLight = [
+        hex(0x002B36), hex(0xB52D22), hex(0x4F6F00), hex(0x6F5200),
+        hex(0x1E6FB0), hex(0xA8317B), hex(0x0E7C6E), hex(0x657B83),
+        hex(0x24313A), hex(0xC93A30), hex(0x617A14), hex(0x866400),
+        hex(0x3A9ADE), hex(0xC65A96), hex(0x20A896), hex(0x073642),
+    ]
+
+    /// The colour theme to push into a `Terminal` for `appearance`.
+    ///
+    /// The emulator lives below AppKit and wants plain RGB, so a `dynamic(dark:light:)`
+    /// `NSColor` can't reach it — the appearance is resolved explicitly here instead.
+    /// libghostty looks a cell's palette index up at read time, so re-applying this on
+    /// a light/dark flip re-colours scrollback that was already written.
+    static func terminalTheme(for appearance: NSAppearance) -> TerminalTheme {
+        let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        return TerminalTheme(
+            background: rgb(termBg, in: appearance),
+            foreground: rgb(termFg, in: appearance),
+            cursor: rgb(termCursor, in: appearance),
+            ansi: (isDark ? ansiDark : ansiLight).map { rgb($0, in: appearance) }
+        )
+    }
+
+    /// Resolve a (possibly dynamic) colour to plain sRGB bytes under `appearance`.
+    private static func rgb(_ color: NSColor, in appearance: NSAppearance) -> RGB {
+        var out = RGB(r: 0, g: 0, b: 0)
+        appearance.performAsCurrentDrawingAppearance {
+            guard let srgb = color.usingColorSpace(.sRGB) else { return }
+            out = RGB(r: UInt8((srgb.redComponent * 255).rounded()),
+                      g: UInt8((srgb.greenComponent * 255).rounded()),
+                      b: UInt8((srgb.blueComponent * 255).rounded()))
+        }
+        return out
+    }
 
     /// An NSColor that resolves to `dark` under a dark appearance and `light` under a
     /// light one — the standard way to be system-theme-aware without duplicating views.
@@ -69,15 +136,23 @@ enum BoardTheme {
     }
 
     // MARK: - Fonts
-    static let mono = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-    static let monoBold = NSFont.monospacedSystemFont(ofSize: 12, weight: .semibold)
-    static let monoSmall = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
-    static let title = NSFont.systemFont(ofSize: 13, weight: .semibold)
-    static let columnTitle = NSFont.systemFont(ofSize: 13, weight: .heavy)
+    static var boardFontScale: CGFloat = 1.0
+
+    private static func scaled(_ size: CGFloat) -> CGFloat {
+        (size * boardFontScale).rounded(.toNearestOrAwayFromZero)
+    }
+
+    static var mono: NSFont { .monospacedSystemFont(ofSize: scaled(11), weight: .regular) }
+    static var monoBold: NSFont { .monospacedSystemFont(ofSize: scaled(12), weight: .semibold) }
+    static var monoSmall: NSFont { .monospacedSystemFont(ofSize: scaled(10), weight: .regular) }
+    /// The percent riding inside a quota bar — semibold so it holds up against the fill.
+    static var gaugeLabel: NSFont { .monospacedSystemFont(ofSize: scaled(11), weight: .semibold) }
+    static var title: NSFont { .systemFont(ofSize: scaled(13), weight: .semibold) }
+    static var columnTitle: NSFont { .systemFont(ofSize: scaled(13), weight: .heavy) }
     /// The card headline (POC: 16px/600; 15pt reads the same at AppKit metrics).
-    static let cardTitle = NSFont.systemFont(ofSize: 15, weight: .semibold)
-    static let sansSmall = NSFont.systemFont(ofSize: 11, weight: .medium)
-    static let sansTiny = NSFont.systemFont(ofSize: 10, weight: .regular)
+    static var cardTitle: NSFont { .systemFont(ofSize: scaled(15), weight: .semibold) }
+    static var sansSmall: NSFont { .systemFont(ofSize: scaled(11), weight: .medium) }
+    static var sansTiny: NSFont { .systemFont(ofSize: scaled(10), weight: .regular) }
 
     // MARK: - Semantic colour (the policy lives here)
 

@@ -8,7 +8,7 @@ import Foundation
 /// starting/running/exited/crashed). `CardState` is the *agent-detected* state the
 /// board renders — the first six are the US-003 columns; `unknown` is the explicit
 /// not-positively-determined indicator (US-004 AC#3), never a guess.
-public enum CardState: String, Sendable, Equatable, CaseIterable {
+public enum CardState: String, Codable, Sendable, Equatable, CaseIterable {
     case idle
     case running
     case waitingForInput = "waiting-for-input"
@@ -22,6 +22,20 @@ public enum CardState: String, Sendable, Equatable, CaseIterable {
     /// derivation and the card view read, so "needs you" is defined once.
     public var needsAttention: Bool {
         self == .waitingForInput || self == .blocked
+    }
+
+    /// Where an automatic detector signal may be overridden by prior state.
+    /// Terminal completion is sticky: later hook/store observations must not reopen a
+    /// done card. Other observations are rendered as observed instead of being guessed
+    /// into an attention state.
+    public var detectorFallback: CardState? {
+        self == .done ? .done : nil
+    }
+
+    /// Where an at-rest signal (`idle`/`unknown`) may be overridden by prior state.
+    /// Kept as a narrow alias for callers that only reconcile at-rest detector output.
+    public var atRestFallback: CardState? {
+        detectorFallback
     }
 }
 

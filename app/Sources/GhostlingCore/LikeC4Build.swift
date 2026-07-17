@@ -32,9 +32,13 @@ public enum LikeC4 {
             .first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
-    /// The authored architecture model: `docs/architecture/*.c4`, sorted for a stable hash.
-    public static func sources(projectDir: URL) -> [URL] {
-        let dir = projectDir.appendingPathComponent("docs/architecture", isDirectory: true)
+    /// Default model location for a project's architecture pane; saha/v2 task specs
+    /// pass `model` instead (the per-task LikeC4 project inside the task folder).
+    public static let defaultModelDir = "docs/architecture"
+
+    /// The authored model: `<projectDir>/<modelDir>/*.c4`, sorted for a stable hash.
+    public static func sources(projectDir: URL, modelDir: String = defaultModelDir) -> [URL] {
+        let dir = projectDir.appendingPathComponent(modelDir, isDirectory: true)
         let files = (try? FileManager.default.contentsOfDirectory(
             at: dir, includingPropertiesForKeys: nil)) ?? []
         return files.filter { $0.pathExtension == "c4" }.sorted { $0.path < $1.path }
@@ -66,26 +70,33 @@ public enum LikeC4 {
     /// Decide what the pane should show for `projectDir`, preferring a cached build so an
     /// already-built model renders even when the CLI later disappears. `cacheBase` is a
     /// test seam; production passes nil to use the real Caches directory.
-    public static func resolve(projectDir: URL, cacheBase: URL? = nil) -> LikeC4Content {
-        let sources = sources(projectDir: projectDir)
+    public static func resolve(
+        projectDir: URL,
+        modelDir: String = defaultModelDir,
+        cacheBase: URL? = nil,
+        cliPath: String? = cliPath()
+    ) -> LikeC4Content {
+        let sources = sources(projectDir: projectDir, modelDir: modelDir)
         guard let hash = hash(of: sources) else { return .noSources }
         let dir = cacheDir(hash: hash, base: cacheBase)
         if FileManager.default.fileExists(atPath: dir.appendingPathComponent("index.html").path) {
             return .ready(dir: dir)
         }
-        return cliPath() == nil ? .degraded(sources: sources) : .needsBuild(dir: dir, sources: sources)
+        return cliPath == nil ? .degraded(sources: sources) : .needsBuild(dir: dir, sources: sources)
     }
 
-    /// Run `likec4 build docs/architecture -o <dir>` transiently (node spikes for a few
+    /// Run `likec4 build <modelDir> -o <dir>` transiently (node spikes for a few
     /// seconds, then exits — never `likec4 start`). Off-main; returns true iff a static
     /// SPA landed. `nonisolated` so it runs on a background queue like `MermaidRenderer.run`.
     @discardableResult
-    public static func build(cli: String, projectDir: URL, into dir: URL) -> Bool {
+    public static func build(
+        cli: String, projectDir: URL, modelDir: String = defaultModelDir, into dir: URL
+    ) -> Bool {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let p = Process()
         p.executableURL = URL(fileURLWithPath: cli)
         p.currentDirectoryURL = projectDir
-        p.arguments = ["build", "docs/architecture", "-o", dir.path]
+        p.arguments = ["build", modelDir, "-o", dir.path, "--use-hash-history"]
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
         do { try p.run() } catch { return false }

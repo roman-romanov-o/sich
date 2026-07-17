@@ -16,6 +16,7 @@ public final class HookSessionStore {
     /// One session's detected state + the project dir to label it by.
     public struct Entry: Sendable, Equatable {
         public let sessionID: String
+        public let agent: CardAgent
         public let state: CardState
         public let updatedAt: Date
         public let projectDir: String?
@@ -24,10 +25,11 @@ public final class HookSessionStore {
         public let cardID: String?
 
         public init(
-            sessionID: String, state: CardState, updatedAt: Date,
+            sessionID: String, agent: CardAgent = .claude, state: CardState, updatedAt: Date,
             projectDir: String?, cardID: String? = nil
         ) {
             self.sessionID = sessionID
+            self.agent = agent
             self.state = state
             self.updatedAt = updatedAt
             self.projectDir = projectDir
@@ -39,16 +41,17 @@ public final class HookSessionStore {
     private static let sourceRank: [SignalSource: Int] = [.hook: 3, .jsonl: 2, .pty: 1]
 
     /// Resting states — the session is deliberately quiet, so silence after them is
-    /// NOT "stale" and must not decay to `unknown`. `done`/`blocked` have terminated;
-    /// `waitingForInput` is parked ON YOU (a finished turn awaiting your reply), and
-    /// that notification must stay lit however long you take to answer.
-    private static let restingStates: Set<CardState> = [.done, .blocked, .waitingForInput]
+    /// NOT "stale" and must not decay to `unknown`. `idle` is a cleared status after
+    /// stop; `done`/`blocked` are terminal or action-blocked; `waitingForInput` is an
+    /// explicit notification/permission state.
+    private static let restingStates: Set<CardState> = [.idle, .done, .blocked, .waitingForInput]
 
     private let coalesceWindow: TimeInterval
     private let staleThreshold: TimeInterval
 
     private var bySession: [String: Entry] = [:]
     private var projectDir: [String: String] = [:]
+    private var agentBySession: [String: CardAgent] = [:]
     // Carry-forward like projectDir: a later card-id-less signal (e.g. stale sweep)
     // must not erase an identity binding an earlier hook established.
     private var cardID: [String: String] = [:]
@@ -136,7 +139,7 @@ public final class HookSessionStore {
         let next = classify(prior: currentState(sessionID), event: decisive)
         write(
             sessionID: sessionID, state: next, at: decisive.timestamp,
-            projectDir: decisive.cwd, cardID: decisive.cardID
+            projectDir: decisive.cwd, cardID: decisive.cardID, agent: decisive.agent
         )
     }
 
@@ -144,7 +147,10 @@ public final class HookSessionStore {
         guard let entry = bySession[sessionID], let last = lastEventAt[sessionID],
               !Self.restingStates.contains(entry.state) else { return }
         if now.timeIntervalSince(last) > staleThreshold {
-            write(sessionID: sessionID, state: .unknown, at: now, projectDir: nil, cardID: nil)
+            write(
+                sessionID: sessionID, state: Self.settled(prior: entry.state, next: .unknown),
+                at: now, projectDir: nil, cardID: nil, agent: nil
+            )
         }
     }
 
@@ -157,13 +163,16 @@ public final class HookSessionStore {
     /// `_project_dir` carry-forward). A transition is logged only when the state
     /// actually changes (port of `_emit`'s no-flicker rule).
     private func write(
-        sessionID: String, state: CardState, at: Date, projectDir dir: String?, cardID id: String?
+        sessionID: String, state: CardState, at: Date, projectDir dir: String?,
+        cardID id: String?, agent: CardAgent?
     ) {
         if let dir, !dir.isEmpty { projectDir[sessionID] = dir }
         if let id, !id.isEmpty { cardID[sessionID] = id }
+        if let agent { agentBySession[sessionID] = agent }
         let changed = state != currentState(sessionID)
         bySession[sessionID] = Entry(
-            sessionID: sessionID, state: state, updatedAt: at,
+            sessionID: sessionID, agent: agentBySession[sessionID] ?? .claude,
+            state: state, updatedAt: at,
             projectDir: projectDir[sessionID], cardID: cardID[sessionID]
         )
         if changed { transitionsBySession[sessionID, default: []].append(state) }
@@ -173,12 +182,12 @@ public final class HookSessionStore {
 
     /// Signals whose target state never depends on the prior state (port of `_ABSOLUTE`).
     private static let absolute: [SignalKind: CardState] = [
-        .sessionStart: .idle,   // launched, sitting at its first prompt — nothing asked yet
+        .sessionStart: .running,
         .toolUse: .running,
         .permissionRequest: .waitingForInput,
         .testRunStart: .runningTests,
         .errorExit: .blocked,
-        .stop: .waitingForInput,   // end of a TURN — the agent yielded back to you, not done
+        .stop: .idle,
         .sessionEnd: .done,   // the SESSION actually closed — the only real "done"
         .staleTimeout: .unknown,
         .contradictorySignals: .unknown,
@@ -189,11 +198,22 @@ public final class HookSessionStore {
     /// resumes a waiting session to `running`; on any non-waiting prior it leaves the
     /// state untouched rather than guessing.
     private func classify(prior: CardState, event: SignalEvent) -> CardState {
+        if event.agent == .codex, event.kind == .sessionStart {
+            return .idle
+        }
         if event.kind == .userInput {
             // A submitted prompt puts an at-rest session (fresh at its first prompt,
             // or awaiting your reply) to work; other priors are left untouched.
             return prior == .waitingForInput || prior == .idle ? .running : prior
         }
-        return Self.absolute[event.kind] ?? .unknown
+        return Self.settled(prior: prior, next: Self.absolute[event.kind] ?? .unknown)
+    }
+
+    /// Preserve sticky terminal state, but do not infer attention from an at-rest
+    /// observation. This mirrors cmux's Claude hook integration: `Stop` clears the
+    /// running status, while `Notification`/permission hooks are the explicit
+    /// "needs input" signal for non-terminal sessions.
+    private static func settled(prior: CardState, next: CardState) -> CardState {
+        prior.detectorFallback ?? next
     }
 }

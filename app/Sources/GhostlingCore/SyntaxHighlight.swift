@@ -3,28 +3,67 @@ import Foundation
 /// The language a diff line is highlighted as — inferred from the file's extension.
 /// `generic` (no known extension) still highlights strings/numbers/comments, just
 /// with no keyword set, so an unknown file is never worse than plain text.
-public enum CodeLanguage: Sendable, Equatable {
-    case swift, python, javascript, c, shell, generic
+public enum CodeLanguage: Sendable, Equatable, CaseIterable {
+    case swift, python, javascript, rust, go, java, kotlin, ruby, php, c, shell
+    case sql, json, yaml, generic
 
-    /// Map a file path's extension to a language. Unknown → `generic`.
+    /// Map a file path's extension to a language, falling back to the *filename* for
+    /// the well-known extensionless ones (`Makefile`, `Dockerfile`, `.zshrc`).
+    /// Unknown → `generic`.
     public static func infer(fromPath path: String) -> CodeLanguage {
+        let name = (path as NSString).lastPathComponent
         switch (path as NSString).pathExtension.lowercased() {
         case "swift": return .swift
-        case "py", "pyi": return .python
-        case "js", "jsx", "ts", "tsx", "mjs", "cjs": return .javascript
-        case "c", "h", "cpp", "cc", "hpp", "m", "mm": return .c
-        case "sh", "bash", "zsh": return .shell
+        case "py", "pyi", "pyw": return .python
+        case "js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts": return .javascript
+        case "rs": return .rust
+        case "go": return .go
+        case "java": return .java
+        case "kt", "kts": return .kotlin
+        case "rb", "rake", "gemspec": return .ruby
+        case "php": return .php
+        case "c", "h", "cpp", "cc", "cxx", "hpp", "hh", "m", "mm": return .c
+        case "sh", "bash", "zsh", "fish": return .shell
+        case "sql": return .sql
+        case "json", "jsonc": return .json
+        case "yml", "yaml", "toml", "ini", "cfg", "conf": return .yaml
+        default: return infer(fromFilename: name)
+        }
+    }
+
+    private static func infer(fromFilename name: String) -> CodeLanguage {
+        switch name {
+        case "Makefile", "Dockerfile", "Gemfile", ".zshrc", ".bashrc", ".bash_profile",
+             ".profile", ".zprofile":
+            return .shell
+        case "Rakefile": return .ruby
         default: return .generic
         }
     }
 
-    /// The token that starts a to-end-of-line comment (`//`, `#`). A line lexer only
-    /// needs the single-line form; block comments spanning lines aren't tracked.
+    /// The token that starts a to-end-of-line comment (`//`, `#`, `--`). A line lexer
+    /// only needs the single-line form; block comments spanning lines aren't tracked.
     var lineComment: String? {
         switch self {
-        case .swift, .javascript, .c: return "//"
-        case .python, .shell: return "#"
-        case .generic: return nil
+        case .swift, .javascript, .rust, .go, .java, .kotlin, .php, .c: return "//"
+        case .python, .shell, .ruby, .yaml: return "#"
+        case .sql: return "--"
+        case .json, .generic: return nil
+        }
+    }
+
+    /// Which quote characters open a string literal in this language.
+    ///
+    /// Deliberately per-language rather than a shared `"` + `'`: Rust's lifetimes
+    /// (`&'a str`) and Swift's nothing-of-the-kind mean a stray `'` there is NOT a
+    /// string opener, and treating it as one paints the rest of the line as a string.
+    /// Backticks are included where they're a real literal (JS templates, Go raw
+    /// strings) rather than shell/markdown punctuation.
+    var stringDelimiters: Set<Character> {
+        switch self {
+        case .swift, .rust, .java, .kotlin, .json: return ["\""]
+        case .go, .javascript: return ["\"", "'", "`"]
+        case .python, .shell, .ruby, .php, .c, .sql, .yaml, .generic: return ["\"", "'"]
         }
     }
 
@@ -33,11 +72,24 @@ public enum CodeLanguage: Sendable, Equatable {
         case .swift: return CodeLanguage.swiftKeywords
         case .python: return CodeLanguage.pythonKeywords
         case .javascript: return CodeLanguage.javascriptKeywords
+        case .rust: return CodeLanguage.rustKeywords
+        case .go: return CodeLanguage.goKeywords
+        case .java: return CodeLanguage.javaKeywords
+        case .kotlin: return CodeLanguage.kotlinKeywords
+        case .ruby: return CodeLanguage.rubyKeywords
+        case .php: return CodeLanguage.phpKeywords
         case .c: return CodeLanguage.cKeywords
         case .shell: return CodeLanguage.shellKeywords
+        case .sql: return CodeLanguage.sqlKeywords
+        case .json: return CodeLanguage.jsonKeywords
+        case .yaml: return CodeLanguage.yamlKeywords
         case .generic: return []
         }
     }
+
+    /// SQL is the one language here that's conventionally written in either case
+    /// (`select` and `SELECT` are the same keyword), so its lookup lowercases first.
+    var keywordsAreCaseInsensitive: Bool { self == .sql }
 }
 
 /// A tiny, single-line syntax lexer. It classifies a line of source into contiguous
@@ -71,14 +123,22 @@ public enum SyntaxHighlight {
 /// single trailing `plain` span.
 private struct Lexer {
     private let chars: [Character]
-    private let language: CodeLanguage
+    private let comment: String?
+    private let quotes: Set<Character>
+    private let keywords: Set<String>
+    private let foldsKeywordCase: Bool
     private var index = 0
     private var plain = ""
     private var spans: [SyntaxHighlight.Span] = []
 
+    /// The language's tables are read once here rather than per token — `keywords`
+    /// et al are computed properties, and a diff pane lexes every visible line.
     init(line: String, language: CodeLanguage) {
         self.chars = Array(line)
-        self.language = language
+        self.comment = language.lineComment
+        self.quotes = language.stringDelimiters
+        self.keywords = language.keywords
+        self.foldsKeywordCase = language.keywordsAreCaseInsensitive
     }
 
     mutating func run() -> [SyntaxHighlight.Span] {
@@ -95,7 +155,7 @@ private struct Lexer {
 
     /// A `//` or `#` run to end of line — everything after is one comment span.
     private mutating func consumeComment() -> Bool {
-        guard let marker = language.lineComment, matches(marker) else { return false }
+        guard let marker = comment, matches(marker) else { return false }
         emit(String(chars[index...]), .comment)
         index = chars.count
         return true
@@ -105,7 +165,7 @@ private struct Lexer {
     /// end of line (the line-local limitation, intentional).
     private mutating func consumeString() -> Bool {
         let quote = chars[index]
-        guard quote == "\"" || quote == "'" else { return false }
+        guard quotes.contains(quote) else { return false }
         var text = String(quote)
         var cursor = index + 1
         while cursor < chars.count {
@@ -142,7 +202,7 @@ private struct Lexer {
         var cursor = index
         while cursor < chars.count, isWordBody(chars[cursor]) { cursor += 1 }
         let word = String(chars[index..<cursor])
-        if language.keywords.contains(word) {
+        if keywords.contains(foldsKeywordCase ? word.lowercased() : word) {
             emit(word, .keyword)
         } else {
             plain += word
@@ -229,5 +289,75 @@ extension CodeLanguage {
         "if", "then", "else", "elif", "fi", "case", "esac", "for", "while", "until",
         "do", "done", "in", "function", "select", "time", "return", "export", "local",
         "readonly", "declare", "unset", "echo", "exec", "source",
+    ]
+    fileprivate static let rustKeywords: Set<String> = [
+        "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else",
+        "enum", "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop",
+        "match", "mod", "move", "mut", "pub", "ref", "return", "self", "Self", "static",
+        "struct", "super", "trait", "true", "type", "union", "unsafe", "use", "where",
+        "while", "Some", "None", "Ok", "Err",
+    ]
+    fileprivate static let goKeywords: Set<String> = [
+        "break", "case", "chan", "const", "continue", "default", "defer", "else",
+        "fallthrough", "for", "func", "go", "goto", "if", "import", "interface", "map",
+        "package", "range", "return", "select", "struct", "switch", "type", "var",
+        "nil", "true", "false", "make", "new", "len", "cap", "append", "error",
+        "string", "int", "bool", "byte", "rune",
+    ]
+    fileprivate static let javaKeywords: Set<String> = [
+        "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char",
+        "class", "const", "continue", "default", "do", "double", "else", "enum",
+        "extends", "final", "finally", "float", "for", "if", "implements", "import",
+        "instanceof", "int", "interface", "long", "native", "new", "package", "private",
+        "protected", "public", "return", "short", "static", "strictfp", "super",
+        "switch", "synchronized", "this", "throw", "throws", "transient", "try", "var",
+        "void", "volatile", "while", "record", "sealed", "true", "false", "null",
+    ]
+    fileprivate static let kotlinKeywords: Set<String> = [
+        "as", "break", "class", "continue", "do", "else", "false", "for", "fun", "if",
+        "in", "interface", "is", "null", "object", "package", "return", "super", "this",
+        "throw", "true", "try", "typealias", "typeof", "val", "var", "when", "while",
+        "by", "catch", "constructor", "delegate", "dynamic", "field", "finally", "get",
+        "import", "init", "param", "property", "receiver", "set", "setparam", "where",
+        "actual", "abstract", "annotation", "companion", "const", "crossinline", "data",
+        "enum", "expect", "external", "final", "infix", "inline", "inner", "internal",
+        "lateinit", "noinline", "open", "operator", "out", "override", "private",
+        "protected", "public", "reified", "sealed", "suspend", "tailrec", "vararg",
+    ]
+    fileprivate static let rubyKeywords: Set<String> = [
+        "alias", "and", "begin", "break", "case", "class", "def", "defined?", "do",
+        "else", "elsif", "end", "ensure", "false", "for", "if", "in", "module", "next",
+        "nil", "not", "or", "redo", "rescue", "retry", "return", "self", "super",
+        "then", "true", "undef", "unless", "until", "when", "while", "yield", "require",
+        "require_relative", "attr_accessor", "attr_reader", "attr_writer", "lambda",
+        "proc", "raise", "puts",
+    ]
+    fileprivate static let phpKeywords: Set<String> = [
+        "abstract", "and", "array", "as", "break", "callable", "case", "catch", "class",
+        "clone", "const", "continue", "declare", "default", "do", "echo", "else",
+        "elseif", "empty", "enddeclare", "endfor", "endforeach", "endif", "endswitch",
+        "endwhile", "enum", "extends", "final", "finally", "fn", "for", "foreach",
+        "function", "global", "goto", "if", "implements", "include", "include_once",
+        "instanceof", "insteadof", "interface", "isset", "list", "match", "namespace",
+        "new", "or", "print", "private", "protected", "public", "readonly", "require",
+        "require_once", "return", "static", "switch", "throw", "trait", "try", "unset",
+        "use", "var", "while", "xor", "yield", "true", "false", "null",
+    ]
+    /// Lowercase only — SQL's lookup folds case (see `keywordsAreCaseInsensitive`),
+    /// so `SELECT`, `Select` and `select` all land here.
+    fileprivate static let sqlKeywords: Set<String> = [
+        "select", "from", "where", "insert", "into", "values", "update", "set",
+        "delete", "create", "alter", "drop", "table", "index", "view", "join", "inner",
+        "left", "right", "full", "outer", "cross", "on", "as", "and", "or", "not",
+        "null", "is", "in", "between", "like", "order", "by", "group", "having",
+        "limit", "offset", "union", "all", "distinct", "case", "when", "then", "else",
+        "end", "primary", "foreign", "key", "references", "constraint", "unique",
+        "default", "with", "returning", "exists", "cast", "begin", "commit", "rollback",
+        "transaction", "true", "false",
+    ]
+    /// JSON has no keywords beyond its three literals.
+    fileprivate static let jsonKeywords: Set<String> = ["true", "false", "null"]
+    fileprivate static let yamlKeywords: Set<String> = [
+        "true", "false", "null", "yes", "no", "on", "off", "None",
     ]
 }

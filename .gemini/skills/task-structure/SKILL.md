@@ -5,339 +5,234 @@ description: |
   - User mentions "task", "planning", "user stories", "design decisions"
   - Working in a `task-XX/` directory
   - Any `/saha:*` command is invoked
-version: 0.2.0
+version: 0.3.0
 ---
 
-# Sahaidachny Task Structure
+# Sahaidachny Task Structure (saha/v2)
 
-Sahaidachny uses a hierarchical task structure for planning complex features before implementation.
+Sahaidachny plans complex features before implementation. In format **saha/v2** the
+plan is not a pile of markdown: the **spec is a LikeC4 model** the human reviews as
+diagrams, and **all tracking lives in one YAML file** the tooling reads and writes.
+
+## The Two-File Rule (the core invariant)
+
+- **`model/*.c4` = spec.** Written during planning, reviewed visually, then **frozen**
+  when execution starts (the loop fingerprints the files; any edit fails the DoD
+  integrity gate). No statuses, no checkmarks, ever.
+- **`progress.yaml` = tracking.** The ONLY mutable file. Planning steps, story/AC
+  statuses, test bindings, phase progress, iteration history — all here, and only the
+  execution loop's manager phase writes it during execution.
+
+Tools (saha commands, the ghostling kanban app, the execution loop) read state from
+`progress.yaml` — never by scraping markdown.
 
 ## Task Folder Structure
 
 ```
 task-XX-short-name/
-├── README.md                    # Task status dashboard
-├── task-description.md          # Architecture + technical overview
-├── user-stories/
-│   ├── US-001-feature-name.md   # Detailed requirements
-│   ├── US-002-feature-name.md   # Acceptance criteria, edge cases
-│   └── ...
-├── design-decisions/
-│   ├── README.md                # Index of decisions
-│   ├── DD-001-decision-name.md  # Architecture decisions
-│   └── ...
-├── code-changes/
-│   ├── README.md                # Index of contracts
-│   ├── component-a.md           # Interface definitions
-│   └── ...
-├── implementation-plan/
-│   ├── README.md                # Phase status tracking
-│   ├── phase-01-name.md         # Execution phases with steps
-│   ├── phase-02-name.md
-│   └── ...
-├── test-specs/
-│   ├── README.md                # Test overview
-│   ├── environment-setup.md     # Test environment config
-│   ├── e2e/                     # End-to-end test specs
-│   ├── integration/             # Integration test specs
-│   └── unit/                    # Unit test specs
-└── research/
-    ├── codebase-analysis.md     # Technical research
-    └── ...
+├── progress.yaml          # THE tracking file (format: saha/v2 marker lives here)
+├── model/                 # one LikeC4 project, built/validated as a unit
+│   ├── spec.c4            # element kinds + tags (actor, component, story, decision, phase…)
+│   ├── task.c4            # task description: context model + `view task-context`
+│   ├── stories.c4         # one `dynamic view us-NNN-flow` per user story
+│   ├── decisions.c4       # DD-XXX decision elements wired to affected components
+│   ├── contracts.c4       # interface contracts: components + `metadata { contract '''…''' }`
+│   ├── test-specs.c4      # test scenarios as `ts-*` dynamic views
+│   └── phases.c4          # plan overview: phase elements + dependency arrows
+├── research/*.md          # research stays markdown (prose)
+└── README.md              # 5-line human pointer (title, status, "open in ghostling")
 ```
+
+Templates for every file live in `claude_plugin/templates/` (`spec.c4`, `task.c4`,
+`stories.c4`, `decisions.c4`, `contracts.c4`, `test-specs.c4`, `phases.c4`,
+`progress.yaml`, plus `research-report.md`).
+
+## progress.yaml Schema
+
+```yaml
+format: saha/v2                # presence of this key = new-format task
+task: task-11-likec4-planning
+title: …
+created: 2026-07-17
+mode: full                     # full | minimal
+status: planning               # planning -> executing -> completed | completed_pending_manual | failed
+
+planning:                      # one entry per planning step; status: pending | in_progress | done | skipped
+  research:            { status: done, artifacts: [research/codebase-analysis.md] }
+  task_description:    { status: done, views: [task-context] }
+  user_stories:        { status: in_progress, views: [us-001-flow, us-002-flow] }
+  design_decisions:    { status: pending, views: [] }        # -> [decisions]
+  code_changes:        { status: pending, views: [] }        # -> [contracts]
+  test_specs:          { status: pending, views: [], gaps: [] }  # gaps: [{story: US-003, reason: …}]
+  implementation_plan: { status: pending, views: [] }        # -> [phases]
+  verify:              { status: pending }
+
+stories:
+  - id: US-001
+    title: …
+    view: us-001-flow          # dynamic view id in model/stories.c4
+    priority: must             # must | should | could
+    status: draft              # draft | ready | in_progress | done
+    story: "As a …, I want … so that …"
+    acceptance_criteria:
+      - id: AC-1               # qualified id everywhere else: US-001.AC-1
+        text: "Given … when … then …"
+        verify: automated      # automated | build | manual
+        # manual_instructions: …   (required when verify: manual)
+        status: pending        # pending | in_progress | done
+        specs: [ts-e2e-01]     # PLANNED coverage (ts-* view ids, filled by /saha:test-specs)
+        tests: []              # ACTUAL bindings (filled by the loop: tests/test_x.py::test_y)
+    edge_cases: [{ name: …, trigger: …, expected: … }]
+    depends_on: []             # [US-000]
+    decisions: []              # [DD-001]
+
+phases:
+  - id: phase-01
+    title: …
+    view: phases
+    stories: [US-001]
+    status: pending            # pending | in_progress | done
+    steps:
+      - { name: …, files: [path/to/file], status: pending }
+
+iterations: []                 # appended by the loop:
+# - { iteration: 1, phase: implementation, result: passed, notes: …, files_changed: [] }
+```
+
+Key semantics:
+- **`verify:`** is how the loop proves an AC: `automated` = bound named tests go
+  red→green; `build` = compilation/launch proves it (empty `tests:` is fine);
+  `manual` = human eyes, with exact `manual_instructions` — the loop never ticks it,
+  and a task whose only remaining ACs are manual ends as `completed_pending_manual`.
+- **`specs:` vs `tests:`** — planned coverage (view ids) vs. actual bindings (real
+  runnable test identifiers). Only the manager writes `tests:`, copying passing
+  bindings reported by QA.
+- The loop's runtime state lives separately in `.sahaidachny/<task>-execution-state.yaml`;
+  the toolchain profile in `.sahaidachny/stack.yaml` (or marker-file auto-detect).
+
+## LikeC4 Model Conventions
+
+All `model/*.c4` files form **one project**; `spec.c4` declares the shared kinds
+(`actor`, `container`, `component`, `store`, `external`, `story`, `decision`,
+`phase`) and tags (`#must #should #could`, `#existing #new`).
+
+### Stable ids bind diagrams ↔ YAML
+
+| Thing | Model id | View id | progress.yaml |
+|-------|----------|---------|---------------|
+| Task overview | — | `task-context` | `planning.task_description.views` |
+| User story | `us-001` (element) | `us-001-flow` (dynamic view) | `stories[].id: US-001`, `view:` |
+| Design decision | `dd-001` | `decisions` (one overview view) | `stories[].decisions: [DD-001]` |
+| Contracts | components under `extend` | `contracts` | `planning.code_changes.views` |
+| Test scenario | — | `ts-e2e-01` / `ts-int-01` / `ts-unit-01` | AC `specs:` lists |
+| Phase | `phase-01` | `phases` (one overview view) | `phases[].id` |
+
+### Per-file rules
+
+- **task.c4** — context model of the system under change. Tag every element
+  `#existing` or `#new` so the delta is visible; goals/non-goals/constraints go in
+  `metadata {}`; the overview view MUST be named `task-context`.
+- **stories.c4** — THIS is what the human reviews: each story is a walkable
+  `dynamic view` (actor → system → back, `<-` for responses, `parallel {}` for
+  concurrency). Cite AC ids in step `notes` (`**AC-1** — …`) so the reviewer sees
+  where each criterion is proven — but AC status/text authority stays in the YAML.
+- **decisions.c4** — one `decision` element per DD with context/decision in
+  `description`, rationale/alternatives/consequences in `metadata {}`, and a
+  relation to every component it constrains (`dd-001 -> sys.new_part 'shapes'`).
+- **contracts.c4** — one component per created/changed interface; the contract shape
+  (signature, input/output fields with types, error cases) goes in
+  `metadata { contract '''…''' }` with `contract_kind 'function|rest|event|cli'`;
+  relations carry the calls (`caller -> callee 'METHOD /path'`).
+- **test-specs.c4** — each scenario is a dynamic view: preconditions/environment in
+  the view `description` (with `**Proves:** US-001.AC-1`), per-step `**Expected:**`
+  observations in `notes`. Walk the SAME elements as the story flow it verifies.
+- **phases.c4** — phase elements with `->` arrows for hard dependencies and
+  `phase -> story 'delivers'` relations; step-level detail (files, statuses) stays
+  in the YAML.
+
+### Validation
+
+```bash
+likec4 validate {task_path}/model
+```
+
+is THE well-formedness gate (used by `/saha:verify` and reviewers). Do NOT gate on
+`likec4 export json` — it exits 0 even on broken models.
+
+Authoring gotchas:
+- Re-opening a nested element from another file requires `extend sys.new_part { … }`,
+  not re-declaration.
+- `kind` is a reserved key inside `metadata {}` — use `contract_kind`.
+- Element ids must not be LikeC4 property keywords (`summary`, `title`,
+  `description`, `technology`, `link`, `icon`, `style`, `metadata`,
+  `navigateTo`) — `validate` fails with a cryptic `Expecting token '}'`.
+  Prefix instead: `repo_summary`, not `summary`.
+- Prose belongs in `description '''…'''` and step `notes '''…'''` (markdown renders);
+  structured facts belong in `metadata {}`.
 
 ---
 
-## Artifact Templates
+## Choosing a Planning Path
 
-### README.md (Task Dashboard)
+Two **independent** considerations decide how much planning a task needs. Don't
+conflate them:
 
-```markdown
-# Task-XX: [Task Title]
+- **Scope** — small (a 1-2 file fix, a tiny feature) vs. large (multi-component).
+- **Context** — greenfield (new area, little existing code) vs. existing codebase
+  (patterns and architecture matter).
 
-**Status:** Planning | In Progress | Completed
-**Mode:** Full | Minimal
-**Created:** YYYY-MM-DD
+| | Small scope | Large scope |
+|---|---|---|
+| **Greenfield** | `/saha:quick` | full planning flow |
+| **Existing codebase** | `/saha:quick` | full planning flow |
 
-## Overview
-[1-2 sentence summary]
+Scope, not context, picks the path. The codebase scan adapts to context: for an
+existing codebase it grounds artifacts in real files; for greenfield it proceeds
+from the description without inventing references.
 
-## Planning Progress
+### Quick Path (small tasks)
 
-| Step | Status | Artifacts |
-|------|--------|-----------|
-| Research | Pending/Done | research/*.md |
-| Task Description | Pending/Done | task-description.md |
-| User Stories | Pending/Done | user-stories/US-*.md |
-| Design Decisions | Pending/Done | design-decisions/DD-*.md |
-| Code Changes | Pending/Done | code-changes/*.md |
-| Test Specs | Pending/Done | test-specs/**/*.md |
-| Implementation Plan | Pending/Done | implementation-plan/phase-*.md |
+One command, one pass, no separate review gate:
 
-## Next Steps
-- [ ] Current action item
-```
+1. `/saha:quick "<one-line task>"` — light codebase scan, then the minimum the loop
+   needs: `model/spec.c4` + `model/task.c4` + one `us-001-flow` in `model/stories.c4`,
+   and a `progress.yaml` with one story (ACs with `verify:` methods = the definition
+   of done) and one phase.
+2. `/saha:execute` — the full verify loop runs unchanged.
 
-### task-description.md
+### Full Path (large tasks)
 
-```markdown
-# Task Description: [Title]
+The multi-step planning chain, each step verified before the next:
 
-**Status:** Draft | Review | Approved
-**Last Updated:** YYYY-MM-DD
+1. Research (`/saha:research` → `research/*.md`)
+2. Task Description (`/saha:task` → `model/task.c4`)
+3. User Stories + Verification (`/saha:stories` → `model/stories.c4` + YAML records)
+4. Design Decisions + Verification (`/saha:decide` → `model/decisions.c4`)
+5. Code Changes + Verification (`/saha:contracts` → `model/contracts.c4`)
+6. Test Specs + Verification (`/saha:test-specs` → `model/test-specs.c4` + AC `specs:`)
+7. Implementation Plan + Verification (`/saha:plan` → `model/phases.c4` + YAML phases)
 
-## Overview
-[Comprehensive description of what this task accomplishes]
-
-## Goals
-- Goal 1
-- Goal 2
-
-## Non-Goals
-- What this task explicitly does NOT cover
-
-## Technical Context
-[Relevant technical background, existing systems, constraints]
-
-## Constraints
-- Technical constraints
-- Business constraints
-- Timeline constraints
-
-## Success Criteria
-- [ ] Criterion 1
-- [ ] Criterion 2
-```
-
-### User Story (US-XXX-name.md)
-
-```markdown
-# US-XXX: [User Story Title]
-
-**Status:** Draft | Review | Approved
-**Priority:** Critical | High | Medium | Low
-**Last Updated:** YYYY-MM-DD
-
-## User Story
-As a [role], I want [feature] so that [benefit].
-
-## Description
-[Detailed description of the feature]
-
-## Acceptance Criteria
-- [ ] AC1: [Criterion]
-- [ ] AC2: [Criterion]
-
-## Edge Cases
-- Edge case 1
-- Edge case 2
-
-## Dependencies
-- US-XXX (if applicable)
-- External dependency
-
-## Related Decisions
-- DD-XXX (if applicable)
-
-## Notes
-[Additional context or considerations]
-```
-
-### Design Decision (DD-XXX-name.md)
-
-```markdown
-# DD-XXX: [Decision Title]
-
-**Status:** Draft | Proposed | Accepted | Superseded
-**Last Updated:** YYYY-MM-DD
-
-## Context
-[What is the issue that we're seeing that motivates this decision?]
-
-## Decision
-[What is the change that we're proposing and/or doing?]
-
-## Rationale
-[Why is this the best choice among alternatives?]
-
-## Alternatives Considered
-1. **Alternative 1:** Description
-   - Pros: ...
-   - Cons: ...
-
-2. **Alternative 2:** Description
-   - Pros: ...
-   - Cons: ...
-
-## Consequences
-- Positive: ...
-- Negative: ...
-- Neutral: ...
-
-## Related
-- User Stories: US-XXX, US-XXX
-- Other Decisions: DD-XXX
-```
-
-### Code Change (component-name.md)
-
-```markdown
-# Code Change: [Component Name]
-
-**Status:** Draft | Review | Approved
-**Last Updated:** YYYY-MM-DD
-
-## Overview
-[What this API/interface does]
-
-## Endpoints / Methods
-
-### `METHOD /path` or `function_name()`
-
-**Description:** What this endpoint/method does
-
-**Request/Input:**
-```json
-{
-  "field": "type - description"
-}
-```
-
-**Response/Output:**
-```json
-{
-  "field": "type - description"
-}
-```
-
-**Errors:**
-| Code | Description |
-|------|-------------|
-| 400 | Bad request |
-| 404 | Not found |
-
-## Related
-- User Stories: US-XXX
-- Decisions: DD-XXX
-```
-
-### Test Spec (test-name.md)
-
-```markdown
-# Test Spec: [Test Name]
-
-**Type:** E2E | Integration | Unit
-**Status:** Draft | Review | Approved
-**Priority:** Critical | High | Medium | Low
-
-## Overview
-[What this test verifies]
-
-## Related User Stories
-- US-XXX
-
-## Preconditions
-- Precondition 1
-- Precondition 2
-
-## Test Steps
-1. Step 1
-2. Step 2
-3. Step 3
-
-## Expected Results
-- Expected outcome 1
-- Expected outcome 2
-
-## Edge Cases to Cover
-- Edge case 1
-- Edge case 2
-```
-
-### Implementation Phase (phase-XX-name.md)
-
-```markdown
-# Phase XX: [Phase Name]
-
-**Status:** Pending | In Progress | Completed
-**Last Updated:** YYYY-MM-DD
-
-## Overview
-[What this phase accomplishes]
-
-## Prerequisites
-- Phase XX completed
-- External dependency ready
-
-## Steps
-
-### Step 1: [Step Name]
-- [ ] Action item 1
-- [ ] Action item 2
-
-**Files to create/modify:**
-- `path/to/file.py`
-
-### Step 2: [Step Name]
-- [ ] Action item 1
-
-## Success Criteria
-- [ ] Criterion 1
-- [ ] Criterion 2
-
-## Related
-- User Stories: US-XXX
-- Decisions: DD-XXX
-```
+Both paths feed the **same** execution loop. The loop's only requirement is a
+`progress.yaml` with `format: saha/v2`, at least one story whose ACs carry `verify:`
+methods, and at least one phase — plus a model that passes `likec4 validate`.
 
 ---
 
-## Planning Modes
+## Naming Conventions
 
-### Full Mode
-For existing codebases. Includes all steps:
-1. Research (codebase exploration)
-2. Task Description
-3. User Stories + Verification
-4. Design Decisions + Verification
-5. Code Changes + Verification
-6. Test Specs + Verification
-7. Implementation Plan + Verification
-
-### Minimal Mode
-For greenfield projects. Includes:
-1. Task Description
-2. User Stories + Verification
-3. Definition of Done + Verification
-
----
-
-## File Naming Conventions
-
-| Artifact | Pattern | Example |
-|----------|---------|---------|
+| Thing | Pattern | Example |
+|-------|---------|---------|
 | Task folder | `task-XX-short-name/` | `task-05-user-auth/` |
-| User Story | `US-XXX-short-name.md` | `US-001-login-form.md` |
-| Design Decision | `DD-XXX-short-name.md` | `DD-001-jwt-vs-session.md` |
-| Phase | `phase-XX-short-name.md` | `phase-01-setup.md` |
-| Test Spec | `descriptive-name.md` | `login-validation.md` |
+| Story id / view | `US-XXX` / `us-xxx-flow` | `US-001` / `us-001-flow` |
+| Qualified AC id | `US-XXX.AC-N` | `US-001.AC-2` |
+| Decision id | `DD-XXX` / element `dd-xxx` | `DD-001` / `dd-001` |
+| Phase id | `phase-XX` | `phase-01` |
+| Test view | `ts-{e2e,int,unit}-NN` | `ts-e2e-01` |
 
----
+## Legacy Tasks
 
-## Status Values
-
-| Status | Meaning |
-|--------|---------|
-| Draft | Initial creation, not ready for review |
-| Review | Ready for review/verification |
-| Approved | Verified and accepted |
-| Needs Revision | Requires changes after review |
-
-## Priority Values
-
-| Priority | Meaning |
-|----------|---------|
-| Critical | Must have, blocks other work |
-| High | Important, should be done soon |
-| Medium | Normal priority |
-| Low | Nice to have |
+A task folder **without** a `format: saha/v2` progress.yaml is old-format (markdown
+artifacts: `task-description.md`, `user-stories/*.md`, …). `/saha:execute` refuses
+those and routes them to the old Python path (`saha run`); the kanban app still
+renders them via its legacy marker-scraping fallback. New planning always produces
+saha/v2.

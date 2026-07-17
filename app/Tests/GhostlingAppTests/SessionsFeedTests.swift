@@ -13,11 +13,14 @@ import Testing
 struct SessionsFeedTests {
     private let now = Date(timeIntervalSince1970: 1_750_000_000)
 
-    private func entry(_ id: String, _ state: CardState, dir: String?) -> HookSessionStore.Entry {
-        HookSessionStore.Entry(sessionID: id, state: state, updatedAt: now, projectDir: dir)
+    private func entry(
+        _ id: String, _ state: CardState, dir: String?, agent: CardAgent = .claude
+    ) -> HookSessionStore.Entry {
+        HookSessionStore.Entry(
+            sessionID: id, agent: agent, state: state, updatedAt: now, projectDir: dir)
     }
 
-    @Test func mapsEachEntryToAWatchedFlowBClaudeCard() {
+    @Test func mapsEachEntryToAWatchedFlowBCard() {
         let cards = SessionsFeed.cards(from: [entry("sess-normal", .running, dir: "/repo")])
         #expect(cards.count == 1)
 
@@ -25,9 +28,16 @@ struct SessionsFeedTests {
         #expect(normal.sessionID == "sess-normal")
         #expect(normal.projectDir == "/repo")
         #expect(normal.state == .running)
-        // Every hook-observed session is a human-launched Claude Code run we only watch.
         #expect(normal.agent == .claude)
         #expect(normal.flow == .b)
+    }
+
+    @Test func preservesCodexAgentIdentity() {
+        let cards = SessionsFeed.cards(from: [
+            entry("codex-session", .waitingForInput, dir: "/repo", agent: .codex)
+        ])
+        #expect(cards[0].agent == .codex)
+        #expect(cards[0].state == .waitingForInput)
     }
 
     @Test func absentProjectDirFallsBackToTheSessionID() {

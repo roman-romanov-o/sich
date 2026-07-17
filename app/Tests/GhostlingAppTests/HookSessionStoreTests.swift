@@ -13,8 +13,8 @@ import Testing
 ///   out-rank a FRESH `running`. Ordering is by `updatedAt` (already on the model), no
 ///   `seq`/`ppid`.
 /// - **TC-UNIT-014** — a clean `SessionEnd` closes the session immediately (no 30s
-///   wait), while a hard-killed run with no `SessionEnd` still decays via the
-///   stale-sweep backstop.
+///   wait), while a hard-killed run with no `SessionEnd` still decays to explicit
+///   unknown via the stale-sweep backstop.
 ///
 /// Deterministic throughout: every timestamp is injected (epoch + offsets), never the
 /// wall clock — the anti-flake rule (GridTextTests fromPTY PTY-EOF precedent).
@@ -58,14 +58,12 @@ struct HookSessionStoreTests {
                 "the freshest observation must win — a stale blocked run cannot out-rank a fresh running one")
     }
 
-    /// Field report 2026-07-05: a freshly created task (claude auto-started, sitting
-    /// at its first prompt) must land in Idle, not Running — it only starts running
-    /// once you actually submit a prompt.
-    @Test func freshSessionIsIdleUntilFirstPrompt() {
+    /// cmux marks Claude active on `SessionStart`; a later prompt keeps it running.
+    @Test func freshSessionStartsRunning() {
         let store = HookSessionStore(staleThreshold: 30)
         store.ingest([normalized(#"{"hook_event_name":"SessionStart","session_id":"fresh"}"#,
                                  arrival: base)])
-        #expect(store.entry(for: "fresh")?.state == .idle)
+        #expect(store.entry(for: "fresh")?.state == .running)
         store.ingest([normalized(#"{"hook_event_name":"UserPromptSubmit","session_id":"fresh"}"#,
                                  arrival: base.addingTimeInterval(2))])
         #expect(store.entry(for: "fresh")?.state == .running)
@@ -98,6 +96,7 @@ struct HookSessionStoreTests {
         store.sweepStale(now: base.addingTimeInterval(5))
         #expect(store.entry(for: "killed")?.state == .running)
         // …but the stale-decay backstop still reaps it once silence passes threshold.
+        // It lands in explicit unknown rather than guessing attention.
         store.sweepStale(now: base.addingTimeInterval(31))
         #expect(store.entry(for: "killed")?.state == .unknown)
     }

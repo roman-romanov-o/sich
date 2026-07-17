@@ -1,12 +1,14 @@
 ---
-description: Create or update the task description document
+description: Create or update the task description model
 argument-hint: [task-path]
-allowed-tools: Read, Write, Glob, Grep, AskUserQuestion, Task
+allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, Task
 ---
 
 # Task Description
 
-Create a comprehensive task description document through interactive refinement.
+Create the task description as a reviewable **LikeC4 context model** through
+interactive refinement. The human reviews this as a diagram in ghostling — not as
+prose — so the model, not a document, is the deliverable.
 
 ## Arguments
 
@@ -19,7 +21,8 @@ Create a comprehensive task description document through interactive refinement.
 ## Prerequisites
 
 Before running this command:
-1. Task folder must exist (run `/saha:init` first)
+1. Task folder must exist (run `/saha:init` first) — it contains `model/spec.c4`
+   and `progress.yaml`
 
 This is typically the first planning step after init. The task description provides context for subsequent research.
 
@@ -28,8 +31,9 @@ This is typically the first planning step after init. The task description provi
 ### 1. Gather Context
 
 Read existing materials:
-- `{task_path}/README.md` - Task overview
+- `{task_path}/progress.yaml` - Task identity + planning state
 - `{task_path}/research/*.md` - Research findings (if research was already done)
+- `.claude/templates/task.c4` - The template/conventions for this artifact
 
 ### 2. Interactive Task Definition
 
@@ -43,116 +47,73 @@ Ask the user to clarify key aspects. Use AskUserQuestion for structured input.
 4. **Constraints**: Technical, time, or resource constraints?
 5. **Dependencies**: What must exist before this can be built?
 
-### 3. Generate Task Description
+### 3. Generate the Task Model
 
-Create `{task_path}/task-description.md`:
+Create `{task_path}/model/task.c4` following `.claude/templates/task.c4`:
 
-```markdown
-# Task Description: [Title]
+- Model the **actors** (who uses/benefits), the **system container**, and the
+  components this task touches — tag each `#existing` or `#new` so the reviewer
+  sees the delta at a glance. Add `external` elements for dependencies.
+- Prose goes where the reviewer will read it:
+  - `description '''…'''` on the container: the 1-paragraph overview
+  - `metadata { goals / non_goals / constraints }`: structured facts
+  - Success criteria summary: the `task-context` view `description`
+- Relations state HOW new integrates with existing (`user -> sys.x '…'`,
+  `sys.new -> sys.old '…'`).
+- The overview view **must be named `task-context`** — progress.yaml and the
+  kanban app point at it.
 
-**Task ID:** TASK-XX
-**Status:** Draft | Ready for Stories | Approved
-**Last Updated:** YYYY-MM-DD
-
-## Problem Statement
-
-[Clear description of the problem being solved]
-
-### Current State
-
-[How things work now / what's broken / what's missing]
-
-### Desired State
-
-[What we want to achieve]
-
-## Success Criteria
-
-Measurable outcomes that define "done":
-
-1. [ ] [Specific, measurable criterion]
-2. [ ] [Another criterion]
-3. [ ] [...]
-
-## Scope
-
-### In Scope
-
-- [Feature/change that IS included]
-- [...]
-
-### Out of Scope
-
-- [Feature/change that is NOT included]
-- [...]
-
-## Constraints
-
-| Type | Constraint | Reason |
-|------|------------|--------|
-| Technical | [e.g., Must use existing auth system] | [Why] |
-| Time | [e.g., Must ship before Q2] | [Why] |
-| Resource | [e.g., No new dependencies] | [Why] |
-
-## Dependencies
-
-### Prerequisites
-
-- [ ] [What must exist before we start]
-
-### Blockers
-
-- [ ] [Known blockers to resolve]
-
-## Technical Context
-
-[Relevant technical details from research]
-
-### Affected Components
-
-- `path/to/component` - [How it's affected]
-
-### Integration Points
-
-- [System/service that needs integration]
-
-## Open Questions
-
-- [ ] [Unresolved question that needs answering]
-
-## References
-
-- [Link to research documents]
-- [Link to related documentation]
-```
+Element ids introduced here (`sys`, its components, actors) are the shared
+vocabulary every later artifact (`stories.c4`, `contracts.c4`, …) references.
+Choose short, stable, snake_case ids — but NEVER a LikeC4 property keyword
+(`summary`, `title`, `description`, `technology`, `link`, `icon`, `style`,
+`metadata`, `navigateTo`): `validate` rejects it with a cryptic
+`Expecting token '}'` error. A `--summary` feature's component is
+`repo_summary`, not `summary`.
 
 ### 4. Incorporate Research (if available)
 
 If research documents already exist in `research/`:
-- Pull key findings into Technical Context
-- Reference research files
-- Include validated/invalidated assumptions
-- Add identified risks
+- Model the affected components research identified (with `metadata { files '…' }`)
+- Reflect validated/invalidated assumptions in descriptions
+- Note risks in `metadata`
 
-Note: Research typically runs after task description. The Technical Context section can be updated later when research completes.
+### 5. Compile Gate
 
-### 5. Validate with User
+The model must compile before review:
+
+```bash
+likec4 validate {task_path}/model
+```
+
+Fix any errors. If the `likec4` CLI is missing, tell the user
+(`npm i -g likec4`) and continue — authoring is still valid, rendering degrades.
+
+### 6. Validate with User
 
 After generating, ask:
 - Does this accurately capture the task?
 - Are success criteria measurable and complete?
 - Is the scope clear?
 
-Iterate until the user approves.
+Iterate until the user approves. Remind them they can review visually in
+ghostling's Planning Mode (a static `likec4 build` of `{task_path}/model` — never `likec4 start`).
 
-### 6. Update README
+### 7. Update progress.yaml
 
-Update `{task_path}/README.md` progress table:
-- Set "Task Description" row to "Complete" or "In Progress"
+Update `{task_path}/progress.yaml` (the ONLY file that tracks status):
 
-## 7. Review Artifacts
+```yaml
+planning:
+  task_description: { status: in_progress, views: [task-context] }
+```
 
-Launch the reviewer agent to validate task description:
+Keep `in_progress` here — `done` is written only in step 8, after the review
+passes and the user approves.
+
+## 8. Review Artifacts
+
+Launch the reviewer agent to validate the task model:
 
 ```
 Task tool:
@@ -163,12 +124,14 @@ Task tool:
 
     Review mode: task
     Task path: {task_path}
-    Artifacts to review: {task_path}/task-description.md
+    Artifacts to review: {task_path}/model/task.c4
 
-    Review the task description and report any issues.
+    Review the task description model and report any issues.
 ```
 
 If the reviewer finds blockers (🔴), work with user to fix before proceeding.
+When the review passes and the user approves, set
+`planning.task_description.status: done` in progress.yaml.
 
 ## Example Usage
 
@@ -179,5 +142,5 @@ If the reviewer finds blockers (🔴), work with user to fix before proceeding.
 ## Output
 
 Creates or updates:
-- `{task_path}/task-description.md`
-- `{task_path}/README.md` (progress update)
+- `{task_path}/model/task.c4` (view `task-context`)
+- `{task_path}/progress.yaml` (planning.task_description)

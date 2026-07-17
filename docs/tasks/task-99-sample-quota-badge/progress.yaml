@@ -1,0 +1,44 @@
+format: saha/v2
+task: task-99-sample-quota-badge
+title: Per-card quota badge
+status: planning
+planning:
+  research:            {status: done, artifacts: [research/notes.md]}
+  task_description:    {status: done, views: [task-context]}
+  user_stories:        {status: in_progress, views: [us-001-flow, us-002-flow]}
+  design_decisions:    {status: done, views: [decisions]}
+  code_changes:        {status: done, views: [contracts]}
+  test_specs:          {status: pending, views: []}
+  implementation_plan: {status: pending, views: []}
+  verify:              {status: pending}
+stories:
+  - id: US-001
+    title: Card shows its quota share
+    view: us-001-flow
+    priority: must
+    status: ready
+    acceptance_criteria:
+      - id: AC-1
+        text: "Given a card with a known share, the badge renders N% within one poll cycle"
+        verify: automated
+        status: pending
+      - id: AC-2
+        text: "Given an unknown share, the badge renders an em-dash, never 0%"
+        verify: automated
+        status: pending
+  - id: US-002
+    title: Badge refreshes with the quota poll
+    view: us-002-flow
+    priority: should
+    status: draft
+    depends_on: [US-001]
+    acceptance_criteria:
+      - id: AC-1
+        text: "Given a landed poll, every visible badge updates in the same run loop turn"
+        verify: automated
+        status: pending
+      - id: AC-2
+        text: "Given a failed poll, the badge keeps the last value dimmed as stale"
+        verify: manual
+        manual_instructions: "Cut the network, wait one poll cycle, confirm the badge dims"
+        status: pending

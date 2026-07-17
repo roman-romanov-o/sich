@@ -49,10 +49,10 @@ struct HookSinkTests {
         HookNormalizer.normalize(Data(json.utf8), arrival: arrival)
     }
 
-    // MARK: - TC-INT-320: append a Stop line → waiting-for-you within one poll, NO server
+    // MARK: - TC-INT-320: append a Stop line → idle within one poll, NO server
 
-    @Test("TC-INT-320: append a Stop line → session reads waiting-for-input within one poll, no server")
-    func appendStopLineMovesSessionToWaiting() throws {
+    @Test("TC-INT-320: append a Stop line → session clears running status within one poll, no server")
+    func appendStopLineMovesSessionToIdle() throws {
         let file = makeEventsFile()
         defer { try? FileManager.default.removeItem(at: file) }
         let now = date("2026-06-16T12:00:00Z")
@@ -63,9 +63,8 @@ struct HookSinkTests {
         let store = HookSessionStore()
         store.ingest(tail.poll().compactMap { HookNormalizer.normalize($0, arrival: now) })
 
-        // A Stop ends the TURN — the agent yielded back to you, so it parks in
-        // waiting-for-input (not done: the session is still open for your next message).
-        #expect(store.entry(for: "S")?.state == .waitingForInput)
+        // Stop clears active status. Notification/permission hooks carry "needs input".
+        #expect(store.entry(for: "S")?.state == .idle)
     }
 
     // MARK: - TC-INT-321: _HOOK_KIND map parity (table)
@@ -121,19 +120,23 @@ struct HookSinkTests {
         let event = normalize(#"{"hook_event_name":"Stop","session_id":"S"}"#, arrival: arrival)
         #expect(event?.timestamp == arrival)
         // Staleness then measures silence from arrival: still inside the threshold,
-        // not yet stale; past it, swept to unknown.
+        // not yet stale; past it, swept off running.
         let store = HookSessionStore(staleThreshold: 30)
-        // Use a running signal (Stop rests in waiting and is never swept) stamped at arrival.
+        // Use a running signal stamped at arrival.
         let running = normalize(#"{"hook_event_name":"PreToolUse","session_id":"S"}"#, arrival: arrival)!
         store.ingest([running])
         store.sweepStale(now: arrival.addingTimeInterval(10))
         #expect(store.entry(for: "S")?.state == .running)
+        // The sweep lands an unreported running session in explicit unknown; what this
+        // case pins is the 30s arrival-relative edge.
         store.sweepStale(now: arrival.addingTimeInterval(31))
         #expect(store.entry(for: "S")?.state == .unknown)
     }
 
     // MARK: - TC-INT-324: reconciler precedence parity vs frozen Python oracle
 
+    /// Parity against the frozen detector oracle. Unknown stays explicit: silence or
+    /// unrecognized hooks must not be guessed into attention.
     @Test("TC-INT-324: reconciled transition path + final state match the frozen Python detector")
     func reconcilerParityWithFrozenPythonOracle() throws {
         let fixtures = URL(fileURLWithPath: #filePath)
@@ -189,8 +192,8 @@ struct HookSinkTests {
 
     // MARK: - TC-INT-326: silent past threshold → swept to unknown
 
-    @Test("TC-INT-326: a session silent past the stale threshold is swept to unknown, not left running")
-    func silentPastThresholdSweptToUnknown() {
+    @Test("TC-INT-326: a session silent past the stale threshold is swept off running, not left running")
+    func silentPastThresholdSweptOffRunning() {
         let store = HookSessionStore(staleThreshold: 30)
         let start = date("2026-06-16T12:00:00Z")
         let running = SignalEvent(kind: .toolUse, source: .hook, sessionID: "S", timestamp: start, cwd: "/repo")
@@ -200,7 +203,7 @@ struct HookSinkTests {
         // Within threshold: still running.
         store.sweepStale(now: start.addingTimeInterval(10))
         #expect(store.entry(for: "S")?.state == .running)
-        // Past threshold: unknown, never done.
+        // Past threshold: explicit unknown, never a false attention or done claim.
         store.sweepStale(now: start.addingTimeInterval(31))
         let final = store.entry(for: "S")?.state
         #expect(final == .unknown)
@@ -220,19 +223,18 @@ struct HookSinkTests {
         #expect(store.entry(for: "S")?.state == .done)
     }
 
-    @Test("TC-INT-326 guard: an awaiting-you (Stop) session is never swept to unknown either")
-    func waitingSessionNotSwept() {
+    @Test("TC-INT-326 guard: an idle (Stop) session is never swept to unknown")
+    func idleSessionNotSwept() {
         let store = HookSessionStore(staleThreshold: 30)
         let start = date("2026-06-16T12:00:00Z")
         store.ingest([SignalEvent(kind: .stop, source: .hook, sessionID: "S", timestamp: start)])
         store.sweepStale(now: start.addingTimeInterval(120))
-        // The "waiting for your response" notification must persist through silence.
-        #expect(store.entry(for: "S")?.state == .waitingForInput)
+        #expect(store.entry(for: "S")?.state == .idle)
     }
 
     // MARK: - TC-INT-327: dropped / raced hooks reconcile correctly
 
-    @Test("TC-INT-327: a dropped Stop hook is recovered by a lower-precedence JSONL turn-completed → waiting")
+    @Test("TC-INT-327: a dropped Stop hook is recovered by a lower-precedence JSONL turn-completed → idle")
     func droppedStopReconciledViaJSONL() {
         let store = HookSessionStore()
         let start = date("2026-06-16T12:00:00Z")
@@ -244,9 +246,9 @@ struct HookSinkTests {
         ]
         store.ingest(events)
         let final = store.entry(for: "S")?.state
-        // The recovered turn-end lands the session in waiting-for-input (awaiting you),
-        // the key thing being it does NOT stay stuck in running.
-        #expect(final == .waitingForInput)
+        // The recovered turn-end clears running; it does NOT stay stuck in running and
+        // does NOT claim attention without a notification.
+        #expect(final == .idle)
         #expect(final != .running)
         #expect(store.transitions(for: "S").contains(.blocked) == false)
     }

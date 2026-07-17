@@ -8,8 +8,7 @@ import Testing
 /// A hook `Stop` can be raced or dropped; the Claude transcript's `turn_completed`
 /// record (a lower-precedence JSONL signal that never overrides a live hook) lands on
 /// the SAME event-file tail tagged `"source":"jsonl"`, so a session still converges to
-/// its end-of-turn `waitingForInput` (awaiting your reply) instead of locking in
-/// `running`. Driven through the REAL poll path
+/// its end-of-turn `idle` instead of locking in `running`. Driven through the REAL poll path
 /// (`SessionsPoller` → `SessionsFeed.normalize` → `HookSessionStore`) so a wiring gap
 /// is caught before it reaches an NSView.
 ///
@@ -72,7 +71,7 @@ struct ReconcilerTests {
         defer { poller.stop() }
 
         let card = try #require(snapshot.first { $0.sessionID == "S" })
-        #expect(card.state == .waitingForInput,
-                "a dropped Stop must be recovered from the JSONL transcript tail (turn ended → awaiting you)")
+        #expect(card.state == .idle,
+                "a dropped Stop must be recovered from the JSONL transcript tail (turn ended → idle)")
     }
 }

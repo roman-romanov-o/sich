@@ -1,0 +1,59 @@
+// task.c4 — the task description as a reviewable context model.
+// Replaces the old task-description.md. Prose that matters goes into `description`
+// and markdown `notes`; structured facts go into `metadata {}`.
+//
+// Conventions:
+//   - Root container id = the system under change; nest the parts this task touches.
+//   - Tag every element #existing or #new so the reviewer sees the delta at a glance.
+//   - The single overview view MUST be named `task-context` (progress.yaml points at it).
+
+model {
+  user = actor '{{primary_user}}' {
+    description '{{who_this_is_and_what_they_want}}'
+  }
+
+  sys = container '{{system_name}}' {
+    description '''
+      {{one_paragraph_overview_of_what_this_task_accomplishes}}
+    '''
+    metadata {
+      goals '{{goal_1}}; {{goal_2}}'
+      non_goals '{{explicitly_out_of_scope}}'
+      constraints '{{technical_or_business_constraints}}'
+    }
+
+    existing_part = component '{{existing_component}}' {
+      #existing
+      description '{{current_behaviour_relevant_to_this_task}}'
+      metadata {
+        files '{{path/to/existing/code}}'
+      }
+    }
+
+    new_part = component '{{new_component}}' {
+      #new
+      description '{{what_gets_built}}'
+      metadata {
+        files '{{path/where/it/will/live}}'
+      }
+    }
+  }
+
+  dep = external '{{external_dependency}}' {
+    description '{{why_we_depend_on_it}}'
+  }
+
+  user -> sys.new_part '{{primary_interaction}}'
+  sys.new_part -> sys.existing_part '{{how_new_integrates_with_existing}}'
+  sys.new_part -> dep '{{dependency_usage}}'
+}
+
+views {
+  view task-context {
+    title '{{task_id}}: {{task_title}}'
+    description '''
+      {{success_criteria_summary_the_reviewer_should_hold_in_mind}}
+    '''
+    include *, sys.*
+  }
+}

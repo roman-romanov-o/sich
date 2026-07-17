@@ -1,0 +1,30 @@
+// decisions.c4 — task-99 design decisions.
+
+model {
+  dd-001 = decision 'DD-001: Badge reads QuotaStore, never probes' {
+    description '''
+      **Context:** per-card cost could be measured by probing the session, but the
+      watcher-not-spawner rule forbids per-card probes.
+
+      **Decision:** the badge is a pure reader of QuotaStore's already-published
+      per-card shares; unknown stays unknown.
+    '''
+    metadata {
+      status 'accepted'
+      rationale 'Zero new network calls; keeps the spawn firewall intact.'
+      alternatives 'per-card hidden-PTY probe — rejected (spawner, quota cost); parse transcripts — rejected (fragile)'
+      consequences 'positive: free, safe; negative: shares only as fresh as the poll'
+      stories 'US-001; US-002'
+    }
+  }
+
+  dd-001 -> sys.badge 'shapes'
+  dd-001 -> sys.quota 'constrains'
+}
+
+views {
+  view decisions {
+    title 'task-99: design decisions'
+    include dd-001, sys.badge, sys.quota
+  }
+}
