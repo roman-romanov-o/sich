@@ -1,0 +1,16 @@
+# Periphery — unused/dead-code detection for Swift.
+#
+# This is the dead-code ratchet: CI scans against `.periphery-baseline.json`
+# and fails only on findings that are NOT already in it, so the existing
+# backlog never blocks a push while new dead code does.
+#
+# Shape lives here so a local `periphery scan` and the CI scan agree.
+# `--baseline` and `--strict` are passed by the workflow, not set here:
+# writing a baseline while filtering against one would record an empty file.
+#
+# To re-baseline after a cleanup (shrinking it is the point — never widen it
+# to silence a fresh finding):
+#   cd app && periphery scan --write-baseline .periphery-baseline.json
+exclude_tests: true
+relative_results: true
+disable_update_check: true
