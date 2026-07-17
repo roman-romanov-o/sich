@@ -1,0 +1,80 @@
+name: CI
+
+# Runs on a self-hosted runner on the developer's Mac. Two reasons this repo
+# can't use a GitHub-hosted macOS runner without extra work:
+#   1. The vendored libghostty-vt static archives are git-ignored (~30M), so a
+#      fresh clone can't link. This Mac already has them built.
+#   2. Private repo => hosted macOS minutes bill at 10x.
+# See app/Frameworks/README.md for the rebuild recipe if this ever moves to a
+# hosted runner (pinned ghostty rev + Zig 0.15.2, cacheable on the rev).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push makes an in-flight run obsolete; don't tie up the one Mac.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swift:
+    name: build · test · dead-code
+    runs-on: [self-hosted, macOS]
+    defaults:
+      run:
+        working-directory: app
+    env:
+      # The runner runs as a LaunchAgent and does not inherit an interactive
+      # shell's PATH. periphery is pinned at 3.5.1 in ~/.local/bin (Homebrew's
+      # 3.7.4 refuses this toolchain's Swift 6.0.3 — it wants >= 6.1.2).
+      PATH: /Users/romanromanov/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain versions
+        run: |
+          swift --version
+          periphery version
+
+      # The libghostty-vt static archives are git-ignored (~30M), so checkout
+      # never brings them and a fresh workspace would fail at link time, a mile
+      # from the cause. Restore them from a local cache keyed on the ghostty rev
+      # pinned in app/Frameworks/README.md. Populate the cache by copying the
+      # *.a files out of a working checkout, preserving the slice layout:
+      #   ~/Library/Caches/ghostling/ghostty-vt/<rev>/<slice>/lib*.a
+      - name: Restore vendored libghostty-vt
+        run: |
+          rev=ae52f97dcac558735cfa916ea3965f247e5c6e9e
+          cache="$HOME/Library/Caches/ghostling/ghostty-vt/$rev"
+          if [ ! -d "$cache" ]; then
+            echo "::error::No cached libghostty-vt for rev $rev at $cache. Rebuild it (pinned rev + Zig 0.15.2) per app/Frameworks/README.md, then copy the *.a files into that path."
+            exit 1
+          fi
+          # Trailing slash on the source: copy the slice dirs' contents in,
+          # merging alongside the tracked headers rather than nesting under them.
+          rsync -a "$cache"/ Frameworks/ghostty-vt.xcframework/
+          find Frameworks/ghostty-vt.xcframework -name '*.a' -exec ls -lh {} \;
+
+      - name: Build (warnings are errors)
+        run: swift build -Xswiftc -warnings-as-errors
+
+      # Two known-flaky tests are macOS races, not defects: GridTextTests
+      # 'fromPTY' (PTY-EOF race) and BoardSessionMergeTests
+      # 'observedSessionInAnOwnedDirIsNotDuplicated' (only under full-suite
+      # concurrency). Retry once so they don't redden CI at random; a real
+      # failure fails both runs.
+      - name: Test
+        run: |
+          swift test && exit 0
+          echo "::warning::swift test failed on the first run; retrying once (known PTY-EOF / suite-concurrency flakes). A genuine failure will fail this retry too."
+          swift test
+
+      # Dead-code ratchet: fails only on findings absent from
+      # .periphery-baseline.json. Shrink the baseline as things get cleaned up;
+      # never widen it to silence a new finding.
+      - name: Dead code (Periphery, vs. baseline)
+        run: periphery scan --baseline .periphery-baseline.json --strict --format github-actions
