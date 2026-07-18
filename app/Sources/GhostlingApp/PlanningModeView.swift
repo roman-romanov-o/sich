@@ -1030,15 +1030,45 @@ final class PlanningModeView: NSView {
     private func approveSelectedArtifact() {
         guard let selectedReviewKey else { return }
         reviewStore?.approve(selectedReviewKey)
+        if let artifact = state?.artifacts.first(where: { $0.reviewKey == selectedReviewKey }) {
+            writeBackApproval(of: [artifact], step: artifact.step)
+        }
         rebuildReviewListIfPossible()
     }
 
     private func approveRemaining() {
         guard let state, let reviewStore else { return }
-        for artifact in state.artifacts(for: selectedStep ?? state.nextIncomplete?.step ?? .research) {
+        let step = selectedStep ?? state.nextIncomplete?.step ?? .research
+        let artifacts = state.artifacts(for: step)
+        for artifact in artifacts {
             reviewStore.approve(artifact.reviewKey)
         }
+        writeBackApproval(of: artifacts, step: step)
         rebuildReviewListIfPossible()
+    }
+
+    /// saha/v2: approvals also land in progress.yaml — the file the saha loop treats
+    /// as the single tracking surface. A story approval flips it `draft → ready`; once
+    /// every artifact of a step is approved the step's planning entry flips to `done`.
+    /// The writer itself refuses outside `status: planning`, so execution-phase files
+    /// (where the saha manager agent is the only writer) are never touched. `verify`
+    /// is excluded: its status/result belong to `/saha:verify`.
+    private func writeBackApproval(of artifacts: [PlanningArtifactState], step: PlanningStep) {
+        guard let state, state.isV2, let taskFolder else { return }
+        var changed = false
+        for artifact in artifacts where artifact.step == .userStories {
+            if PlanningProgressWriteback.approveStory(taskFolder: taskFolder,
+                                                      reviewKey: artifact.reviewKey) {
+                changed = true
+            }
+        }
+        let stepArtifacts = state.artifacts(for: step)
+        if step != .verify, !stepArtifacts.isEmpty,
+           stepArtifacts.allSatisfy({ reviewStore?.isApproved($0.reviewKey) ?? false }),
+           PlanningProgressWriteback.markStepDone(taskFolder: taskFolder, step: step) {
+            changed = true
+        }
+        if changed { refresh(folder: taskFolder) }
     }
 
     /// Compose the queued comments into a single-line revision command and PRE-TYPE it

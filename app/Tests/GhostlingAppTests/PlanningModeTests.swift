@@ -278,6 +278,49 @@ struct PlanningModeTests {
         #expect(!view.storyPane.isHidden)
     }
 
+    // saha/v2 write-back: a REAL click on "Approve ✓" lands in progress.yaml — the
+    // draft story flips to ready, and once every story row is approved the
+    // user_stories planning entry flips to done. progress.yaml stays the single
+    // tracking surface the saha loop reads; ReviewStore alone is not enough.
+    @Test func v2ApproveClickWritesStoryAndStepStatusIntoProgressYAML() throws {
+        let folder = try v2Fixture()
+        let view = PlanningModeView(reader: PlanningStateReader())
+        view.frame = NSRect(x: 0, y: 0, width: 1280, height: 720)
+        let window = NSWindow(contentRect: view.frame, styleMask: [.titled],
+                              backing: .buffered, defer: false)
+        window.contentView = view
+        window.makeKeyAndOrderFront(nil)
+        view.show(card: BoardCard(
+            sessionID: "planning", projectDir: folder.path, agent: .claude,
+            flow: .a, state: .idle, taskFolder: folder.path))
+        view.layoutSubtreeIfNeeded()
+
+        func rows() -> [PlanningReviewButton] {
+            view.reviewPane.arrangedSubviews.compactMap { $0 as? PlanningReviewButton }
+        }
+        func yaml() throws -> String {
+            try String(contentsOf: folder.appendingPathComponent("progress.yaml"),
+                       encoding: .utf8)
+        }
+
+        let draftRow = try #require(rows().first { $0.reviewKey == "us-002-flow" })
+        try click(draftRow, in: window, root: view)
+        try click(view.approveFileButton, in: window, root: view)
+
+        #expect(try yaml().contains(
+            "- {id: US-002, title: Second story, view: us-002-flow, status: ready}"))
+        // One of two stories approved — the step must NOT be done yet.
+        #expect(try yaml().contains("user_stories:     {status: in_progress"))
+
+        view.layoutSubtreeIfNeeded()
+        let firstRow = try #require(rows().first { $0.reviewKey == "us-001-flow" })
+        try click(firstRow, in: window, root: view)
+        try click(view.approveFileButton, in: window, root: view)
+
+        #expect(try yaml().contains(
+            "user_stories:     {status: done, views: [us-001-flow, us-002-flow]}"))
+    }
+
     private func v2Fixture() throws -> URL {
         let folder = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
