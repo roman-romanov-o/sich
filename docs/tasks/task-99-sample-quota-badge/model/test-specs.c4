@@ -1,0 +1,78 @@
+// test-specs.c4 — task-99 test scenarios as dynamic views.
+// US-002.AC-2 (stale dimming) is verify: manual — it has no ts-* view on purpose;
+// its manual_instructions live in progress.yaml.
+
+model {
+  harness = external 'swift test harness' {
+    description 'swift test (Testing framework) with a seeded QuotaStore fake — no live polls.'
+  }
+}
+
+views {
+  dynamic view ts-e2e-01 {
+    title 'E2E: a known share renders on the card'
+    description '''
+      **Proves:** US-001.AC-1
+      **Preconditions:** a board with one card whose session has a known share (23%).
+      **Environment:** QuotaStore seeded in-process; spawningEnabled off (no probes).
+    '''
+
+    harness -> sys.badge 'lay out SessionCard with a seeded 23% share' {
+      notes '''
+        Arrange through the real card layout path — the badge must be reachable
+        from BoardShell rendering, not constructed bare (dead-code lesson).
+      '''
+    }
+    sys.badge -> sys.quota 'reads share(for: cardID)'
+    harness <- sys.badge 'assert the badge text' {
+      notes '''
+        **Expected:** the badge renders "23%" within one poll cycle.
+        **Edge cases:** share > 40% renders in the attention color.
+      '''
+    }
+  }
+
+  dynamic view ts-unit-01 {
+    title 'Unit: unknown share is an em-dash, never 0%'
+    description '''
+      **Proves:** US-001.AC-2
+      **Preconditions:** a cardID QuotaStore has never seen.
+      **Environment:** bare QuotaStore, no seeding.
+    '''
+
+    harness -> sys.quota 'share(for: unknownCardID)' {
+      notes '''
+        Exercises the contract in contracts.c4: unknown card returns nil, never 0.
+      '''
+    }
+    harness <- sys.quota 'assert nil' {
+      notes '''
+        **Expected:** nil from the API; the badge maps nil to an em-dash ("—").
+        **Edge cases:** a card that HAD a share which expired also returns to "—".
+      '''
+    }
+  }
+
+  dynamic view ts-int-01 {
+    title 'Integration: a landed poll refreshes every visible badge'
+    description '''
+      **Proves:** US-002.AC-1
+      **Preconditions:** three cards on the board, all with stale shares.
+      **Environment:** QuotaStore fed a fake poll result; run loop pumped once.
+    '''
+
+    harness -> sys.quota 'inject a landed poll result' {
+      notes '''
+        Feeds the publish path US-002 rides — no network, no real /usage call.
+      '''
+    }
+    sys.quota -> sys.badge 'publishes new shares'
+    harness <- sys.badge 'assert all three badges' {
+      notes '''
+        **Expected:** every visible badge shows the fresh number in the SAME run
+        loop turn — no per-badge timers.
+        **Edge cases:** a card added mid-poll picks up the share on the next publish.
+      '''
+    }
+  }
+}

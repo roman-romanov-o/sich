@@ -1,0 +1,39 @@
+// phases.c4 — task-99 implementation plan: what ships in what order.
+// Step-level detail (files, per-step status) lives in ../progress.yaml `phases:`.
+
+model {
+  phase-01 = phase 'Phase 01: share API + badge rendering' {
+    description '''
+      Add `share(for:)` to QuotaStore and the custom-drawn CardQuotaBadge on
+      SessionCard, wired into the real card layout path. Delivers US-001.
+    '''
+    metadata {
+      effort 'M'
+      stories 'US-001'
+      risks 'badge drawn but unreachable from BoardShell: bind ts-e2e-01 through the real layout path'
+    }
+  }
+
+  phase-02 = phase 'Phase 02: live refresh on the poll' {
+    description '''
+      Ride the existing quota poll fan-out so every visible badge updates in one
+      run loop turn; keep-last-and-dim on a failed poll. Delivers US-002.
+    '''
+    metadata {
+      effort 'S'
+      stories 'US-002'
+      risks 'stale dimming is a visual AC: manual sign-off, never a cacheDisplay assertion'
+    }
+  }
+
+  phase-01 -> phase-02 'unblocks'
+  phase-01 -> us-001 'delivers'
+  phase-02 -> us-002 'delivers'
+}
+
+views {
+  view phases {
+    title 'task-99: implementation plan'
+    include phase-01, phase-02, us-001, us-002
+  }
+}
