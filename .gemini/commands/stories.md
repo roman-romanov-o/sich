@@ -84,6 +84,12 @@ For each approved story, add to `{task_path}/model/stories.c4`
   - The flow must cover the story end-to-end: trigger → internal effects →
     observable outcome. A story whose view has fewer than 3 steps is usually
     under-specified.
+- **Link the helicopter views:** wherever a story CARD appears in a static view
+  (the `task-context` view in `task.c4` includes top-level elements via `*`;
+  later the `phases` view does too), add an explicit
+  `include us-NNN with { navigateTo us-NNN-flow }` line so the reviewer clicks
+  the card and lands in the flow. Back-fill `task.c4`'s view now for every
+  story you just authored.
 
 ### 6. Record Stories in progress.yaml
 

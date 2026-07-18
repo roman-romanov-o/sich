@@ -55,5 +55,8 @@ views {
       {{success_criteria_summary_the_reviewer_should_hold_in_mind}}
     '''
     include *, sys.*
+    // Back-filled by /saha:stories: one line per story so the helicopter card
+    // jumps to its flow when clicked, e.g.
+    //   include us-001 with { navigateTo us-001-flow }
   }
 }

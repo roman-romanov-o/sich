@@ -116,6 +116,7 @@ Check:
 - In progress.yaml: does every AC have `text` a test could be written from, and a `verify:` method (`automated`/`build`/`manual`)? Do `manual` ACs have `manual_instructions`?
 - Are edge cases recorded (`edge_cases:`) and do error paths appear in the flows, not just happy paths?
 - Do `depends_on` orderings make sense given the priorities?
+- Does every static view showing a story card (task-context, phases) attach `include us-NNN with { navigateTo us-NNN-flow }` so the reviewer can jump from the helicopter view into the flow?
 
 Red flags:
 - Stories that can't be demoed independently
@@ -198,6 +199,7 @@ Check:
 
 Red flags:
 - Circular dependencies in the arrows
+- A story card included in the `phases` view without `navigateTo` to its `us-NNN-flow`
 - Phases that can't be verified without later phases
 - A story in progress.yaml that no phase covers
 - Steps with empty or hand-wavy `files:` lists

@@ -86,6 +86,9 @@ model {
 
 Maintain the `phases` view: every phase, its dependency arrows, and the stories
 delivered. The arrows ARE the dependency graph — no separate diagram needed.
+Include each story card with a jump to its flow —
+`include us-001 with { navigateTo us-001-flow }` — so the reviewer clicks
+straight from the plan overview into the story walkthrough.
 
 ### 5. Record Phases in progress.yaml
 

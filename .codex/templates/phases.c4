@@ -38,7 +38,9 @@ model {
 views {
   view phases {
     title '{{task_id}}: implementation plan'
-    include phase-01, phase-02, us-001
-    // include every phase-* and the stories they deliver
+    include phase-01, phase-02
+    // Include every phase-* and the stories they deliver; each story card
+    // jumps to its flow when clicked.
+    include us-001 with { navigateTo us-001-flow }
   }
 }

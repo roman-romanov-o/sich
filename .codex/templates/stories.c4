@@ -10,6 +10,10 @@
 //     but never duplicate their status here.
 //   - Steps reference elements declared in task.c4 / contracts.c4 (or add missing
 //     participants here). Use `<-` for responses, `parallel {}` for concurrency.
+//   - Every static view that shows a story CARD (task-context, phases) must attach
+//     `include us-NNN with { navigateTo us-NNN-flow }` — the reviewer clicks the
+//     helicopter card and lands in the flow. Back-fill task.c4's view when adding
+//     stories here.
 
 model {
   // One story element per story: the reviewable summary card.

@@ -51,5 +51,8 @@ views {
       calls are introduced; the badge degrades to "—" when the share is unknown.
     '''
     include *, sys.*
+    // Story cards jump straight to their flow when clicked.
+    include us-001 with { navigateTo us-001-flow }
+    include us-002 with { navigateTo us-002-flow }
   }
 }

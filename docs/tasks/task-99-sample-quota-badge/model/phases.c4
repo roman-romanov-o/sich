@@ -34,6 +34,9 @@ model {
 views {
   view phases {
     title 'task-99: implementation plan'
-    include phase-01, phase-02, us-001, us-002
+    include phase-01, phase-02
+    // Story cards jump straight to their flow when clicked.
+    include us-001 with { navigateTo us-001-flow }
+    include us-002 with { navigateTo us-002-flow }
   }
 }

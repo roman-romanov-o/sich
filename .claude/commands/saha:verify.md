@@ -114,6 +114,10 @@ Inconsistencies Found:
 
 - Stories follow "As a… I want… so that…" with priority set
 - Each story's `us-NNN-flow` has ≥3 steps and cites its AC ids in step notes
+- Every static view that shows a story card (task-context, phases) attaches
+  `include us-NNN with { navigateTo us-NNN-flow }` for each story it includes
+  (wildcard `include *` pulls story elements in WITHOUT the jump — grep the
+  view blocks for `us-` includes lacking `navigateTo`)
 - AC text is Given/When/Then and measurable
 - Test scenario Expected notes are implementable without ambiguity
 - Phase steps have `files` lists
