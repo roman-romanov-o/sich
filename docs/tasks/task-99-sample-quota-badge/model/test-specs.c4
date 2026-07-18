@@ -14,7 +14,9 @@ views {
     description '''
       **Proves:** US-001.AC-1
       **Preconditions:** a board with one card whose session has a known share (23%).
-      **Environment:** QuotaStore seeded in-process; spawningEnabled off (no probes).
+      **Environment:** in-process sandbox — temp-HOME BoardShell, spawningEnabled off (no probes).
+      **Real:** BoardShell layout path, SessionCard, CardQuotaBadge, QuotaStore.
+      **Mocked:** the /usage poll source only (QuotaStore seeded with a fixed 23% — a true external: network).
     '''
 
     harness -> sys.badge 'lay out SessionCard with a seeded 23% share' {
@@ -38,6 +40,8 @@ views {
       **Proves:** US-001.AC-2
       **Preconditions:** a cardID QuotaStore has never seen.
       **Environment:** bare QuotaStore, no seeding.
+      **Real:** QuotaStore and the nil→em-dash mapping.
+      **Mocked:** nothing.
     '''
 
     harness -> sys.quota 'share(for: unknownCardID)' {
@@ -59,6 +63,8 @@ views {
       **Proves:** US-002.AC-1
       **Preconditions:** three cards on the board, all with stale shares.
       **Environment:** QuotaStore fed a fake poll result; run loop pumped once.
+      **Real:** QuotaStore publish fan-out and all three badge views.
+      **Mocked:** the poll result payload (injected — a true external: the /usage network call).
     '''
 
     harness -> sys.quota 'inject a landed poll result' {

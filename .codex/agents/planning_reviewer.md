@@ -169,6 +169,8 @@ Red flags:
 
 Check:
 - Does every `verify: automated` AC have at least one `ts-*` view id in its `specs:` list, and does that view exist? (`build`/`manual` ACs need none.)
+- Does every STORY have at least one `ts-e2e-*` scenario walking its full happy path — or an explicit `planning.test_specs.gaps` entry saying why E2E isn't feasible?
+- Does every view declare `**Real:**` and `**Mocked:**`? Is each mock justified, and does the `**Environment:**` name a concrete sandbox mechanism (temp HOME, testcontainers, in-process fake, shim PATH) rather than hand-waving?
 - Do the views spell out preconditions → steps → `**Expected:**` assertions concretely enough to implement without asking questions?
 - Are error paths tested, not just happy paths?
 - Is test data specified (not just "valid input")?
@@ -176,6 +178,9 @@ Check:
 Red flags:
 - Automated ACs with empty `specs:` (no planned coverage)
 - `specs:` referencing view ids that don't exist in test-specs.c4
+- A story covered only by unit/integration specs with no gap entry — the "green tests, broken prod" shape
+- A `ts-e2e-*` view whose Mocked list contains system-under-test components (only true externals — network, third-party APIs, clock — may be mocked at E2E level)
+- Missing or vague Real/Mocked declarations ("mocks as needed")
 - Only positive test cases
 - Vague expected results like "works correctly"
 

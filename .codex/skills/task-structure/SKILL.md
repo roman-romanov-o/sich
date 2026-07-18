@@ -146,6 +146,10 @@ All `model/*.c4` files form **one project**; `spec.c4` declares the shared kinds
 - **test-specs.c4** — each scenario is a dynamic view: preconditions/environment in
   the view `description` (with `**Proves:** US-001.AC-1`), per-step `**Expected:**`
   observations in `notes`. Walk the SAME elements as the story flow it verifies.
+  The description also declares the test-double boundary: `**Real:**` (what
+  executes for real) and `**Mocked:**` (each fake + why, or "nothing"). Every
+  story needs a `ts-e2e-*` happy-path scenario (or a `test_specs.gaps` entry);
+  an E2E view may mock only true externals — never the system under test.
 - **phases.c4** — phase elements with `->` arrows for hard dependencies and
   `phase -> story 'delivers'` relations; step-level detail (files, statuses) stays
   in the YAML.

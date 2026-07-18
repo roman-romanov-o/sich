@@ -139,6 +139,11 @@ independence) apply to every language**; map them onto the project's test framew
 - Over-mocking (>3 mocks per test)
 - Mocking the SUT (testing a mock instead of real code)
 - Mock-only assertions (only checking `assert_called`, not outcomes)
+- **Spec drift:** the test's actual doubles exceed the `**Mocked:**` list declared
+  in its `ts-*` view in `model/test-specs.c4` — the plan promised a real
+  component and the implementation faked it. An E2E-bound test that mocks
+  anything beyond the declared true externals is graded as if the SUT were
+  mocked (the scenario no longer proves the prod path).
 
 **Scoring:**
 - A: Real dependencies or testcontainers, mock only external APIs

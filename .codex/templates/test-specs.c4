@@ -10,6 +10,10 @@
 //   - A test scenario walks the SAME elements as the story flow it verifies; add a
 //     `harness` element only when the test infrastructure itself matters (fixtures,
 //     containers, fakes).
+//   - Every scenario declares its test-double boundary: `**Real:**` (what executes
+//     for real) and `**Mocked:**` (each fake/stub + why). An E2E view may mock only
+//     true externals (network, third-party APIs, wall clock) — if the system under
+//     test appears in Mocked, the scenario proves nothing about prod.
 
 model {
   harness = external '{{test_harness}}' {
@@ -23,7 +27,9 @@ views {
     description '''
       **Proves:** US-001.AC-1
       **Preconditions:** {{state_that_must_hold_before_the_test}}
-      **Environment:** {{how_the_harness_is_set_up}}
+      **Environment:** {{how_the_harness_is_set_up_eg_sandbox_temp_home_containers}}
+      **Real:** {{components_that_execute_for_real}}
+      **Mocked:** {{each_fake_or_stub_and_why_or_the_word_nothing}}
     '''
 
     harness -> sys.new_part '{{arrange_and_act}}' {

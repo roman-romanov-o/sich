@@ -105,6 +105,16 @@ Conventions:
 - Every scenario ends in at least one step whose `notes` carry `**Expected:**`
   assertions concrete enough to implement without ambiguity (specific values,
   states, error codes — include test data inline where it matters).
+- **Every scenario declares its test-double boundary** in the view description:
+  `**Real:**` (components that execute for real) and `**Mocked:**` (each
+  fake/stub and why — or the literal word "nothing"). This is what makes the
+  spec reviewable for the classic failure "green in tests, broken in prod":
+  an E2E view may mock only true externals (network, third-party APIs, wall
+  clock); if anything from the system under test appears in Mocked, it is not
+  an E2E test — demote it to `ts-int-*` or fix the environment. Name the
+  sandbox mechanism in `**Environment:**` (temp HOME, testcontainers, shim
+  PATH, in-process fake server — whatever the repo provides; if the repo has
+  no sandbox for a dependency you need real, record that as a gap).
 - Add scenario `metadata { framework / stories / priority }` on a companion
   element if the view alone is insufficient — but prefer keeping everything in
   the view.
@@ -153,11 +163,13 @@ Good test scenarios:
 - [ ] Proves lists map 1:1 to real AC ids in progress.yaml
 - [ ] Happy path AND error cases each have a view
 - [ ] Expected notes are implementable without ambiguity
+- [ ] Every view declares `**Real:**` and `**Mocked:**`; E2E views mock only true externals
 
 **Anti-patterns:**
 - Unit/integration-only coverage for a story with a walkable user flow
 - Testing implementation details instead of user-visible behavior
 - Over-mocking — 5+ mocks means it should be an integration test with real deps
+- An `ts-e2e-*` view whose Mocked list contains part of the system under test
 - Scenarios for `verify: manual` ACs
 
 ## 5. Review Artifacts

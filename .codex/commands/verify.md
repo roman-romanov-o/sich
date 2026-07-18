@@ -77,6 +77,14 @@ Every view id referenced from YAML must exist in the compiled model:
 - Every `verify: manual` AC has `manual_instructions`
 - Every `verify: automated` AC has at least one entry in `specs` — or the story
   is listed in `planning.test_specs.gaps` with a reason
+- **Every story has at least one `ts-e2e-*` view** across its ACs' `specs` — or
+  a `planning.test_specs.gaps` entry naming that story with the reason E2E
+  isn't feasible. Unit/integration-only coverage for a story is exactly the
+  "green tests, broken prod" failure: no scenario walks the full happy path.
+- Every `ts-*` view description declares `**Real:**` and `**Mocked:**`; a
+  `ts-e2e-*` view whose Mocked list includes system-under-test components
+  (not just true externals like network/third-party/clock) is a failure —
+  it must be demoted to `ts-int-*` or its environment fixed.
 - Spec views' Proves lists (in `model/test-specs.c4` view descriptions) cite
   only AC ids that exist in progress.yaml
 
@@ -96,6 +104,8 @@ Report inconsistencies:
 ```
 Inconsistencies Found:
 - US-003 AC-2 is verify:automated but has no specs and no gap entry
+- US-002 has only unit specs (ts-unit-01) — no E2E happy-path view and no gap entry
+- ts-e2e-01 mocks QuotaStore, which is part of the system under test
 - dd-001 references non-existent US-005
 - phase-02 includes US-004 which doesn't exist
 ```
