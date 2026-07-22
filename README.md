@@ -80,3 +80,7 @@ uv run pytest`.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — how the pieces fit
 - [`app/README.md`](app/README.md) — Swift package layout and dev workflow
 - [`docs/tasks/`](docs/tasks) — the Sahaidachny task plans this app was built from
+
+## License
+
+[MIT](LICENSE)
