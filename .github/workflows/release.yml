@@ -1,0 +1,78 @@
+name: Release
+
+# Push a tag like v0.1.0 (or run manually) to build Sich.app and attach it to a
+# GitHub Release. App bundles are distributed ONLY as release artifacts — never
+# committed to the repository.
+#
+# Runs on the same self-hosted Mac as CI, for the same reasons (see ci.yml):
+# the vendored libghostty-vt static archives are git-ignored and restored from
+# a local cache keyed on the pinned ghostty rev.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: build · package · publish
+    runs-on: [self-hosted, macOS]
+    defaults:
+      run:
+        working-directory: app
+    env:
+      # Same PATH note as ci.yml: the runner is a LaunchAgent with no
+      # interactive-shell PATH.
+      PATH: /Users/romanromanov/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Identical to the CI restore step — the *.a slices never live in git.
+      - name: Restore vendored libghostty-vt
+        run: |
+          rev=ae52f97dcac558735cfa916ea3965f247e5c6e9e
+          cache="$HOME/Library/Caches/sich/ghostty-vt/$rev"
+          if [ ! -d "$cache" ]; then
+            echo "::error::No cached libghostty-vt for rev $rev at $cache. Rebuild it (pinned rev + Zig 0.15.2) per app/Frameworks/README.md, then copy the *.a files into that path."
+            exit 1
+          fi
+          rsync -a "$cache"/ Frameworks/ghostty-vt.xcframework/
+
+      - name: Build Sich.app
+        run: ./make-app.sh
+
+      # Stamp the bundle with the tag version (Info.plist in git stays at its
+      # placeholder; the tag is the single source of truth for releases).
+      - name: Stamp version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" build/Sich.app/Contents/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GITHUB_RUN_NUMBER" build/Sich.app/Contents/Info.plist
+
+      # ditto preserves resource forks/permissions the way Archive Utility
+      # expects; a plain `zip -r` produces bundles Gatekeeper mistrusts more.
+      - name: Package
+        run: |
+          suffix="${GITHUB_REF_NAME:-dev}"
+          ditto -c -k --keepParent build/Sich.app "build/Sich-${suffix}-arm64.zip"
+          shasum -a 256 "build/Sich-${suffix}-arm64.zip"
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/build/Sich-*.zip
+          generate_release_notes: true
+
+      # Manual runs still leave the zip inspectable as a workflow artifact.
+      - name: Upload workflow artifact
+        if: "!startsWith(github.ref, 'refs/tags/v')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sich.app
+          path: app/build/Sich-*.zip
