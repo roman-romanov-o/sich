@@ -69,19 +69,24 @@ struct TaskSwitchTests {
 
     @Test("NEEDS YOU cards lead, each tier most-recently-focused first")
     func orderedTiersAndMRU() {
-        let a = card("a", .running), b = card("b", .waitingForInput)
-        let c = card("c", .blocked), d = card("d", .running)
-        let ordered = TaskSwitcherOverlay.ordered(cards: [a, b, c, d], mru: [d.id, c.id])
+        let calm = card("a", .running), waiting = card("b", .waitingForInput)
+        let blocked = card("c", .blocked), recent = card("d", .running)
+        let ordered = TaskSwitcherOverlay.ordered(
+            cards: [calm, waiting, blocked, recent], mru: [recent.id, blocked.id])
         #expect(ordered.map(\.sessionID) == ["c", "b", "d", "a"])
     }
 
     @Test("the highlight starts on the first entry that is not the current card")
     func initialHighlightSkipsCurrent() {
-        let a = card("a", .running), b = card("b", .running)
-        #expect(TaskSwitcherOverlay.initialHighlight(in: [a, b], current: nil, reverse: false) == 0)
-        #expect(TaskSwitcherOverlay.initialHighlight(in: [a, b], current: a.id, reverse: false) == 1)
-        #expect(TaskSwitcherOverlay.initialHighlight(in: [a, b], current: b.id, reverse: true) == 0)
-        #expect(TaskSwitcherOverlay.initialHighlight(in: [a], current: a.id, reverse: false) == 0)
+        let one = card("a", .running), two = card("b", .running)
+        #expect(TaskSwitcherOverlay.initialHighlight(
+            in: [one, two], current: nil, reverse: false) == 0)
+        #expect(TaskSwitcherOverlay.initialHighlight(
+            in: [one, two], current: one.id, reverse: false) == 1)
+        #expect(TaskSwitcherOverlay.initialHighlight(
+            in: [one, two], current: two.id, reverse: true) == 0)
+        #expect(TaskSwitcherOverlay.initialHighlight(
+            in: [one], current: one.id, reverse: false) == 0)
     }
 
     // MARK: - The hold-⌃ state machine, driven by real events
