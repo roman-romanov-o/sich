@@ -18,7 +18,7 @@ app.setActivationPolicy(.regular)
 // card (your login shell, drillable; run `claude` in it) plus whatever live
 // hook-observed sessions the event-file tail merges onto the board. Quota is the
 // live in-process feed (no sidecar, no port — DD-001/DD-002).
-let root = RepoLocator.repoRoot()?.path ?? FileManager.default.currentDirectoryPath
+let root = RepoLocator.launchProjectDir()
 // `GHOSTLING_E2E=1` (the design-review capture) presents a representative portfolio
 // so the screenshots show a populated board + the two-pool quota contrast the
 // critique exists to judge: the live terminal stays `cards.first` (a real terminal

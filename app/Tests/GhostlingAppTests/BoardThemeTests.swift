@@ -37,7 +37,7 @@ struct BoardThemeTests {
         #expect(dark != light, "\(name) resolves to the same colour in both modes — not theme-aware")
     }
 
-    /// A shared accent (Solarized accents are dual-scheme) must resolve IDENTICALLY
+    /// A shared accent must resolve IDENTICALLY
     /// in both modes — a regression guard that we didn't accidentally split them.
     @Test("shared accents are identical across appearances", arguments: [
         "brand", "attention", "alert", "codeInline",
@@ -51,11 +51,12 @@ struct BoardThemeTests {
 
     /// The canvas is the always-on board background; pin its exact light/dark values
     /// so a future edit can't silently collapse the light theme back to the dark one.
-    @Test("canvas is the Osaka-night base in dark, neutral paper in light")
+    @Test("canvas is Ghostty blue-charcoal in dark, neutral paper in light")
     func canvasEndpoints() throws {
         let dark = try #require(rgb(BoardTheme.canvas, in: .darkAqua))
         let light = try #require(rgb(BoardTheme.canvas, in: .aqua))
-        #expect(dark.0 < 0.1 && dark.1 < 0.1 && dark.2 < 0.2, "dark canvas is near-black blue")
+        #expect(dark.0 > 0.1 && dark.0 < 0.2, "dark canvas keeps the visible Ghostty lift")
+        #expect(dark.2 > dark.0 && dark.2 > dark.1, "dark canvas remains blue-charcoal")
         #expect(light.0 > 0.9 && light.1 > 0.9 && light.2 > 0.9, "light canvas is neutral paper")
         #expect(abs(light.0 - light.2) < 0.04, "light canvas drifted back toward yellow paper")
     }
@@ -99,5 +100,34 @@ struct BoardThemeTests {
             value <= 0.03928 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
         }
         return 0.2126 * channel(rgb.0) + 0.7152 * channel(rgb.1) + 0.0722 * channel(rgb.2)
+    }
+}
+
+/// Card-title typography policy: ONE font for every title (slug or prose) so a
+/// column scans as a uniform list, with tightened leading for the multi-line
+/// wrap. The attributes are pure logic worth pinning — the pixels stay a visual AC.
+@MainActor
+@Suite("Card title typography")
+struct CardTitleTextTests {
+
+    @Test("every title sets in the same sans anchor", arguments: [
+        "Work on Fonts and Style", "task-06-generations-per-link", "/",
+    ])
+    func uniformFont(_ title: String) throws {
+        let text = BoardTheme.cardTitleText(title, color: .white)
+        let font = try #require(text.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+        #expect(font == BoardTheme.cardTitle, "no per-title font forks — uniformity won")
+    }
+
+    @Test("titles carry tightened line height for the multi-line wrap")
+    func tightLeading() throws {
+        let text = BoardTheme.cardTitleText("Work on Fonts and Style", color: .white)
+        let style = try #require(
+            text.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)
+        let font = try #require(text.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+        #expect(style.maximumLineHeight > 0, "leading must be pinned, not default")
+        #expect(style.maximumLineHeight < font.ascender - font.descender + font.leading,
+                "pinned leading tightens vs the font default")
+        #expect(style.lineBreakMode == .byWordWrapping, "wrapping must survive the paragraph style")
     }
 }

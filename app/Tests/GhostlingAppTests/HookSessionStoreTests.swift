@@ -12,9 +12,10 @@ import Testing
 ///   observation time, so a STALE `blocked`/`waiting` from a finished run can never
 ///   out-rank a FRESH `running`. Ordering is by `updatedAt` (already on the model), no
 ///   `seq`/`ppid`.
-/// - **TC-UNIT-014** — a clean `SessionEnd` closes the session immediately (no 30s
-///   wait), while a hard-killed run with no `SessionEnd` still decays to explicit
-///   unknown via the stale-sweep backstop.
+/// - **TC-UNIT-014** — a clean `SessionEnd` puts the session at rest immediately
+///   (resumable `.idle`, never auto-`done`), while a hard-killed run with no
+///   `SessionEnd` still recovers via the stall guard: silence past the threshold
+///   routes to NEEDS YOU (rule 2.1).
 ///
 /// Deterministic throughout: every timestamp is injected (epoch + offsets), never the
 /// wall clock — the anti-flake rule (GridTextTests fromPTY PTY-EOF precedent).
@@ -58,46 +59,52 @@ struct HookSessionStoreTests {
                 "the freshest observation must win — a stale blocked run cannot out-rank a fresh running one")
     }
 
-    /// cmux marks Claude active on `SessionStart`; a later prompt keeps it running.
-    @Test func freshSessionStartsRunning() {
-        let store = HookSessionStore(staleThreshold: 30)
+    /// CARD-STATUS.md rule 1: launching an agent is not starting work. Creating a
+    /// card auto-launches claude, and that SessionStart alone must leave the card in
+    /// QUEUE — only the first submitted prompt moves it to WORKING.
+    @Test func freshSessionStaysQueuedUntilFirstPrompt() {
+        let store = HookSessionStore(stallThreshold: 30)
         store.ingest([normalized(#"{"hook_event_name":"SessionStart","session_id":"fresh"}"#,
                                  arrival: base)])
-        #expect(store.entry(for: "fresh")?.state == .running)
+        #expect(store.entry(for: "fresh")?.state == .idle,
+                "a launched-but-unprompted claude has not started work (rule 1)")
         store.ingest([normalized(#"{"hook_event_name":"UserPromptSubmit","session_id":"fresh"}"#,
                                  arrival: base.addingTimeInterval(2))])
         #expect(store.entry(for: "fresh")?.state == .running)
     }
 
-    // MARK: - TC-UNIT-014: sessionEnd closes now; hard-kill decays via the sweep
+    // MARK: - TC-UNIT-014: sessionEnd closes now; hard-kill recovers via the stall guard
 
     @Test func sessionEnd_closesNow_hardKillDecays() {
-        let store = HookSessionStore(staleThreshold: 30)
+        let store = HookSessionStore(stallThreshold: 30)
 
-        // A clean SessionEnd hook closes the session IMMEDIATELY — no 30s wait. The
-        // timestamps are 2s apart (a separate coalesce burst), injected via `arrival`.
+        // A clean SessionEnd hook puts the session at rest IMMEDIATELY — no 30s
+        // wait. `.idle`, NOT `.done`: DONE is manual-only (CARD-STATUS.md rule 4),
+        // and app restarts `claude --resume` the SAME session id, so the rest must
+        // be resumable. The timestamps are 2s apart (a separate coalesce burst).
         store.ingest([
             normalized(#"{"hook_event_name":"SessionStart","session_id":"graceful"}"#,
                        arrival: base),
             normalized(#"{"hook_event_name":"SessionEnd","session_id":"graceful"}"#,
                        arrival: base.addingTimeInterval(2)),
         ])
-        #expect(store.entry(for: "graceful")?.state == .done)
-        // …and it stays closed: a later sweep does not reopen a terminal state.
+        #expect(store.entry(for: "graceful")?.state == .idle,
+                "a closed session rests in QUEUE, resumable — never auto-done")
+        // …and it stays at rest: a later sweep does not stall an idle session.
         store.sweepStale(now: base.addingTimeInterval(3))
-        #expect(store.entry(for: "graceful")?.state == .done)
+        #expect(store.entry(for: "graceful")?.state == .idle)
 
-        // A hard-killed run just stops POSTing — no SessionEnd. It is NOT closed on the
-        // next poll (still within the stale window)…
+        // A hard-killed run just stops POSTing — no SessionEnd. It is NOT flagged on
+        // the next poll (still within the stall budget)…
         store.ingest([
             normalized(#"{"hook_event_name":"PreToolUse","session_id":"killed"}"#,
                        arrival: base),
         ])
         store.sweepStale(now: base.addingTimeInterval(5))
         #expect(store.entry(for: "killed")?.state == .running)
-        // …but the stale-decay backstop still reaps it once silence passes threshold.
-        // It lands in explicit unknown rather than guessing attention.
+        // …but the stall guard (CARD-STATUS.md rule 2.1) reaps it once silence passes
+        // the threshold: a dead loop needs the operator's eyes → NEEDS YOU.
         store.sweepStale(now: base.addingTimeInterval(31))
-        #expect(store.entry(for: "killed")?.state == .unknown)
+        #expect(store.entry(for: "killed")?.state == .waitingForInput)
     }
 }

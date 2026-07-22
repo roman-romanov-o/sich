@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ghostling — light board revamp</title>
+<style>
+/* ============================================================================
+   Ghostling light-mode board revamp — a design artifact (HTML/CSS spec), not
+   shipping code. The shipping app is macOS AppKit; see the AppKit translation
+   table in research/ notes. Tokens below mirror BoardTheme.swift's LIGHT ramp
+   and the deeper solarized-light `ansiLight` accents, so this speaks the app's
+   existing colour vocabulary rather than inventing pastels.
+   ========================================================================== */
+:root {
+  /* Surfaces — BoardTheme light ramp */
+  --canvas:            #F1F4F7;   /* BoardTheme.canvas.light — cool page */
+  --canvas-sunken:     #E5EBF0;   /* BoardTheme.canvasSunken.light — column tracks */
+  --card-fill:         #FFFFFF;   /* BoardTheme.cardFill.light */
+  --card-fill-raised:  #F8FBFD;   /* BoardTheme.cardFillRaised.light — hover */
+  --card-stroke:       #C8D2DA;   /* BoardTheme.cardStroke.light */
+  --card-stroke-strong:#9EACB8;   /* BoardTheme.cardStrokeStrong.light */
+  --hairline:          #D3DCE3;   /* BoardTheme.hairline.light */
+  --track-edge:        #CED7DF;   /* PROPOSED columnTrackStroke.light — sunken lane edge */
+  --chrome:            #E7EDF2;   /* BoardTheme.documentChrome.light — header strip base */
+  /* Earned NEEDS YOU warmth (only when populated) */
+  --needs-track:       #FFF7E8;   /* BoardTheme.needsYouColumn.light */
+  --needs-card:        #FFF1D9;   /* BoardTheme.needsYouCard.light */
+  --needs-stroke:      #B35C1F;   /* BoardTheme.needsYouStroke (orange700, shared) */
+  --done-stroke:       #B8CE86;   /* BoardTheme.doneStroke.light */
+  --gauge-track:       #CBD5DD;   /* BoardTheme.gaugeTrack.light */
+  /* Text — BoardTheme light text ramp (deliberately darker than Solarized greys) */
+  --text-primary: #24313A;        /* BoardTheme.textPrimary.light */
+  --text-muted:   #3A4A54;        /* BoardTheme.textMuted.light */
+  --text-faint:   #586975;        /* BoardTheme.textFaint.light */
+  --text-dim:     #4F606B;        /* BoardTheme.textDim.light */
+  /* State palette — LIGHT: deeper solarized-light hues (not the dark ramp's brights) */
+  --s-idle:    #657B83;           /* ansiLight base00-ish */
+  --s-running: #1E6FB0;           /* ansiLight blue (4) — the working pulse */
+  --s-tests:   #7A5FB8;           /* solarized violet, held from stateColor */
+  --s-waiting: #B35C1F;           /* deeper attention orange for paper */
+  --s-blocked: #B52D22;           /* ansiLight red (1) */
+  --s-done:    #617A14;           /* ansiLight bright green (10) */
+  /* Two-flow accents — deepened for paper, still distinguishable */
+  --flow-a:    #6E4FB0;           /* Flow A autonomous (saha) violet, light-deepened */
+  --flow-b:    #0E7C6E;           /* Flow B interactive cyan (ansiLight cyan 6) */
+  /* Accents */
+  --brand:     #1E6FB0;           /* interactive brand blue, light-deepened */
+  --attention: #B35C1F;           /* amber "needs you" edge */
+  /* Repo tints — off the state/flow palette so a repo never reads as a state */
+  --repo-kanban: #1E6FB0;         /* deep blue */
+  --repo-paddel: #A8317B;         /* ansiLight magenta (5) */
+
+  --sans: -apple-system, "SF Pro Text", system-ui, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, "Cascadia Code", monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  background: var(--canvas);
+  color: var(--text-primary);
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+body { width: 2000px; }
+
+/* ============================================================================
+   HEADER STRIP — the capacity brain as a full-width instrument bar aligned to
+   the column grid. Absorbs the stray "Board − +" fragment (board tab + zoom now
+   live at far left). This is the signature move.
+   ========================================================================== */
+.header {
+  display: flex; align-items: stretch; gap: 24px;
+  padding: 16px 24px 14px;
+  background: var(--card-fill);
+  border-bottom: 1px solid var(--card-stroke-strong);
+}
+.brandcol { display: flex; flex-direction: column; gap: 10px; min-width: 300px; }
+.wordmark { display: flex; align-items: baseline; gap: 10px; }
+.wordmark .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--flow-b); align-self: center; }
+.wordmark h1 { font-size: 17px; font-weight: 700; letter-spacing: -0.2px; }
+.wordmark .sub { font-size: 12px; color: var(--text-faint); }
+/* board tab + zoom segmented control — where the old "Board − +" fragment lands */
+.boardctl { display: flex; align-items: center; gap: 6px; }
+.tab {
+  font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 7px;
+  border: 1px solid var(--card-stroke); background: var(--card-fill-raised);
+  color: var(--text-muted);
+}
+.tab.active { background: var(--brand); border-color: var(--brand); color: #fff; }
+.zoom { display: flex; border: 1px solid var(--card-stroke); border-radius: 7px; overflow: hidden; }
+.zoom button {
+  font-family: var(--mono); font-size: 13px; width: 26px; height: 24px; border: 0;
+  background: var(--card-fill-raised); color: var(--text-muted); cursor: pointer;
+}
+.zoom button + button { border-left: 1px solid var(--card-stroke); }
+.zoom .lvl { font-family: var(--mono); font-size: 11px; color: var(--text-faint); padding: 0 8px; display: flex; align-items: center; }
+
+/* Capacity brain cluster (verdict + two-pool gauges) */
+.capacity {
+  flex: 1; display: flex; flex-direction: column; gap: 10px;
+  border: 1px solid var(--card-stroke); border-radius: 12px;
+  background: var(--card-fill-raised);
+  padding: 12px 16px;
+}
+.verdict-row { display: flex; align-items: center; gap: 14px; }
+.verdict {
+  display: inline-flex; align-items: center; gap: 9px;
+  font-size: 15px; font-weight: 600; color: var(--s-done);
+}
+.verdict .beacon { width: 10px; height: 10px; border-radius: 50%; background: var(--s-done);
+  box-shadow: 0 0 0 4px rgba(97,122,20,0.16); }
+.verdict-cmd { font-family: var(--mono); font-size: 12px; color: var(--text-muted);
+  background: rgba(30,111,176,0.09); border: 1px solid rgba(30,111,176,0.24);
+  padding: 2px 8px; border-radius: 6px; }
+.verdict.hold { color: var(--s-waiting); }
+.verdict.hold .beacon { background: var(--s-waiting); box-shadow: 0 0 0 4px rgba(179,92,31,0.16); }
+.spacer { flex: 1; }
+.working-count { display: flex; align-items: baseline; gap: 6px; color: var(--text-faint); font-size: 12px; }
+.working-count b { font-family: var(--mono); font-size: 15px; font-weight: 600; color: var(--s-running); }
+
+.gauges { display: flex; gap: 26px; }
+.gauge { display: flex; flex-direction: column; gap: 5px; min-width: 210px; }
+.gauge-cap { font-size: 10.5px; font-weight: 600; letter-spacing: 0.6px; color: var(--text-faint); text-transform: uppercase; }
+.gauge-cap .pool { color: var(--text-muted); }
+.gauge-bar { position: relative; height: 16px; border-radius: 5px; background: var(--gauge-track); overflow: hidden; }
+.gauge-fill { position: absolute; inset: 0 auto 0 0; border-radius: 5px; }
+.gauge-fill.ok   { background: var(--s-done); }
+.gauge-fill.warn { background: var(--s-waiting); }
+.gauge-read { display: flex; align-items: baseline; gap: 6px; }
+.gauge-read .pct { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--text-primary); }
+.gauge-read .rst { font-size: 11px; color: var(--text-faint); }
+.gauge-read .rst .t { font-family: var(--mono); color: var(--text-muted); }
+.gauge-divider { width: 1px; background: var(--hairline); align-self: stretch; margin: 2px 0; }
+
+/* ============================================================================
+   BOARD — four columns, each a visible SUNKEN track so cards sit IN something.
+   ========================================================================== */
+.board { display: flex; gap: 16px; padding: 22px 24px 28px; align-items: flex-start; }
+.column { flex: 1; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+/* identical header anatomy for every column: dot · NAME · count */
+.col-head { display: flex; align-items: center; gap: 9px; padding: 0 4px; height: 22px; }
+.col-head .cdot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.col-head .cname { font-size: 12.5px; font-weight: 800; letter-spacing: 0.4px; color: var(--text-primary); }
+.col-head .ccount { margin-left: auto; font-family: var(--mono); font-size: 12px; font-weight: 600; }
+/* dot + count are the ONLY coloured parts of the caption */
+.q .cdot   { background: var(--s-idle); }    .q .ccount   { color: var(--s-idle); }
+.w .cdot   { background: var(--s-running); } .w .ccount   { color: var(--s-running); }
+.n .cdot   { background: var(--s-waiting); } .n .ccount   { color: var(--s-waiting); }
+.d .cdot   { background: var(--s-done); }    .d .ccount   { color: var(--s-done); }
+
+/* the sunken lane */
+.track {
+  background: var(--canvas-sunken);
+  border: 1px solid var(--track-edge);
+  border-radius: 12px;
+  padding: 12px;
+  display: flex; flex-direction: column; gap: 12px;
+  min-height: 760px;
+  box-shadow: inset 0 1px 2px rgba(36,49,58,0.05);
+}
+/* NEEDS YOU earns its warmth only when it holds cards */
+.n.has-cards .track { background: var(--needs-track); border-color: rgba(179,92,31,0.34); }
+
+.empty-line { font-size: 12px; color: var(--text-faint); padding: 6px 6px 0; font-style: italic; }
+
+/* new-session affordance — opens an INTERACTIVE terminal (watcher, never a spawner) */
+.new-session {
+  display: flex; align-items: center; gap: 8px; justify-content: center;
+  font-size: 12.5px; font-weight: 600; color: var(--brand);
+  border: 1px dashed rgba(30,111,176,0.45); border-radius: 10px;
+  padding: 9px; background: rgba(30,111,176,0.05); cursor: pointer;
+}
+
+/* ============================================================================
+   CARD — mission-control instrument. Title first, repo as tinted text, one
+   muted meta line, then a live telemetry line.
+   ========================================================================== */
+.card {
+  position: relative;
+  background: var(--card-fill);
+  border: 1px solid var(--card-stroke);
+  border-radius: 10px;
+  padding: 12px 14px 12px 16px;
+  display: flex; flex-direction: column; gap: 7px;
+  cursor: pointer;
+}
+.card::before {   /* left-edge state bar */
+  content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px;
+  border-radius: 3px; background: var(--bar, var(--s-idle));
+}
+.card.s-idle    { --bar: var(--s-idle); }
+.card.s-running { --bar: var(--s-running); }
+.card.s-tests   { --bar: var(--s-tests); }
+.card.s-waiting { --bar: var(--s-waiting); background: var(--needs-card); border-color: var(--needs-stroke);
+  box-shadow: 0 0 0 3px rgba(179,92,31,0.12); }
+
+.card-title { font-size: 15px; font-weight: 600; color: var(--text-primary); line-height: 1.2; }
+.card-title .age { float: right; font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--text-faint); }
+.card.s-waiting .card-title .age { color: var(--s-waiting); }
+
+/* meta line: repo (tinted mono text) · harness mark + kind · flow tag */
+.card-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.repo { font-family: var(--mono); font-size: 11px; font-weight: 500; }
+.repo.kanban { color: var(--repo-kanban); }
+.repo.paddel { color: var(--repo-paddel); }
+.meta-sep { color: var(--hairline); font-size: 11px; }
+.harness { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-dim); }
+.harness .mark { font-size: 11px; }
+.harness .mark.claude { color: var(--attention); }
+.harness .mark.codex  { color: #1A1A1A; }
+.flow { font-size: 10.5px; font-weight: 600; letter-spacing: 0.2px; }
+.flow.a { color: var(--flow-a); }
+.flow.b { color: var(--flow-b); }
+
+/* telemetry line: state word (sans, coloured) + machine detail (mono) */
+.tele { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap;
+  border-top: 1px solid var(--hairline); padding-top: 6px; }
+.tele-state { font-size: 12px; font-weight: 600; }
+.tele-state.s-idle    { color: var(--s-idle); }
+.tele-state.s-running { color: var(--s-running); }
+.tele-state.s-tests   { color: var(--s-tests); }
+.tele-state.s-waiting { color: var(--s-waiting); }
+.tele-mono { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+.tele-prose { font-size: 11px; color: var(--text-faint); }
+
+/* done card — compact instrument row */
+.card.done { padding: 10px 14px; }
+.card.done::before { background: var(--s-done); }
+.done-row { display: flex; align-items: center; gap: 10px; }
+.done-check { color: var(--s-done); font-family: var(--mono); font-size: 13px; }
+.done-body { display: flex; flex-direction: column; gap: 2px; }
+.done-title { font-size: 13px; font-weight: 500; color: var(--text-muted); }
+.done-repo { font-family: var(--mono); font-size: 10.5px; }
+.done-age { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+
+/* summoned drill-in toast (proves click → summon, watcher-not-spawner) */
+.toast {
+  position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+  background: var(--text-primary); color: #EAF0F4; font-size: 13px;
+  padding: 10px 16px; border-radius: 10px; box-shadow: 0 6px 24px rgba(36,49,58,0.28);
+  display: none; align-items: center; gap: 10px; z-index: 50;
+}
+.toast .k { font-family: var(--mono); color: #8FD0C6; }
+.toast.show { display: flex; }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+
+<!-- ============ HEADER STRIP / CAPACITY BRAIN ============ -->
+<header class="header">
+  <div class="brandcol">
+    <div class="wordmark">
+      <span class="dot"></span>
+      <h1>Ghostling</h1>
+      <span class="sub">mission control</span>
+    </div>
+    <div class="boardctl">
+      <span class="tab active">Board</span>
+      <span class="tab" onclick="toggleVariant()" id="variantTab" style="cursor:pointer">Show waiting →</span>
+      <div class="spacer" style="width:8px"></div>
+      <div class="zoom">
+        <button title="zoom out">−</button>
+        <span class="lvl">120%</span>
+        <button title="zoom in">+</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="capacity">
+    <div class="verdict-row">
+      <span class="verdict" id="verdict">
+        <span class="beacon"></span>Safe to launch interactive
+      </span>
+      <span class="verdict-cmd">start task-07 · interactive pool</span>
+      <span class="spacer"></span>
+      <span class="working-count"><b id="workingN">3</b> working&nbsp;sessions</span>
+    </div>
+    <div class="gauges">
+      <div class="gauge">
+        <div class="gauge-cap">Anthropic&nbsp;·&nbsp;<span class="pool">5H interactive</span></div>
+        <div class="gauge-bar"><div class="gauge-fill ok" style="width:82%"></div></div>
+        <div class="gauge-read"><span class="pct">82%</span><span class="rst">left · resets in <span class="t">51m</span></span></div>
+      </div>
+      <div class="gauge-divider"></div>
+      <div class="gauge">
+        <div class="gauge-cap">Anthropic&nbsp;·&nbsp;<span class="pool">Weekly cap</span></div>
+        <div class="gauge-bar"><div class="gauge-fill warn" style="width:41%"></div></div>
+        <div class="gauge-read"><span class="pct">41%</span><span class="rst">left · resets in <span class="t">6h 51m</span></span></div>
+      </div>
+      <div class="gauge-divider"></div>
+      <div class="gauge">
+        <div class="gauge-cap">Codex&nbsp;·&nbsp;<span class="pool">Weekly cap</span></div>
+        <div class="gauge-bar"><div class="gauge-fill ok" style="width:86%"></div></div>
+        <div class="gauge-read"><span class="pct">86%</span><span class="rst">left · resets in <span class="t">5d 13h</span></span></div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ============ BOARD ============ -->
+<main class="board" id="board">
+
+  <!-- QUEUE -->
+  <section class="column q">
+    <div class="col-head"><span class="cdot"></span><span class="cname">QUEUE</span><span class="ccount">3</span></div>
+    <div class="track">
+      <div class="new-session" onclick="summon('a new interactive session')">＋ new session<span class="tele-prose">interactive terminal</span></div>
+
+      <div class="card s-idle" onclick="summon('Badges Fix')">
+        <div class="card-title">Badges Fix<span class="age">3m</span></div>
+        <div class="card-meta">
+          <span class="repo kanban">agentic-coding-kanban</span>
+          <span class="meta-sep">·</span>
+          <span class="harness"><span class="mark claude">✳</span>claude</span>
+          <span class="flow b">terminal</span>
+        </div>
+        <div class="tele"><span class="tele-state s-idle">idle</span><span class="tele-mono">queued · branch fix/badges</span></div>
+      </div>
+
+      <div class="card s-idle" onclick="summon('Status Fix Fable')">
+        <div class="card-title">Status Fix Fable<span class="age">7m</span></div>
+        <div class="card-meta">
+          <span class="repo paddel">paddel-project</span>
+          <span class="meta-sep">·</span>
+          <span class="harness"><span class="mark codex">⬡</span>codex</span>
+          <span class="flow b">terminal</span>
+        </div>
+        <div class="tele"><span class="tele-state s-idle">idle</span><span class="tele-mono">queued · branch fix/fable-status</span></div>
+      </div>
+
+      <div class="card s-idle" onclick="summon('STYLE')">
+        <div class="card-title">STYLE<span class="age">12m</span></div>
+        <div class="card-meta">
+          <span class="repo paddel">paddel-project</span>
+          <span class="meta-sep">·</span>
+          <span class="harness"><span class="mark claude">✳</span>claude</span>
+          <span class="flow b">terminal</span>
+        </div>
+        <div class="tele"><span class="tele-state s-idle">idle</span><span class="tele-mono">queued · branch chore/style</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- WORKING -->
+  <section class="column w">
+    <div class="col-head"><span class="cdot"></span><span class="cname">WORKING</span><span class="ccount" id="workingCount">3</span></div>
+    <div class="track">
+
+      <div class="card s-running" onclick="summon('saha run')">
+        <div class="card-title">saha run<span class="age">12m</span></div>
+        <div class="card-meta">
+          <span class="repo kanban">agentic-coding-kanban</span>
+          <span class="meta-sep">·</span>
+          <span class="harness"><span class="mark claude">✳</span>claude</span>
+          <span class="flow a">autonomous</span>
+        </div>
+        <div class="tele">
+          <span class="tele-state s-running">working</span>
+          <span class="tele-mono">12m · iter 3·build</span>
+          <span class="tele-prose">editing</span><span class="tele-mono">HookNormalizer.swift</span>
+        </div>
+      </div>
+
+      <div class="card s-tests" onclick="summon('Matchmaking backend')" id="matchWorking">
+        <div class="card-title">Matchmaking backend<span class="age">4m</span></div>
+        <div class="card-meta">
+          <span class="repo paddel">paddel-project</span>
+          <span class="meta-sep">·</span>
+          <span class="harness"><span class="mark codex">⬡</span>codex</span>
+          <span class="flow b">terminal</span>
+        </div>
+        <div class="tele">
+          <span class="tele-state s-tests">running tests</span>
+          <span class="tele-mono">4m · pytest 34/40</span>
+        </div>
+      </div>
+
+      <div class="card s-running" onclick="summon('saha update')">
+        <div class="card-title">saha update<span class="age">8m</span></div>
+        <div class="card-meta">
+          <span class="repo kanban">agentic-coding-kanban</span>
+          <span class="meta-sep">·</span>
+          <span class="harness"><span class="mark claude">✳</span>claude</span>
+          <span class="flow b">terminal</span>
+        </div>
+        <div class="tele">
+          <span class="tele-state s-running">working</span>
+          <span class="tele-mono">8m ·</span>
+          <span class="tele-prose">reading</span><span class="tele-mono">BoardTheme.swift</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- NEEDS YOU -->
+  <section class="column n" id="needsCol">
+    <div class="col-head"><span class="cdot"></span><span class="cname">NEEDS YOU</span><span class="ccount" id="needsCount">0</span></div>
+    <div class="track" id="needsTrack">
+      <div class="empty-line" id="needsEmpty">Nothing needs you — all agents running.</div>
+
+      <div class="card s-waiting" id="matchWaiting" style="display:none" onclick="summon('Matchmaking backend')">
+        <div class="card-title">Matchmaking backend<span class="age">4m</span></div>
+        <div class="card-meta">
+          <span class="repo paddel">paddel-project</span>
+          <span class="meta-sep">·</span>
+          <span class="harness"><span class="mark codex">⬡</span>codex</span>
+          <span class="flow b">terminal</span>
+        </div>
+        <div class="tele">
+          <span class="tele-state s-waiting">waiting</span>
+          <span class="tele-mono">4m</span>
+          <span class="tele-prose">— approve tool use? (write schema.sql)</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DONE -->
+  <section class="column d">
+    <div class="col-head"><span class="cdot"></span><span class="cname">DONE</span><span class="ccount">2</span></div>
+    <div class="track">
+      <div class="card done" onclick="summon('Quota panel polish')">
+        <div class="done-row">
+          <span class="done-check">✓</span>
+          <div class="done-body">
+            <span class="done-title">Quota panel polish</span>
+            <span class="done-repo repo kanban">agentic-coding-kanban</span>
+          </div>
+          <span class="done-age">1h 20m</span>
+        </div>
+      </div>
+      <div class="card done" onclick="summon('Login redirect')">
+        <div class="done-row">
+          <span class="done-check">✓</span>
+          <div class="done-body">
+            <span class="done-title">Login redirect</span>
+            <span class="done-repo repo paddel">paddel-project</span>
+          </div>
+          <span class="done-age">2h 05m</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<div class="toast" id="toast"><span>Summoning terminal for</span><span class="k" id="toastName"></span><span>· focus &lt; 500ms</span></div>
+
+<script>
+let waiting = false;
+function toggleVariant() {
+  waiting = !waiting;
+  const col = document.getElementById('needsCol');
+  document.getElementById('matchWaiting').style.display = waiting ? 'flex' : 'none';
+  document.getElementById('matchWorking').style.display  = waiting ? 'none' : 'flex';
+  document.getElementById('needsEmpty').style.display    = waiting ? 'none' : 'block';
+  col.classList.toggle('has-cards', waiting);
+  document.getElementById('needsCount').textContent = waiting ? '1' : '0';
+  document.getElementById('workingCount').textContent = waiting ? '2' : '3';
+  document.getElementById('workingN').textContent = waiting ? '2' : '3';
+  document.getElementById('variantTab').textContent = waiting ? '← hide waiting' : 'Show waiting →';
+  // capacity verdict is independent of attention, but flag the waiting session
+  const v = document.getElementById('verdict');
+  if (waiting) { v.classList.add('hold'); v.innerHTML = '<span class="beacon"></span>1 session waiting on you'; }
+  else { v.classList.remove('hold'); v.innerHTML = '<span class="beacon"></span>Safe to launch interactive'; }
+}
+let toastTimer;
+function summon(name) {
+  document.getElementById('toastName').textContent = name;
+  const t = document.getElementById('toast');
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 1400);
+}
+</script>
+</body>
+</html>

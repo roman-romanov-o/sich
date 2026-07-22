@@ -200,9 +200,32 @@ final class ArchitecturePane: NSView {
             .flatMap(URL.init) ?? base
     }
 
-    private func makeWebView() -> WKWebView {
+    /// LikeC4's element-details card truncates every single-value `metadata` entry to one
+    /// `nowrap` + `ellipsis` line, and its expand toggle exists only for multi-value
+    /// entries (upstream `MetadataValue.tsx`) — so a decision's alternatives/consequences/
+    /// rationale paragraphs are unreadable. `white-space_nowrap` is the Panda atomic class
+    /// that truncation style compiles to in the built SPA; the override is scoped to the
+    /// details `<dialog>`'s tab panels so diagram labels keep their nowrap.
+    static let metadataWrapCSS =
+        #"dialog [role="tabpanel"] .white-space_nowrap "#
+        + #"{ white-space: pre-wrap !important; overflow-wrap: anywhere; }"#
+
+    static func makeConfiguration() -> WKWebViewConfiguration {
         let config = WKWebViewConfiguration()
-        let web = WKWebView(frame: bounds, configuration: config)
+        let inject = """
+        (function () {
+            var style = document.createElement('style');
+            style.textContent = '\(metadataWrapCSS)';
+            document.head.appendChild(style);
+        })();
+        """
+        config.userContentController.addUserScript(WKUserScript(
+            source: inject, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+        return config
+    }
+
+    private func makeWebView() -> WKWebView {
+        let web = WKWebView(frame: bounds, configuration: Self.makeConfiguration())
         web.translatesAutoresizingMaskIntoConstraints = false
         web.setValue(false, forKey: "drawsBackground")   // let the dark canvas show through while loading
         addSubview(web)

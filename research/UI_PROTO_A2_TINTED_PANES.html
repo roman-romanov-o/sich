@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ghostling — A2 tinted paper panes</title>
+<style>
+  :root{
+    /* base Acme paper palette */
+    --paper:      #FFFFEA;   /* screen background, Acme pale yellow */
+    --tag:        #EAFFFF;   /* neutral tag bar / column header */
+    --ink:        #1A1A12;   /* dark ink text */
+    --ink-mute:   #6B6B5A;   /* muted metadata */
+    --rule:       #C7C7A8;   /* hairline rules on paper */
+    --rule-soft:  #DEDEC2;
+
+    /* the ONE attention signal — reverse-video red */
+    --wait:       #C6350B;   /* warm red = waiting on human */
+    --run:        #445F04;   /* deep terminal green = OK / free capacity */
+
+    /* ── project identity as paper tint (the A2 axis) ── */
+    /* agentic-coding-kanban : pale yellow pad */
+    --p-kan-paper:  #FBFBDD;
+    --p-kan-tag:    #F1F1C4;
+    --p-kan-ink:    #5C5713;
+    /* sahaidachny : pale blue pad */
+    --p-sah-paper:  #E6F0FB;
+    --p-sah-tag:    #D3E6F7;
+    --p-sah-ink:    #1C4E7A;
+    /* macos-flow : pale green pad */
+    --p-flo-paper:  #E7F3E7;
+    --p-flo-tag:    #D2EAD2;
+    --p-flo-ink:    #245C2A;
+
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+
+  html,body{
+    background:#E4E4CF;                 /* desk behind the paper */
+    color:var(--ink);
+    font-family:var(--mono);
+    font-size:14px;
+    line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+    font-feature-settings:"liga" 0;
+  }
+
+  .screen{
+    width:100%;
+    max-width:1512px;
+    min-height:900px;
+    margin:0 auto;
+    background:var(--paper);
+    border:1px solid var(--rule);
+    display:flex;
+    flex-direction:column;
+  }
+
+  /* ───────────────────────── title strip ──────────────── */
+  header{
+    background:var(--tag);
+    border-bottom:1px solid var(--rule);
+    padding:6px 12px 7px;
+  }
+  .titlebar{
+    display:flex;
+    align-items:baseline;
+    gap:2ch;
+  }
+  .brand{ font-weight:700; letter-spacing:0.05ch; }
+  .brand b{ background:var(--ink); color:var(--tag); padding:0 0.6ch; }
+  .menu{ color:var(--ink-mute); }
+  .menu a{ color:var(--ink); text-decoration:none; }
+  .menu a:hover{ background:var(--ink); color:var(--tag); }
+  .titlebar .spacer{ flex:1; }
+  .clock{ color:var(--ink-mute); }
+
+  /* ───────────────────────── capacity pane (Acme window) ──────────────── */
+  .capacity{
+    border:1px solid var(--rule);
+    margin:12px 12px 4px;
+    background:var(--paper);
+  }
+  .capacity .captag{
+    background:var(--tag);
+    border-bottom:1px solid var(--rule);
+    padding:4px 10px;
+    display:flex;
+    align-items:baseline;
+    gap:2ch;
+    font-weight:700;
+    letter-spacing:0.12ch;
+  }
+  .capacity .captag .n{ font-weight:400; color:var(--ink-mute); letter-spacing:0; }
+  .capacity .captag .spacer{ flex:1; }
+  .capgrid{
+    display:grid;
+    grid-template-columns:auto 22ch auto auto;
+    align-items:baseline;
+    column-gap:2ch;
+    row-gap:8px;
+    padding:11px 14px 12px;
+    font-size:13px;
+  }
+  .capgrid .pool{ color:var(--ink); white-space:nowrap; }
+  .capgrid .track{ white-space:nowrap; letter-spacing:-0.05ch; }
+  .capgrid .track.ok{   color:var(--run); }
+  .capgrid .track.warn{ color:var(--wait); }
+  .capgrid .track .dim{ color:var(--rule); }
+  .capgrid .pct{ color:var(--ink); white-space:nowrap; }
+  .capgrid .reset{ color:var(--ink-mute); white-space:nowrap; }
+  .capverdict{
+    border-top:1px solid var(--rule-soft);
+    padding:8px 14px 9px;
+    font-size:13px;
+    color:var(--ink);
+  }
+  .capverdict b{ background:var(--run); color:var(--paper); padding:0 0.6ch; font-weight:700; letter-spacing:0.06ch; }
+  .capverdict .cmd{ color:var(--ink); font-weight:700; }
+  .capverdict .k{ color:var(--ink-mute); }
+
+  /* ───────────────────────── board ─────────────────────────────────── */
+  .board{
+    flex:1;
+    display:grid;
+    grid-template-columns:1fr 1fr 1fr 1fr;
+    margin-top:8px;
+  }
+  .col{
+    border-left:1px solid var(--rule);
+    padding:0 10px 16px;
+    display:flex;
+    flex-direction:column;
+    min-width:0;
+  }
+  .col:first-child{ border-left:0; }
+
+  .colhead{
+    position:sticky; top:0;
+    background:var(--tag);
+    border-bottom:1px solid var(--rule);
+    margin:0 -10px 10px;
+    padding:5px 10px;
+    display:flex;
+    align-items:baseline;
+    gap:1ch;
+    font-weight:700;
+    letter-spacing:0.15ch;
+  }
+  .colhead .n{ color:var(--ink-mute); font-weight:400; }
+  .colhead.attn{ background:var(--wait); color:var(--paper); }
+  .colhead.attn .n{ color:var(--paper); }
+
+  /* ───────────────────────── card = paper sheet, tinted by project ─── */
+  .card{
+    border:1px solid var(--rule);
+    margin-bottom:12px;
+    cursor:pointer;
+    position:relative;
+  }
+  .card:hover{ border-color:var(--ink); }
+  .card:focus{ outline:2px solid var(--ink); outline-offset:-1px; }
+
+  /* tag bar = bold human TITLE only */
+  .tagbar{
+    padding:4px 9px;
+    border-bottom:1px solid var(--rule);
+  }
+  .tagbar .title{
+    font-weight:700;
+    font-size:15px;
+    line-height:1.25;
+    display:block;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  /* body = ONE identity line: project + agent/branch */
+  .body{
+    padding:5px 9px 7px;
+    font-size:13px;
+  }
+  .idline{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .idline .proj{ font-weight:700; }
+  .idline .k{ color:var(--ink-mute); }
+
+  /* per-project paper tints */
+  .p-kan{ background:var(--p-kan-paper); }
+  .p-kan .tagbar{ background:var(--p-kan-tag); }
+  .p-kan .idline .proj{ color:var(--p-kan-ink); }
+
+  .p-sah{ background:var(--p-sah-paper); }
+  .p-sah .tagbar{ background:var(--p-sah-tag); }
+  .p-sah .idline .proj{ color:var(--p-sah-ink); }
+
+  .p-flo{ background:var(--p-flo-paper); }
+  .p-flo .tagbar{ background:var(--p-flo-tag); }
+  .p-flo .idline .proj{ color:var(--p-flo-ink); }
+
+  /* done cards read quieter, tint drops to neutral paper */
+  .card.is-done{ background:var(--paper); }
+  .card.is-done .tagbar{ background:var(--paper); border-bottom:1px solid var(--rule-soft); }
+  .card.is-done .idline .proj{ color:var(--ink-mute); }
+  .card.is-done .idline{ color:var(--ink-mute); }
+  .card.is-done .idline .ok{ color:var(--run); }
+
+  /* ── the waiting card overrides ALL tint → loud red, dominates board ── */
+  .card.waiting{
+    border:2px solid var(--wait);
+    background:var(--paper);
+  }
+  .card.waiting .tagbar{
+    background:var(--wait);
+    border-bottom:1px solid var(--wait);
+    display:flex; align-items:baseline; gap:1ch;
+  }
+  .card.waiting .tagbar .title{ color:var(--paper); flex:1; }
+  .card.waiting .state{
+    background:var(--paper); color:var(--wait);
+    font-weight:700; letter-spacing:0.06ch;
+    padding:0 0.6ch; font-size:12px;
+  }
+  .card.waiting .idline .proj{ color:var(--p-sah-ink); }
+  .card.waiting .question{
+    color:var(--wait); font-weight:700;
+    margin-top:4px;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .card.waiting .answer{
+    margin-top:6px;
+    border-top:1px dashed var(--rule);
+    padding-top:6px;
+    color:var(--ink-mute);
+    letter-spacing:0.02ch;
+  }
+  .card.waiting .answer .key{ background:var(--wait); color:var(--paper); padding:0 0.5ch; font-weight:700; }
+  .card.waiting .answer u{ text-decoration:none; color:var(--ink); }
+
+  /* empty column marker */
+  .empty{ color:var(--rule); font-size:20px; padding:6px 2px; user-select:none; }
+
+  footer{
+    border-top:1px solid var(--rule);
+    background:var(--tag);
+    padding:4px 12px;
+    color:var(--ink-mute);
+    font-size:12px;
+    display:flex;
+    gap:3ch;
+    align-items:baseline;
+  }
+  footer .spacer{ flex:1; }
+  footer .cmd{ color:var(--ink); font-weight:700; }
+  footer .pad{ color:var(--ink-mute); }
+  footer .pad b{ font-weight:400; }
+</style>
+</head>
+<body>
+<div class="screen">
+
+  <header>
+    <div class="titlebar">
+      <span class="brand"><b>ghostling</b> mission control</span>
+      <span class="menu"><a href="#">[board]</a> <a href="#">[+]</a> <a href="#">[−]</a> <a href="#">[filter: waiting]</a></span>
+      <span class="spacer"></span>
+      <span class="clock">6 sessions · 1 waiting · 14:22</span>
+    </div>
+  </header>
+
+  <!-- ───────────── capacity pane (its own Acme window) ───────────── -->
+  <section class="capacity">
+    <div class="captag">capacity <span class="n">quota across pools</span><span class="spacer"></span><span class="n">measured 12s ago</span></div>
+    <div class="capgrid">
+      <span class="pool">anthropic 5h</span>
+      <span class="track ok">▮▮▮▮▮▮▮▮<span class="dim">▯▯</span></span>
+      <span class="pct">82% left</span>
+      <span class="reset">resets 2h14m</span>
+
+      <span class="pool">anthropic wk</span>
+      <span class="track warn">▮▮▮▮<span class="dim">▯▯▯▯▯▯</span></span>
+      <span class="pct">41% left</span>
+      <span class="reset">resets 3d</span>
+
+      <span class="pool">codex wk</span>
+      <span class="track ok">▮▮▮▮▮▮▮▮▮<span class="dim">▯</span></span>
+      <span class="pct">86% left</span>
+      <span class="reset">resets 5d</span>
+    </div>
+    <div class="capverdict">
+      <b>verdict</b>&nbsp; codex has the most headroom. start
+      <span class="cmd">Codex quota adapter</span>
+      <span class="k">via</span> <span class="cmd">saha run codex-quota-adapter</span>
+      <span class="k">→ spends codex wk</span>
+    </div>
+  </section>
+
+  <div class="board">
+
+    <!-- ───────────── QUEUE ───────────── -->
+    <section class="col">
+      <div class="colhead">QUEUE <span class="n">2</span></div>
+
+      <article class="card p-kan" tabindex="0">
+        <div class="tagbar"><span class="title">Codex quota adapter</span></div>
+        <div class="body">
+          <div class="idline"><span class="proj">agentic-coding-kanban</span> <span class="k">· codex · fix/badges</span></div>
+        </div>
+      </article>
+
+      <article class="card p-kan" tabindex="0">
+        <div class="tagbar"><span class="title">Harness badge polish</span></div>
+        <div class="body">
+          <div class="idline"><span class="proj">agentic-coding-kanban</span> <span class="k">· claude</span></div>
+        </div>
+      </article>
+    </section>
+
+    <!-- ───────────── RUNNING ───────────── -->
+    <section class="col">
+      <div class="colhead">RUNNING <span class="n">3</span></div>
+
+      <article class="card p-kan" tabindex="0">
+        <div class="tagbar"><span class="title">Remote env relay</span></div>
+        <div class="body">
+          <div class="idline"><span class="proj">agentic-coding-kanban</span> <span class="k">· claude</span></div>
+        </div>
+      </article>
+
+      <article class="card p-sah" tabindex="0">
+        <div class="tagbar"><span class="title">Progress writeback</span></div>
+        <div class="body">
+          <div class="idline"><span class="proj">sahaidachny</span> <span class="k">· claude</span></div>
+        </div>
+      </article>
+
+      <article class="card p-flo" tabindex="0">
+        <div class="tagbar"><span class="title">Pomodoro card tagging</span></div>
+        <div class="body">
+          <div class="idline"><span class="proj">macos-flow</span> <span class="k">· claude</span></div>
+        </div>
+      </article>
+    </section>
+
+    <!-- ───────────── NEEDS YOU ───────────── -->
+    <section class="col">
+      <div class="colhead attn">NEEDS YOU <span class="n">1</span></div>
+
+      <article class="card waiting" tabindex="0">
+        <div class="tagbar">
+          <span class="title">Story pane reader</span>
+          <span class="state">WAITING 4M</span>
+        </div>
+        <div class="body">
+          <div class="idline"><span class="proj">sahaidachny</span> <span class="k">· claude</span></div>
+          <div class="question">approve tool use? (write schema.sql)</div>
+          <div class="answer"><u><span class="key">y</span> approve</u>&nbsp;&nbsp;<u><span class="key">n</span> deny</u>&nbsp;&nbsp;<u><span class="key">↵</span> open session</u></div>
+        </div>
+      </article>
+    </section>
+
+    <!-- ───────────── DONE ───────────── -->
+    <section class="col">
+      <div class="colhead">DONE <span class="n">2</span></div>
+
+      <article class="card is-done" tabindex="0">
+        <div class="tagbar"><span class="title">Board font zoom</span></div>
+        <div class="body">
+          <div class="idline"><span class="proj">agentic-coding-kanban</span> <span class="k">· 1h ago ·</span> <span class="ok">142/142 green</span></div>
+        </div>
+      </article>
+
+      <article class="card is-done" tabindex="0">
+        <div class="tagbar"><span class="title">Stop-event semantics</span></div>
+        <div class="body">
+          <div class="idline"><span class="proj">agentic-coding-kanban</span> <span class="k">· 3h ago · merged</span></div>
+        </div>
+      </article>
+    </section>
+
+  </div>
+
+  <footer>
+    <span>tab: cards · ↵: open session · esc: board · f: jump to waiting</span>
+    <span class="spacer"></span>
+    <span class="pad">suggest: <span class="cmd">saha run codex-quota-adapter</span> <b>→ spends codex wk</b></span>
+  </footer>
+
+</div>
+</body>
+</html>

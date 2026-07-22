@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ghostling — paper terminal · A1 rails</title>
+<style>
+  :root{
+    /* Acme paper palette — unchanged material */
+    --paper:      #FFFFEA;   /* pane background, Acme pale yellow */
+    --tag:        #EAFFFF;   /* tag bar / column header, Acme pale blue */
+    --ink:        #1A1A12;   /* dark ink text */
+    --ink-mute:   #6B6B5A;   /* muted metadata */
+    --rule:       #C7C7A8;   /* hairline rules on paper */
+    --rule-soft:  #DEDEC2;
+
+    /* state signals — only the waiting signal survives on cards */
+    --run:        #445F04;   /* deep terminal green */
+    --wait:       #C6350B;   /* warm red-orange = waiting on human */
+    --done:       #5A5A52;   /* graphite = done */
+    --idle:       #5F5F45;   /* ink-muted (AA on paper) */
+
+    /* PROJECT inks — deep ANSI-on-paper, each AA on #FFFFEA */
+    --proj-kanban: #123A87;  /* deep blue   — agentic-coding-kanban */
+    --proj-saha:   #8C1D57;  /* deep plum   — sahaidachny */
+    --proj-flow:   #0E5A57;  /* deep teal   — macos-flow */
+
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+
+  html,body{
+    background:#E4E4CF;                 /* desk behind the paper */
+    color:var(--ink);
+    font-family:var(--mono);
+    font-size:14px;
+    line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+    font-feature-settings:"liga" 0;
+  }
+
+  .screen{
+    width:100%;
+    max-width:1512px;
+    min-height:900px;
+    margin:0 auto;
+    background:var(--paper);
+    border:1px solid var(--rule);
+    display:flex;
+    flex-direction:column;
+  }
+
+  /* ───────────────────────── header ─────────────────────────────────── */
+  header{
+    background:var(--tag);
+    border-bottom:1px solid var(--rule);
+    padding:8px 14px 9px;
+    display:flex;
+    align-items:flex-start;
+    gap:3ch;
+  }
+  .headleft{ flex:1; min-width:0; }
+  .titlebar{
+    display:flex;
+    align-items:baseline;
+    gap:2ch;
+  }
+  .brand{ font-weight:700; letter-spacing:0.05ch; font-size:15px; }
+  .brand b{ background:var(--ink); color:var(--tag); padding:0 0.6ch; }
+  .menu{ color:var(--ink-mute); }
+  .menu a{ color:var(--ink); text-decoration:none; }
+  .menu a:hover{ background:var(--ink); color:var(--tag); }
+  .clock{ color:var(--ink-mute); font-size:13px; margin-top:6px; }
+
+  /* ── capacity brain: a tidy table, one row per pool ── */
+  .capacity{
+    display:grid;
+    grid-template-columns:auto auto auto auto;
+    column-gap:2ch;
+    row-gap:4px;
+    align-items:baseline;
+    font-size:13px;
+    line-height:1.5;
+    border:1px solid var(--rule);
+    background:var(--paper);
+    padding:8px 12px;
+    min-width:430px;
+  }
+  .capacity .pool{ color:var(--ink-mute); text-align:left; white-space:nowrap; }
+  .capacity .bar{ letter-spacing:-0.05ch; white-space:nowrap; }
+  .capacity .bar.ok{ color:var(--run); }
+  .capacity .bar.warn{ color:var(--wait); }
+  .capacity .pct{ color:var(--ink); text-align:right; font-weight:700; white-space:nowrap; }
+  .capacity .reset{ color:var(--ink-mute); text-align:right; white-space:nowrap; }
+  .capacity .verdict{
+    grid-column:1 / -1;
+    border-top:1px solid var(--rule-soft);
+    margin-top:3px;
+    padding-top:5px;
+    color:var(--run);
+  }
+  .capacity .verdict .k{ color:var(--ink-mute); }
+  .capacity .verdict b{ background:var(--run); color:var(--paper); padding:0 0.6ch; font-weight:700; }
+
+  /* ───────────────────────── board ─────────────────────────────────── */
+  .board{
+    flex:1;
+    display:grid;
+    grid-template-columns:1fr 1fr 1fr 1fr;
+  }
+  .col{
+    border-left:1px solid var(--rule);
+    padding:0 10px 16px;
+    display:flex;
+    flex-direction:column;
+    min-width:0;
+  }
+  .col:first-child{ border-left:0; }
+
+  .colhead{
+    position:sticky; top:0;
+    background:var(--tag);
+    border-bottom:1px solid var(--rule);
+    margin:0 -10px 12px;
+    padding:5px 10px;
+    display:flex;
+    align-items:baseline;
+    gap:1ch;
+    font-weight:700;
+    letter-spacing:0.15ch;
+  }
+  .colhead .n{ color:var(--ink-mute); font-weight:400; }
+  .colhead.attn{ background:var(--wait); color:var(--paper); }
+  .colhead.attn .n{ color:var(--paper); }
+
+  /* ───────────────────────── card ──────────────────────────────────── */
+  .card{
+    background:var(--paper);
+    border:1px solid var(--rule);
+    margin-bottom:12px;
+    cursor:pointer;
+    position:relative;
+    padding-left:4px;               /* room for the project rail */
+  }
+  .card:hover{ border-color:var(--ink); }
+  .card:focus{ outline:2px solid var(--ink); outline-offset:-1px; }
+
+  /* left PROJECT rail — 4px, project color */
+  .card::before{
+    content:"";
+    position:absolute; left:0; top:0; bottom:0;
+    width:4px;
+  }
+  .card.proj-kanban::before{ background:var(--proj-kanban); }
+  .card.proj-saha::before{   background:var(--proj-saha); }
+  .card.proj-flow::before{   background:var(--proj-flow); }
+
+  /* tag bar — title only, the loud anchor */
+  .tagbar{
+    background:var(--tag);
+    border-bottom:1px solid var(--rule);
+    padding:5px 10px 5px 10px;
+  }
+  .tagbar .title{
+    font-weight:700;
+    font-size:15px;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    display:block;
+  }
+
+  /* body — one project line, nothing else on running/queued */
+  .body{
+    padding:6px 10px 8px 10px;
+    font-size:13px;
+    line-height:1.5;
+  }
+  .projline{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .projname{ font-weight:700; }
+  .proj-kanban .projname{ color:var(--proj-kanban); }
+  .proj-saha   .projname{ color:var(--proj-saha); }
+  .proj-flow   .projname{ color:var(--proj-flow); }
+  .body .mute{ color:var(--ink-mute); }
+  .body .ok{ color:var(--run); }
+
+  /* the WAITING card must dominate — loud red inversion, liked */
+  .card.waiting{ border:2px solid var(--wait); padding-left:0; }
+  .card.waiting::before{ display:none; }
+  .card.waiting .tagbar{
+    background:var(--wait);
+    display:flex;
+    align-items:baseline;
+    gap:1ch;
+  }
+  .card.waiting .tagbar .title{ color:var(--paper); flex:1; }
+  .card.waiting .state{
+    background:var(--paper);
+    color:var(--wait);
+    font-weight:700;
+    letter-spacing:0.05ch;
+    padding:0 0.7ch;
+    font-size:13px;
+    white-space:nowrap;
+  }
+  .card.waiting .projline .projname{ color:var(--proj-saha); }
+  .card.waiting .prompt{
+    margin-top:6px;
+    border-top:1px dashed var(--rule);
+    padding-top:6px;
+    color:var(--wait);
+    font-weight:700;
+  }
+  .card.waiting .answer{ color:var(--ink-mute); margin-top:6px; letter-spacing:0.02ch; }
+  .card.waiting .answer u{ text-decoration:none; color:var(--ink); }
+  .card.waiting .answer .key{ background:var(--wait); color:var(--paper); padding:0 0.5ch; font-weight:700; }
+
+  /* done cards read quieter — let the outcome wrap so it never clips */
+  .card.is-done{ opacity:0.86; }
+  .card.is-done .tagbar{ background:var(--paper); border-bottom:1px solid var(--rule-soft); }
+  .card.is-done .projline{ white-space:normal; overflow:visible; }
+
+  /* empty column marker */
+  .empty{ color:var(--rule); font-size:20px; padding:6px 2px; user-select:none; }
+
+  footer{
+    border-top:1px solid var(--rule);
+    background:var(--tag);
+    padding:5px 14px;
+    color:var(--ink-mute);
+    font-size:13px;
+    display:flex;
+    gap:3ch;
+    align-items:baseline;
+  }
+  footer .spacer{ flex:1; }
+  footer b{ color:var(--ink); }
+</style>
+</head>
+<body>
+<div class="screen">
+
+  <header>
+    <div class="headleft">
+      <div class="titlebar">
+        <span class="brand"><b>ghostling</b> mission control</span>
+        <span class="menu"><a href="#">[board]</a> <a href="#">[+]</a> <a href="#">[−]</a></span>
+      </div>
+      <div class="clock">6 sessions · 1 waiting · 14:22</div>
+    </div>
+
+    <div class="capacity">
+      <span class="pool">anthropic 5h</span>
+      <span class="bar ok">▮▮▮▮▮▮▮▮▯▯</span>
+      <span class="pct">82% left</span>
+      <span class="reset">resets 2h14m</span>
+
+      <span class="pool">anthropic wk</span>
+      <span class="bar warn">▮▮▮▮▯▯▯▯▯▯</span>
+      <span class="pct">41% left</span>
+      <span class="reset">resets 3d</span>
+
+      <span class="pool">codex wk</span>
+      <span class="bar ok">▮▮▮▮▮▮▮▮▮▯</span>
+      <span class="pct">86% left</span>
+      <span class="reset">resets 5d</span>
+
+      <span class="verdict"><span class="k">verdict:</span> <b>safe to launch interactive</b></span>
+    </div>
+  </header>
+
+  <div class="board">
+
+    <!-- ───────────── QUEUE ───────────── -->
+    <section class="col">
+      <div class="colhead">QUEUE <span class="n">2</span></div>
+
+      <article class="card proj-kanban" tabindex="0">
+        <div class="tagbar"><span class="title">Codex quota adapter</span></div>
+        <div class="body">
+          <div class="projline"><span class="projname">agentic-coding-kanban</span> <span class="mute">· codex · fix/badges</span></div>
+        </div>
+      </article>
+
+      <article class="card proj-kanban" tabindex="0">
+        <div class="tagbar"><span class="title">Harness badge polish</span></div>
+        <div class="body">
+          <div class="projline"><span class="projname">agentic-coding-kanban</span> <span class="mute">· claude</span></div>
+        </div>
+      </article>
+    </section>
+
+    <!-- ───────────── RUNNING ───────────── -->
+    <section class="col">
+      <div class="colhead">RUNNING <span class="n">3</span></div>
+
+      <article class="card proj-kanban" tabindex="0">
+        <div class="tagbar"><span class="title">Remote env relay</span></div>
+        <div class="body">
+          <div class="projline"><span class="projname">agentic-coding-kanban</span> <span class="mute">· claude</span></div>
+        </div>
+      </article>
+
+      <article class="card proj-saha" tabindex="0">
+        <div class="tagbar"><span class="title">Progress writeback</span></div>
+        <div class="body">
+          <div class="projline"><span class="projname">sahaidachny</span> <span class="mute">· claude</span></div>
+        </div>
+      </article>
+
+      <article class="card proj-flow" tabindex="0">
+        <div class="tagbar"><span class="title">Pomodoro card tagging</span></div>
+        <div class="body">
+          <div class="projline"><span class="projname">macos-flow</span> <span class="mute">· claude</span></div>
+        </div>
+      </article>
+    </section>
+
+    <!-- ───────────── NEEDS YOU ───────────── -->
+    <section class="col">
+      <div class="colhead attn">NEEDS YOU <span class="n">1</span></div>
+
+      <article class="card waiting proj-saha" tabindex="0">
+        <div class="tagbar">
+          <span class="title">Story pane reader</span>
+          <span class="state">WAITING 4M</span>
+        </div>
+        <div class="body">
+          <div class="projline"><span class="projname">sahaidachny</span> <span class="mute">· claude</span></div>
+          <div class="prompt">approve tool use? (write schema.sql)</div>
+          <div class="answer"><u><span class="key">y</span> approve</u>&nbsp;&nbsp;<u><span class="key">n</span> deny</u>&nbsp;&nbsp;<u><span class="key">↵</span> open session</u></div>
+        </div>
+      </article>
+    </section>
+
+    <!-- ───────────── DONE ───────────── -->
+    <section class="col">
+      <div class="colhead">DONE <span class="n">2</span></div>
+
+      <article class="card is-done proj-kanban" tabindex="0">
+        <div class="tagbar"><span class="title">Board font zoom</span></div>
+        <div class="body">
+          <div class="projline"><span class="projname">agentic-coding-kanban</span> <span class="mute">· 1h ago ·</span> <span class="ok">142/142 green</span></div>
+        </div>
+      </article>
+
+      <article class="card is-done proj-kanban" tabindex="0">
+        <div class="tagbar"><span class="title">Stop-event semantics</span></div>
+        <div class="body">
+          <div class="projline"><span class="projname">agentic-coding-kanban</span> <span class="mute">· 3h ago · merged</span></div>
+        </div>
+      </article>
+    </section>
+
+  </div>
+
+  <footer>
+    <span>tab: cards · ↵: open session · esc: board · f: jump to waiting</span>
+    <span class="spacer"></span>
+    <span>suggest: <b>saha run codex-quota-adapter</b> → spends codex wk (86% free)</span>
+  </footer>
+
+</div>
+</body>
+</html>

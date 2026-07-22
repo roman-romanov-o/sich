@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ghostling — paper terminal · A3 project groups</title>
+<style>
+  :root{
+    /* Acme paper palette */
+    --paper:      #FFFFEA;   /* pane background, Acme pale yellow */
+    --tag:        #EAFFFF;   /* tag bar / column header, Acme pale blue */
+    --ink:        #1A1A12;   /* dark ink text */
+    --ink-mute:   #6B6B5A;   /* muted metadata */
+    --rule:       #C7C7A8;   /* hairline rules on paper */
+    --rule-soft:  #DEDEC2;
+
+    /* state signals — appear ONLY as state, never decoration */
+    --run:        #445F04;   /* deep terminal green = healthy capacity */
+    --wait:       #C6350B;   /* warm red-orange = waiting on human / low pool */
+    --done:       #5A5A52;   /* graphite = done */
+
+    /* PROJECT inks — the whole color budget lives here (AA on paper) */
+    --proj-kanban: #1B3B6F;  /* deep blue  = agentic-coding-kanban */
+    --proj-saha:   #7A2A5E;  /* plum       = sahaidachny */
+    --proj-flow:   #0F5148;  /* deep teal  = macos-flow */
+
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+
+  html,body{
+    background:#E4E4CF;
+    color:var(--ink);
+    font-family:var(--mono);
+    font-size:14px;
+    line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+    font-feature-settings:"liga" 0;
+  }
+
+  .screen{
+    width:100%;
+    max-width:1512px;
+    min-height:900px;
+    margin:0 auto;
+    background:var(--paper);
+    border:1px solid var(--rule);
+    display:flex;
+    flex-direction:column;
+  }
+
+  /* ───────────────────────── header ─────────────────────────────────── */
+  header{
+    background:var(--tag);
+    border-bottom:1px solid var(--rule);
+    padding:6px 14px 0;
+  }
+  .titlebar{
+    display:flex;
+    align-items:baseline;
+    gap:2ch;
+    padding-bottom:6px;
+  }
+  .brand{ font-weight:700; letter-spacing:0.05ch; }
+  .brand b{ background:var(--ink); color:var(--tag); padding:0 0.6ch; }
+  .menu{ color:var(--ink-mute); }
+  .menu a{ color:var(--ink); text-decoration:none; }
+  .menu a:hover{ background:var(--ink); color:var(--tag); }
+  .titlebar .spacer{ flex:1; }
+  .clock{ color:var(--ink-mute); }
+
+  /* ───────── capacity strip — two rows tall, aligned pool blocks ─────── */
+  .capacity{
+    border-top:1px solid var(--rule);
+    background:var(--paper);
+    margin:0 -14px;
+    padding:11px 14px 12px;
+    display:grid;
+    grid-template-columns:repeat(3, minmax(200px, 320px)) 1fr;
+    gap:0 28px;
+    align-items:start;
+  }
+  .pool{ min-width:0; }
+  .pool .name{
+    font-size:13px;
+    font-weight:700;
+    letter-spacing:0.06ch;
+    color:var(--ink);
+    display:block;
+    margin-bottom:5px;
+  }
+  .pool .name .sub{ color:var(--ink-mute); font-weight:400; letter-spacing:0; }
+  .gaugerow{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    margin-bottom:4px;
+  }
+  .track{
+    flex:1;
+    height:13px;
+    background:var(--paper);
+    border:1px solid var(--ink);
+    position:relative;
+    min-width:70px;
+  }
+  .fill{ position:absolute; left:0; top:0; bottom:0; }
+  .fill.ok{ background:var(--run); }
+  .fill.warn{ background:var(--wait); }
+  .pct{ font-size:13px; font-weight:700; white-space:nowrap; }
+  .pct.ok{ color:var(--run); }
+  .pct.warn{ color:var(--wait); }
+  .pool .reset{ font-size:13px; color:var(--ink-mute); }
+
+  /* verdict occupies the 4th cell, right-aligned, vertically centered */
+  .verdict{
+    align-self:center;
+    justify-self:end;
+    text-align:right;
+    font-size:13px;
+    line-height:1.4;
+    color:var(--ink);
+    max-width:34ch;
+  }
+  .verdict .vtag{ background:var(--run); color:var(--paper); padding:0 0.6ch; font-weight:700; letter-spacing:0.08ch; }
+  .verdict .vbody{ display:block; margin-top:4px; color:var(--ink); }
+  .verdict .vbody b{ background:var(--ink); color:var(--paper); padding:0 0.5ch; font-weight:700; }
+
+  /* ───────────────────────── board ─────────────────────────────────── */
+  .board{
+    flex:1;
+    display:grid;
+    grid-template-columns:1fr 1fr 1fr 1fr;
+  }
+  .col{
+    border-left:1px solid var(--rule);
+    padding:0 12px 16px;
+    display:flex;
+    flex-direction:column;
+    min-width:0;
+  }
+  .col:first-child{ border-left:0; }
+
+  .colhead{
+    position:sticky; top:0;
+    background:var(--tag);
+    border-bottom:1px solid var(--rule);
+    margin:0 -12px 12px;
+    padding:5px 12px;
+    display:flex;
+    align-items:baseline;
+    gap:1ch;
+    font-weight:700;
+    letter-spacing:0.16ch;
+  }
+  .colhead .n{ color:var(--ink-mute); font-weight:400; letter-spacing:0; }
+  .colhead.attn{ background:var(--wait); color:var(--paper); }
+  .colhead.attn .n{ color:var(--paper); }
+
+  /* ───────── project group head — name in project ink + rule ────────── */
+  .group{ margin-bottom:14px; }
+  .group:last-child{ margin-bottom:0; }
+  .grouphead{
+    font-size:12px;
+    font-weight:700;
+    letter-spacing:0.14ch;
+    text-transform:uppercase;
+    padding-bottom:3px;
+    margin-bottom:8px;
+    border-bottom:2px solid currentColor;
+  }
+  .grouphead.kanban{ color:var(--proj-kanban); }
+  .grouphead.saha{   color:var(--proj-saha); }
+  .grouphead.flow{   color:var(--proj-flow); }
+
+  /* ───────────────────────── card ─────────────────────────────────── */
+  .card{
+    background:var(--paper);
+    border:1px solid var(--rule);
+    margin-bottom:9px;
+    cursor:pointer;
+  }
+  .card:last-child{ margin-bottom:0; }
+  .card:hover{ border-color:var(--ink); }
+  .card:focus{ outline:2px solid var(--ink); outline-offset:-1px; }
+
+  /* tag bar — Acme pale-blue, bold human title ONLY */
+  .tagbar{
+    background:var(--tag);
+    border-bottom:1px solid var(--rule);
+    padding:4px 10px;
+  }
+  .tagbar .title{
+    font-weight:700;
+    font-size:14px;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+    display:block;
+  }
+
+  /* body = at most one calm muted line */
+  .body{
+    padding:5px 10px 6px;
+    font-size:13px;
+    color:var(--ink-mute);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .body .ok{ color:var(--run); }
+  .card.is-done{ opacity:0.9; }
+  .card.is-done .tagbar{ background:var(--paper); border-bottom:1px solid var(--rule-soft); }
+
+  /* ───────── the waiting card — the one loud thing on the board ─────── */
+  .card.waiting{ border:2px solid var(--wait); }
+  .card.waiting .tagbar{
+    background:var(--wait);
+    display:flex; align-items:baseline; gap:1ch;
+  }
+  .card.waiting .tagbar .title{ color:var(--paper); flex:1; }
+  .card.waiting .wtag{
+    background:var(--paper); color:var(--wait);
+    font-weight:700; letter-spacing:0.06ch;
+    padding:0 0.6ch; font-size:12px;
+    white-space:nowrap;
+  }
+  .card.waiting .body{ color:var(--wait); white-space:normal; }
+  .card.waiting .question{ font-weight:700; color:var(--wait); margin-bottom:5px; }
+  .card.waiting .answer{
+    color:var(--ink-mute);
+    border-top:1px dashed var(--rule);
+    padding-top:5px;
+  }
+  .card.waiting .answer u{ text-decoration:none; color:var(--ink); }
+  .card.waiting .answer .key{ background:var(--wait); color:var(--paper); padding:0 0.5ch; font-weight:700; }
+
+  /* group head inside the red column — plum project ink kept for scan */
+  .grouphead.in-attn{ color:var(--proj-saha); }
+
+  footer{
+    border-top:1px solid var(--rule);
+    background:var(--tag);
+    padding:5px 14px;
+    color:var(--ink-mute);
+    font-size:12px;
+    display:flex;
+    gap:3ch;
+    align-items:baseline;
+  }
+  footer .spacer{ flex:1; }
+  footer .legend b{ font-weight:700; }
+  footer .legend .k-kanban{ color:var(--proj-kanban); }
+  footer .legend .k-saha{ color:var(--proj-saha); }
+  footer .legend .k-flow{ color:var(--proj-flow); }
+  footer .suggest b{ background:var(--ink); color:var(--paper); padding:0 0.5ch; }
+</style>
+</head>
+<body>
+<div class="screen">
+
+  <header>
+    <div class="titlebar">
+      <span class="brand"><b>ghostling</b> mission control</span>
+      <span class="menu"><a href="#">[board]</a> <a href="#">[+]</a> <a href="#">[−]</a> <a href="#">[filter: waiting]</a></span>
+      <span class="spacer"></span>
+      <span class="clock">6 sessions · 1 waiting · 14:22</span>
+    </div>
+
+    <div class="capacity">
+      <div class="pool">
+        <span class="name">anthropic <span class="sub">interactive · 5h</span></span>
+        <div class="gaugerow">
+          <div class="track"><div class="fill ok" style="width:82%"></div></div>
+          <span class="pct ok">82% left</span>
+        </div>
+        <div class="reset">resets 2h14m</div>
+      </div>
+
+      <div class="pool">
+        <span class="name">anthropic <span class="sub">weekly cap</span></span>
+        <div class="gaugerow">
+          <div class="track"><div class="fill warn" style="width:41%"></div></div>
+          <span class="pct warn">41% left</span>
+        </div>
+        <div class="reset">resets 3d</div>
+      </div>
+
+      <div class="pool">
+        <span class="name">codex <span class="sub">weekly</span></span>
+        <div class="gaugerow">
+          <div class="track"><div class="fill ok" style="width:86%"></div></div>
+          <span class="pct ok">86% left</span>
+        </div>
+        <div class="reset">resets 5d</div>
+      </div>
+
+      <div class="verdict">
+        <span class="vtag">VERDICT</span> safe to launch interactive now.
+        <span class="vbody">weekly cap is tight (41%) — route heavy work to <b>codex</b>.</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="board">
+
+    <!-- ───────────── QUEUE ───────────── -->
+    <section class="col">
+      <div class="colhead">QUEUE <span class="n">2</span></div>
+
+      <div class="group">
+        <div class="grouphead kanban">agentic-coding-kanban</div>
+
+        <article class="card" tabindex="0">
+          <div class="tagbar"><span class="title">Codex quota adapter</span></div>
+          <div class="body">codex · branch fix/badges</div>
+        </article>
+
+        <article class="card" tabindex="0">
+          <div class="tagbar"><span class="title">Harness badge polish</span></div>
+          <div class="body">claude</div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ───────────── RUNNING ───────────── -->
+    <section class="col">
+      <div class="colhead">RUNNING <span class="n">3</span></div>
+
+      <div class="group">
+        <div class="grouphead kanban">agentic-coding-kanban</div>
+        <article class="card" tabindex="0">
+          <div class="tagbar"><span class="title">Remote env relay</span></div>
+          <div class="body">claude</div>
+        </article>
+      </div>
+
+      <div class="group">
+        <div class="grouphead saha">sahaidachny</div>
+        <article class="card" tabindex="0">
+          <div class="tagbar"><span class="title">Progress writeback</span></div>
+          <div class="body">claude</div>
+        </article>
+      </div>
+
+      <div class="group">
+        <div class="grouphead flow">macos-flow</div>
+        <article class="card" tabindex="0">
+          <div class="tagbar"><span class="title">Pomodoro card tagging</span></div>
+          <div class="body">claude</div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ───────────── NEEDS YOU ───────────── -->
+    <section class="col">
+      <div class="colhead attn">NEEDS YOU <span class="n">1</span></div>
+
+      <div class="group">
+        <div class="grouphead in-attn">sahaidachny</div>
+        <article class="card waiting" tabindex="0">
+          <div class="tagbar">
+            <span class="title">Story pane reader</span>
+            <span class="wtag">WAITING 4M</span>
+          </div>
+          <div class="body">
+            <div class="question">approve tool use? (write schema.sql)</div>
+            <div class="answer"><u><span class="key">y</span> approve</u>&nbsp;&nbsp;<u><span class="key">n</span> deny</u>&nbsp;&nbsp;<u><span class="key">↵</span> open session</u></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ───────────── DONE ───────────── -->
+    <section class="col">
+      <div class="colhead">DONE <span class="n">2</span></div>
+
+      <div class="group">
+        <div class="grouphead kanban">agentic-coding-kanban</div>
+
+        <article class="card is-done" tabindex="0">
+          <div class="tagbar"><span class="title">Board font zoom</span></div>
+          <div class="body">1h ago · <span class="ok">142/142 green</span></div>
+        </article>
+
+        <article class="card is-done" tabindex="0">
+          <div class="tagbar"><span class="title">Stop-event semantics</span></div>
+          <div class="body">3h ago · merged</div>
+        </article>
+      </div>
+    </section>
+
+  </div>
+
+  <footer>
+    <span>tab: cards · ↵: open session · esc: board · f: jump to waiting</span>
+    <span class="legend"><b class="k-kanban">▮</b> kanban &nbsp; <b class="k-saha">▮</b> sahaidachny &nbsp; <b class="k-flow">▮</b> macos-flow</span>
+    <span class="spacer"></span>
+    <span class="suggest">suggest: <b>saha run</b> codex-quota-adapter → spends codex wk (86% free)</span>
+  </footer>
+
+</div>
+</body>
+</html>

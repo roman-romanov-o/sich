@@ -11,6 +11,8 @@ public enum SignalKind: String, Sendable, Equatable {
     case toolUse = "tool-use"
     case permissionRequest = "permission-request"
     case userInput = "user-input"
+    case subagentStart = "subagent-start"
+    case subagentStop = "subagent-stop"
     case testRunStart = "test-run-start"
     case errorExit = "error-exit"
     case stop

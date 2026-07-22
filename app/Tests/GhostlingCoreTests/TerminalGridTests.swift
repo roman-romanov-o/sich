@@ -33,6 +33,16 @@ struct TerminalGridTests {
         #expect(cell.fg != nil)   // explicit fg → resolved RGB, not the default
     }
 
+    @Test("SGR emphasis survives the render-state snapshot")
+    func snapshotPreservesTextStyle() throws {
+        let terminal = try Terminal(cols: 20, rows: 5)
+        terminal.write(Array("\u{1b}[1;3;4mX\u{1b}[0m".utf8))
+        let style = terminal.snapshot().cell(col: 0, row: 0).style
+        #expect(style.bold)
+        #expect(style.italic)
+        #expect(style.underline != 0)
+    }
+
     @Test("resize changes the grid geometry a later snapshot reports")
     func resizeChangesGeometry() throws {
         let terminal = try Terminal(cols: 80, rows: 24)

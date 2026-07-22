@@ -5,12 +5,12 @@ import Testing
 @testable import GhostlingApp
 
 /// Field report 2026-07-16: cards jump OUT of WORKING and back into QUEUE, which is
-/// confusing. The fix is not to guess "needs you" from at-rest signals; instead the
-/// detector renders explicit idle/unknown unless Claude sends a notification or
-/// permission hook.
+/// confusing. Under the CARD-STATUS.md contract QUEUE is reserved for work that has
+/// not started: once a session is engaged, automation moves it only between WORKING
+/// and NEEDS YOU (turn end → rule 3; silent stall → rule 2.1) — never back to QUEUE.
 ///
 /// Three production paths could rewind a started session, and each gets a test here:
-/// a mid-session `SessionStart`, the stale sweep, and an unrecognized hook.
+/// a mid-session `SessionStart`, the stall sweep, and an unrecognized hook.
 ///
 /// Deterministic throughout: every timestamp is injected (epoch + offsets), never the
 /// wall clock — the anti-flake rule (GridTextTests fromPTY PTY-EOF precedent).
@@ -25,7 +25,7 @@ struct QueueIsOneWayDoorTests {
     /// A working session that receives a fresh `SessionStart` — Claude re-emits one on
     /// `--resume`, `/clear`, and compaction — must not read as never-started.
     private func workingStore() -> HookSessionStore {
-        let store = HookSessionStore(staleThreshold: 30)
+        let store = HookSessionStore(stallThreshold: 30)
         store.ingest([
             normalized(#"{"hook_event_name":"SessionStart","session_id":"s"}"#, arrival: base),
             normalized(#"{"hook_event_name":"UserPromptSubmit","session_id":"s"}"#,
@@ -46,14 +46,17 @@ struct QueueIsOneWayDoorTests {
                 "a repeated SessionStart keeps cmux-style active status")
     }
 
-    @Test func staleSweepMarksWorkingSessionUnknownInsteadOfGuessingAttention() {
+    /// CARD-STATUS.md rule 2.1: a WORKING session silent past the stall threshold
+    /// moves to NEEDS YOU — a hung/stuck/dead loop needs eyes, and it must NOT slide
+    /// back to QUEUE (the door this suite guards).
+    @Test func stallSweepMovesSilentWorkingSessionToNeedsYouNotQueue() {
         let store = workingStore()
         store.sweepStale(now: base.addingTimeInterval(60))
 
-        #expect(store.entry(for: "s")?.state == .unknown,
-                "silence past the threshold is unknown, not a guessed needs-you state")
+        #expect(store.entry(for: "s")?.state == .waitingForInput,
+                "silence past the stall threshold is an attention signal, never a rewind to QUEUE")
         store.sweepStale(now: base.addingTimeInterval(600))
-        #expect(store.entry(for: "s")?.state == .unknown)
+        #expect(store.entry(for: "s")?.state == .waitingForInput)
     }
 
     @Test func unrecognizedHookMarksWorkingCardUnknown() {
@@ -65,33 +68,80 @@ struct QueueIsOneWayDoorTests {
                 "an undetermined signal must stay explicit, not become attention")
     }
 
-    /// A never-started session is the one case QUEUE is still correct for — the fix must
-    /// not swallow it.
-    @Test func neverStartedSessionStillSitsInQueue() {
-        let store = HookSessionStore(staleThreshold: 30)
+    /// CARD-STATUS.md rule 1: QUEUE is for work that has NOT started — and a
+    /// launched-but-unprompted claude has not started. Card creation auto-launches
+    /// the agent, so its SessionStart must leave the card in QUEUE (`.idle`),
+    /// through sweeps too (an at-rest session never stalls into NEEDS YOU). Work
+    /// begins at the first prompt, and only THEN does the stall guard arm.
+    @Test func launchedButUnpromptedSessionRestsInQueueUntilFirstPrompt() {
+        let store = HookSessionStore(stallThreshold: 30)
+        #expect(store.entry(for: "fresh") == nil, "no events → no entry → the card stays QUEUE")
+
         store.ingest([normalized(#"{"hook_event_name":"SessionStart","session_id":"fresh"}"#,
                                  arrival: base)])
-        #expect(store.entry(for: "fresh")?.state == .running)
+        #expect(store.entry(for: "fresh")?.state == .idle,
+                "launching an agent is not starting work — the card stays QUEUE")
         store.sweepStale(now: base.addingTimeInterval(60))
-        #expect(store.entry(for: "fresh")?.state == .unknown,
-                "a stale session is unknown until a stronger signal arrives")
+        #expect(store.entry(for: "fresh")?.state == .idle,
+                "an unprompted session is deliberately at rest, never a stall")
+
+        store.ingest([normalized(#"{"hook_event_name":"UserPromptSubmit","session_id":"fresh"}"#,
+                                 arrival: base.addingTimeInterval(70))])
+        #expect(store.entry(for: "fresh")?.state == .running)
+        store.sweepStale(now: base.addingTimeInterval(110))
+        #expect(store.entry(for: "fresh")?.state == .waitingForInput,
+                "once work started, silence past the threshold is rule 2.1 — NEEDS YOU, not QUEUE")
     }
 
-    /// A finished card stays finished; an at-rest signal after DONE means nothing.
-    @Test func doneSessionStaysDone() {
+    /// Bug 2026-07-20 (card 13E294A4): SessionEnd used to latch the session `.done`
+    /// FOREVER, and app restarts `claude --resume` the SAME session id — so every
+    /// post-restart hook was swallowed and the card froze at seed idle. SessionEnd
+    /// is a RESUMABLE rest (`.idle`); later signals on the same id must land.
+    @Test func endedSessionRestsAndResumes() {
         let store = workingStore()
         store.ingest([normalized(#"{"hook_event_name":"SessionEnd","session_id":"s"}"#,
                                  arrival: base.addingTimeInterval(5))])
-        #expect(store.entry(for: "s")?.state == .done)
-
-        store.ingest([normalized(#"{"hook_event_name":"SomeFutureHook","session_id":"s"}"#,
-                                 arrival: base.addingTimeInterval(10))])
-        #expect(store.entry(for: "s")?.state == .done)
+        #expect(store.entry(for: "s")?.state == .idle,
+                "process exit is a resumable rest — DONE is manual and board-owned only")
 
         store.ingest([normalized(#"{"hook_event_name":"Notification","session_id":"s"}"#,
                                  arrival: base.addingTimeInterval(15))])
-        #expect(store.entry(for: "s")?.state == .done,
-                "a finished session must not reopen to NEEDS YOU from a later notification")
+        #expect(store.entry(for: "s")?.state == .waitingForInput,
+                "a resumed session's attention signal must land, not be swallowed by a done-latch")
+    }
+
+    /// The full app-restart lifecycle on ONE session id (quit → relaunch →
+    /// `claude --resume` → work → turn end), each hop a separate coalesce burst.
+    /// This is the exact sequence the done-latch froze.
+    @Test func restartResumeLifecycleTracksThroughAllStates() {
+        let store = workingStore()
+        let hops: [(String, TimeInterval, CardState, String)] = [
+            ("SessionEnd", 5, .idle, "quit → resumable rest"),
+            ("SessionStart", 10, .idle, "relaunch resume-start is neutral, still at rest"),
+            ("UserPromptSubmit", 15, .running, "post-restart prompt puts it back to work"),
+            ("Stop", 20, .waitingForInput, "turn end lands as NEEDS YOU (rule 3)"),
+        ]
+        for (hook, offset, expected, why) in hops {
+            store.ingest([normalized(
+                #"{"hook_event_name":"\#(hook)","session_id":"s"}"#,
+                arrival: base.addingTimeInterval(offset))])
+            #expect(store.entry(for: "s")?.state == expected, Comment(rawValue: why))
+        }
+    }
+
+    /// A straggler SubagentStop landing AFTER the root Stop (children can outlive
+    /// the turn boundary in the event file) must not revive a waiting session to
+    /// WORKING — SubagentStop says nothing about the root turn.
+    @Test func stragglerSubagentStopDoesNotReviveWaitingSession() {
+        let store = workingStore()
+        store.ingest([normalized(#"{"hook_event_name":"Stop","session_id":"s"}"#,
+                                 arrival: base.addingTimeInterval(5))])
+        #expect(store.entry(for: "s")?.state == .waitingForInput)
+
+        store.ingest([normalized(#"{"hook_event_name":"SubagentStop","session_id":"s"}"#,
+                                 arrival: base.addingTimeInterval(7))])
+        #expect(store.entry(for: "s")?.state == .waitingForInput,
+                "a child's exit is not the root's activity — attention must stick")
     }
 
     // MARK: - The same rule at the board merge
@@ -146,7 +196,7 @@ struct QueueIsOneWayDoorTests {
                 "the one-way door is for AUTOMATIC transitions; you keep manual control")
     }
 
-    @Test func manualMoveOutOfDoneIgnoresStaleDoneUntilFreshWork() throws {
+    @Test func doneCanOnlyBeEnteredAndExitedManually() throws {
         let seed = BoardSeed(
             sessionID: "live-terminal", projectDir: "/work",
             agent: .claude, flow: .b, state: .done, scrollback: "finished"
@@ -165,7 +215,7 @@ struct QueueIsOneWayDoorTests {
         )
         shell.applySessions([oldDone])
         #expect(try #require(shell.cards.first).state == .idle,
-                "manual reopen from DONE must not be undone by the stale finished run")
+                "manual reopen from DONE must not be undone by detector output")
 
         let freshWork = BoardCard(
             sessionID: "claude-new", projectDir: "/work",
@@ -181,7 +231,23 @@ struct QueueIsOneWayDoorTests {
             updatedAt: base.addingTimeInterval(2)
         )
         shell.applySessions([freshDone])
+        #expect(try #require(shell.cards.first).state == .running,
+                "even a fresh agent completion cannot move the task to DONE")
+
+        shell.move(cardID: card.id, to: .done)
+        #expect(try #require(shell.cards.first).state == .done)
+
+        let laterWork = BoardCard(
+            sessionID: "claude-later", projectDir: "/work",
+            agent: .claude, flow: .b, state: .running,
+            updatedAt: base.addingTimeInterval(3)
+        )
+        shell.applySessions([laterWork])
         #expect(try #require(shell.cards.first).state == .done,
-                "after fresh work, a new completion can move the card to DONE again")
+                "detector output cannot reopen a manually completed task")
+
+        shell.move(cardID: card.id, to: .running)
+        #expect(try #require(shell.cards.first).state == .running,
+                "the operator can manually return DONE to WORKING")
     }
 }

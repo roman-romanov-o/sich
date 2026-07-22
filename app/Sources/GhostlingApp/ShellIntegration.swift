@@ -85,20 +85,21 @@ enum ShellIntegrationInstaller {
 
     // MARK: - Integration + terminfo files
 
-    /// Write the integration script and terminfo into `installRoot`, skipping any file
-    /// that already exists (idempotent). Returns true if either was newly created.
+    /// Write the integration script and terminfo into `installRoot`, replacing stale
+    /// generated copies while leaving byte-identical files alone. This keeps upgrades
+    /// idempotent without stranding existing installations on old integration logic.
     private static func installFiles(into installRoot: URL) -> Bool {
         try? FileManager.default.createDirectory(
             at: installRoot, withIntermediateDirectories: true)
-        let wroteScript = writeIfAbsent(
+        let wroteScript = writeIfChanged(
             integrationScript, to: installRoot.appendingPathComponent(integrationName))
-        let wroteTerminfo = writeIfAbsent(
+        let wroteTerminfo = writeIfChanged(
             terminfoSource, to: installRoot.appendingPathComponent(terminfoName))
         return wroteScript || wroteTerminfo
     }
 
-    private static func writeIfAbsent(_ content: String, to path: URL) -> Bool {
-        guard !FileManager.default.fileExists(atPath: path.path) else { return false }
+    private static func writeIfChanged(_ content: String, to path: URL) -> Bool {
+        if (try? String(contentsOf: path, encoding: .utf8)) == content { return false }
         return (try? content.write(to: path, atomically: true, encoding: .utf8)) != nil
     }
 
@@ -137,6 +138,17 @@ enum ShellIntegrationInstaller {
         # Ghostling shell-integration (zsh). Reports cwd + command boundaries to the
         # terminal (OSC 7 / OSC 133) so the mission-control board reads them semantically
         # instead of scanning processes. Standalone; sourced by ShellIntegrationInstaller.
+
+        # Keep Ghostling's transparent agent shims ahead of paths a user's startup
+        # files may prepend. Outside a managed task terminal the shims pass through;
+        # inside one they attach status hooks using GHOSTLING_CARD_ID.
+        case "$PATH" in
+          "$HOME/.ghostling/bin"|"$HOME/.ghostling/bin":*) ;;
+          *)
+            PATH="$HOME/.ghostling/bin:$PATH"
+            ;;
+        esac
+        export PATH
 
         # OSC 7: report the working directory on every prompt.
         _ghostling_report_cwd() {

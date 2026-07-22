@@ -89,12 +89,12 @@ struct TerminalStateBugReproTests {
                 "a manually completed task must not reopen to NEEDS YOU from a later hook observation")
     }
 
-    // MARK: - Bug 2: after a turn, the agent is IDLE, not DONE or attention
+    // MARK: - Bug 2: after a turn, the agent AWAITS YOU — not DONE, not QUEUE
 
     /// The hook stream a real "wait 20 seconds, then say hello" turn produces, each
     /// event its own coalesce burst (>1s apart) so the whole transition path is applied.
     @Test func agentAwaitingYourResponseIsWaitingNotDone() throws {
-        let store = HookSessionStore(staleThreshold: 30)
+        let store = HookSessionStore(stallThreshold: 30)
         func ev(_ name: String, _ offset: TimeInterval) -> SignalEvent {
             HookNormalizer.normalize(
                 Data(#"{"hook_event_name":"\#(name)","session_id":"turn","cwd":"/repo"}"#.utf8),
@@ -109,23 +109,23 @@ struct TerminalStateBugReproTests {
         ])
 
         let state = try #require(store.entry(for: "turn")?.state)
-        #expect(state == .idle,
-                "a Stop hook clears running; it is not done and not an attention signal")
-        #expect(!state.needsAttention)
-        #expect(BoardColumn(state: state) == .idle)
+        #expect(state == .waitingForInput,
+                "a Stop hook means the turn ended and the agent awaits you (CARD-STATUS.md rule 3) — not done")
+        #expect(state.needsAttention)
+        #expect(BoardColumn(state: state) == .waitingForInput)
     }
 
-    /// And idle must persist — it must NOT decay to `unknown` after the turn has
-    /// already stopped.
-    @Test func idleAfterStopSurvivesSilence() throws {
-        let store = HookSessionStore(staleThreshold: 30)
+    /// And the attention state must persist — it must NOT decay after the turn has
+    /// already stopped (waiting is at-rest; the stall guard only watches WORKING).
+    @Test func attentionAfterStopSurvivesSilence() throws {
+        let store = HookSessionStore(stallThreshold: 30)
         store.ingest([
             HookNormalizer.normalize(
                 Data(#"{"hook_event_name":"Stop","session_id":"turn","cwd":"/repo"}"#.utf8),
                 arrival: base)!,
         ])
         store.sweepStale(now: base.addingTimeInterval(120))   // you stepped away for 2 min
-        #expect(store.entry(for: "turn")?.state == .idle,
-                "a stopped session should stay idle through silence, not decay to unknown")
+        #expect(store.entry(for: "turn")?.state == .waitingForInput,
+                "a stopped session keeps flagging NEEDS YOU through silence until you answer")
     }
 }

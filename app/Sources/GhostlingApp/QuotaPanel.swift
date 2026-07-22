@@ -9,6 +9,11 @@ import GhostlingCore
 @MainActor
 public final class QuotaPanel: NSView {
     public private(set) var rows: [QuotaGaugeRow] = []
+    /// Last render's per-harness in-progress counts (from the board's cards).
+    public private(set) var tallies: [CardAgent: AgentTaskTally] = [:]
+    /// Test seam: the load lines actually rendered under each provider badge,
+    /// keyed by provider label — e.g. `"claude": ["2 working", "1 waiting"]`.
+    private(set) var taskLines: [String: [String]] = [:]
 
     private let scroll = NSScrollView()
     private let content = NSStackView()
@@ -77,9 +82,14 @@ public final class QuotaPanel: NSView {
         ])
     }
 
-    public func render(gauges: [QuotaGauge]) {
+    /// `cards` feeds the per-harness load readout (how many tasks each harness has
+    /// working / waiting on you) beside its gauges; callers without a board (the
+    /// standalone quota window) omit it and get the plain usage table.
+    public func render(gauges: [QuotaGauge], cards: [BoardCard] = []) {
         content.arrangedSubviews.forEach { $0.removeFromSuperview() }
         rows = []
+        tallies = AgentTaskTally.tally(cards)
+        taskLines = [:]
 
         content.addArrangedSubview(recommendationCard(QuotaAdvisor.recommend(from: gauges)))
         content.addArrangedSubview(usageCard(gauges: gauges))
@@ -100,8 +110,14 @@ public final class QuotaPanel: NSView {
         card.themedBorder = accent.withAlphaComponent(0.55)
         card.widthAnchor.constraint(equalToConstant: QuotaLayout.cardWidth).isActive = true
 
-        card.addArrangedSubview(label(rec.headline, font: BoardTheme.monoBold, color: accent))
-        let detail = label(rec.detail, font: BoardTheme.monoSmall, color: BoardTheme.textMuted)
+        let headline = label(rec.headline, font: BoardTheme.sansStrong, color: accent)
+        headline.maximumNumberOfLines = 2
+        headline.lineBreakMode = .byWordWrapping
+        headline.preferredMaxLayoutWidth = QuotaLayout.cardWidth - 32
+        card.addArrangedSubview(headline)
+        let detail = label(rec.detail, font: BoardTheme.sansBody, color: BoardTheme.textMuted)
+        detail.attributedStringValue = BoardTheme.prose(
+            rec.detail, font: BoardTheme.sansBody, color: BoardTheme.textMuted)
         detail.maximumNumberOfLines = 3
         detail.lineBreakMode = .byWordWrapping
         detail.preferredMaxLayoutWidth = QuotaLayout.cardWidth - 32
@@ -148,12 +164,38 @@ public final class QuotaPanel: NSView {
         row.spacing = QuotaLayout.columnGap
         row.widthAnchor.constraint(equalToConstant: QuotaLayout.innerWidth).isActive = true
 
-        let name = label(model.label, font: BoardTheme.mono, color: BoardTheme.textPrimary)
-        name.widthAnchor.constraint(equalToConstant: QuotaLayout.providerWidth).isActive = true
-        row.addArrangedSubview(name)
+        row.addArrangedSubview(providerCell(model))
         row.addArrangedSubview(cell(for: model.fiveHour))
         row.addArrangedSubview(cell(for: model.weekly))
         return row
+    }
+
+    /// The provider column: the harness badge (visual identity, not a text name)
+    /// with the harness's current board load — "2 working" / "1 waiting" — under
+    /// it, so each pool's demand sits beside what's left of it.
+    private func providerCell(_ model: ProviderQuotaRow) -> NSView {
+        let cell = NSStackView()
+        cell.orientation = .vertical
+        cell.alignment = .leading
+        cell.spacing = 3
+        cell.widthAnchor.constraint(equalToConstant: QuotaLayout.providerWidth).isActive = true
+
+        if let agent = model.agent {
+            cell.addArrangedSubview(HarnessBadge(agent: agent))
+        } else {
+            cell.addArrangedSubview(label(model.label, font: BoardTheme.mono, color: BoardTheme.textPrimary))
+        }
+
+        let tally = model.agent.flatMap { tallies[$0] } ?? AgentTaskTally()
+        var lines: [String] = []
+        func addLine(_ text: String, color: NSColor) {
+            lines.append(text)
+            cell.addArrangedSubview(label(text, font: BoardTheme.sansTiny, color: color))
+        }
+        if tally.working > 0 { addLine("\(tally.working) working", color: BoardTheme.stateColor(.running)) }
+        if tally.waiting > 0 { addLine("\(tally.waiting) waiting", color: BoardTheme.attention) }
+        taskLines[model.label] = lines
+        return cell
     }
 
     private func cell(for slot: QuotaSlot) -> NSView {
@@ -179,16 +221,17 @@ public final class QuotaPanel: NSView {
         var result: [ProviderQuotaRow] = [
             ProviderQuotaRow(
                 label: "claude",
+                agent: .claude,
                 fiveHour: slot(interactive5h ?? interactive),
                 weekly: slot(interactiveWeekly ?? sdk)
             )
         ]
 
-        result.append(providerRow(label: "codex", gauges: gauges))
+        result.append(providerRow(label: "codex", agent: .codex, gauges: gauges))
         return result
     }
 
-    private func providerRow(label: String, gauges: [QuotaGauge]) -> ProviderQuotaRow {
+    private func providerRow(label: String, agent: CardAgent?, gauges: [QuotaGauge]) -> ProviderQuotaRow {
         let provider = label.lowercased()
         let providerGauges = gauges.filter { $0.provider.lowercased() == provider }
         let fiveHour = providerGauges.first { normalized($0.pool) == "\(provider)_5h" }
@@ -196,6 +239,7 @@ public final class QuotaPanel: NSView {
         let single = providerGauges.first { normalized($0.pool) == provider }
         return ProviderQuotaRow(
             label: provider,
+            agent: agent,
             fiveHour: fiveHour.map(QuotaSlot.gauge) ?? .placeholder(.empty),
             weekly: weekly.map(QuotaSlot.gauge) ?? slot(single)
         )
@@ -244,22 +288,34 @@ public final class QuotaPanel: NSView {
     }
 }
 
+/// Every text-carrying box tracks ``BoardTheme/boardFontScale`` — the fonts scale
+/// with the board zoom (default 1.2), so a fixed pixel width under them is exactly
+/// how "3 working" shipped clipped to "3 workir".
+@MainActor
 enum QuotaLayout {
-    static let cardWidth: CGFloat = 296
-    static let innerWidth: CGFloat = 264
-    static let providerWidth: CGFloat = 56
-    static let cellWidth: CGFloat = 94
+    static var panelWidth: CGFloat { cardWidth + 32 }
+    static var cardWidth: CGFloat { innerWidth + 32 }
+    static var innerWidth: CGFloat { providerWidth + cellWidth * 2 + columnGap * 2 }
+    static var providerWidth: CGFloat { scaled(56) }
+    static var cellWidth: CGFloat { scaled(94) }
     /// Bar (18) + spacing (4) + countdown line (~13). The percent moved inside the bar,
     /// so the cell lost a whole text row and gained a bar you can actually read.
-    static let cellHeight: CGFloat = 36
-    static let barHeight: CGFloat = 18
+    static var cellHeight: CGFloat { scaled(36) }
+    static var barHeight: CGFloat { scaled(18) }
     static let barCornerRadius: CGFloat = 5
     static let barTextInset: CGFloat = 7
-    static let columnGap: CGFloat = 10
+    static var columnGap: CGFloat { scaled(10) }
+
+    private static func scaled(_ size: CGFloat) -> CGFloat {
+        (size * BoardTheme.boardFontScale).rounded(.toNearestOrAwayFromZero)
+    }
 }
 
 private struct ProviderQuotaRow {
     let label: String
+    /// The harness this provider row's badge + load counts key on; `nil` renders
+    /// a plain text label (a provider with no board-card representation).
+    let agent: CardAgent?
     let fiveHour: QuotaSlot
     let weekly: QuotaSlot
 }

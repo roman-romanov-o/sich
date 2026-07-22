@@ -26,6 +26,10 @@ public final class PTYSession {
     /// without racing a live child's tty echo. nil by default.
     public var onInput: (([UInt8]) -> Void)?
 
+    /// Monotonically increasing evidence that terminal output changed. Semantic
+    /// detectors can use this to avoid formatting an unchanged screen every tick.
+    public private(set) var outputGeneration: UInt64 = 0
+
     private let argv: [String]
     private var rows: UInt16
     private var cols: UInt16
@@ -92,6 +96,7 @@ public final class PTYSession {
     /// required — so a semantic sniffer sees exactly what the terminal renders.
     public func ingest(_ bytes: [UInt8]) {
         guard !bytes.isEmpty else { return }
+        outputGeneration &+= 1
         if holdOutput {
             heldBytes += bytes
             heldByteCount = heldBytes.count
@@ -153,7 +158,7 @@ public final class PTYSession {
     /// Drain everything available right now (non-blocking) into the terminal.
     /// Requires ``setNonBlocking()`` first. `idle` = EAGAIN (child alive, quiet);
     /// `eof` = slave closed (Linux `read==0`, macOS `EIO`) or a real read error.
-    public func pumpAvailable(bufferSize: Int = 4096) -> PumpResult {
+    public func pumpAvailable(bufferSize: Int = 4096, maxBytes: Int = 65_536) -> PumpResult {
         var buf = [UInt8](repeating: 0, count: bufferSize)
         var total = 0
         while true {
@@ -161,6 +166,9 @@ public final class PTYSession {
             if n > 0 {
                 ingest(Array(buf[0..<n]))
                 total += n
+                // Bound one run-loop turn. A child that writes continuously must not
+                // keep the UI thread inside this drain indefinitely.
+                if total >= maxBytes { return .data(total) }
             } else if n == 0 {
                 return .eof                                  // Linux: slave closed
             } else if errno == EINTR {

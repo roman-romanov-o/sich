@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ghostling — Annunciator Panel (Proto B)</title>
+<style>
+  :root{
+    /* --- named palette (6) --- */
+    --panel:      #D6D2C7;  /* bone / putty warm pale gray body */
+    --panel-in:   #CDC9BD;  /* recessed instrument well */
+    --ink:        #17150F;  /* near-black engraving ink */
+    --label:      #56534A;  /* engraved silkscreen mid-gray */
+    --seam:       #B4AFA2;  /* hairline panel seams */
+    --green:      #2C7A3E;  /* signal green (RUN) — deep, not neon */
+    --amber:      #E6A011;  /* annunciator caution amber (waiting ONLY) */
+    /* dark annunciator faceplate + its lamp legends */
+    --face:       #1E1C17;
+    --face-seam:  #34302733;
+    --dormant:    #29261F;  /* unlit lamp cell */
+    --legend:     #96917F;  /* dim silkscreen legend on unlit lamp (kept AA-legible) */
+    /* flow identity (printed index marks only, never fills) */
+    --flowA:      #7A5FB8;  /* autonomous / saha */
+    --flowB:      #20A896;  /* interactive */
+  }
+
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{height:100%;}
+  body{
+    background:var(--panel);
+    color:var(--ink);
+    font-family:"IBM Plex Sans", system-ui, -apple-system, sans-serif;
+    font-size:14px;
+    line-height:1.3;
+    -webkit-font-smoothing:antialiased;
+    letter-spacing:.1px;
+  }
+  .mono{
+    font-family:"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    font-feature-settings:"tnum" 1, "zero" 1;
+    font-variant-numeric:tabular-nums;
+  }
+  /* engraved silkscreen label */
+  .eng{
+    font-family:"IBM Plex Sans", system-ui, sans-serif;
+    font-size:11px;
+    letter-spacing:1.4px;
+    text-transform:uppercase;
+    color:var(--label);
+    font-weight:600;
+  }
+
+  /* ===== outer panel — chrome kept quiet, generous margins ===== */
+  .deck{
+    height:100vh;
+    display:grid;
+    grid-template-rows:auto auto 1fr;
+    padding:22px 26px 20px;
+    gap:16px;
+  }
+
+  /* --- top brand rail (silent chrome) --- */
+  .rail{
+    display:flex; align-items:baseline; justify-content:space-between;
+    padding:0 2px;
+  }
+  .rail .brand{
+    font-size:12px; letter-spacing:2.2px; text-transform:uppercase;
+    font-weight:700; color:var(--ink);
+  }
+  .rail .brand span{color:var(--label); font-weight:600;}
+  .rail .clock{color:var(--label);}
+
+  /* ===================================================================
+     SIGNATURE — MASTER CAUTION ANNUNCIATOR STRIP
+     dark faceplate, rectangular lamp segments, one per running channel
+     =================================================================== */
+  .annun{
+    background:var(--face);
+    border:1px solid #0d0b08;
+    border-radius:2px;
+    display:flex;
+    align-items:stretch;
+    box-shadow:inset 0 0 0 1px #ffffff0a; /* flat inset seam only, no glow */
+    min-height:96px;
+    overflow:hidden;
+  }
+  /* left master-caution lamp block */
+  .master{
+    flex:0 0 172px;
+    display:flex; flex-direction:column; justify-content:center;
+    gap:6px;
+    padding:14px 16px;
+    border-right:1px solid #000;
+  }
+  .master .mc-word{
+    font-size:19px; letter-spacing:2px; font-weight:800; line-height:1.05;
+    color:#5a564a; text-transform:uppercase;
+  }
+  .master .mc-sub{ font-size:10.5px; letter-spacing:1.6px; color:#615c50; text-transform:uppercase;}
+  /* asserted master lamp */
+  body:not(.calm) .master{ background:var(--amber); }
+  body:not(.calm) .master .mc-word{ color:#241a00; }
+  body:not(.calm) .master .mc-sub{ color:#3a2c04; }
+
+  .segrow{ flex:1; display:flex; align-items:stretch; }
+  .seg{
+    flex:1 1 0;
+    border-left:1px solid #000;
+    padding:12px 14px;
+    background:var(--dormant);
+    display:flex; flex-direction:column; justify-content:space-between; gap:8px;
+    min-width:0;
+  }
+  .seg .seg-legend{
+    font-size:11px; letter-spacing:1.3px; text-transform:uppercase;
+    color:var(--legend); font-weight:600;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .seg .seg-state{
+    font-family:"IBM Plex Mono", ui-monospace, monospace;
+    font-size:11px; letter-spacing:.5px; color:#867F69;
+  }
+  .seg .seg-q{ display:none; }
+
+  /* the LIT segment — must dominate the whole screen */
+  .seg.lit{
+    flex:3 1 0;                 /* wider than dormant lamps */
+    background:var(--amber);
+    animation:caution 1.05s steps(1,end) infinite;
+    cursor:pointer;
+    justify-content:center; gap:6px;
+  }
+  .seg.lit .seg-legend{ color:#241a00; font-size:12px; letter-spacing:1.4px; font-weight:800;}
+  .seg.lit .seg-state{ color:#3a2c04; }
+  .seg.lit .seg-q{
+    display:block;
+    font-size:20px; font-weight:800; color:#1c1400; letter-spacing:.2px; line-height:1.08;
+  }
+  .seg.lit .seg-q .cmd{
+    font-family:"IBM Plex Mono", ui-monospace, monospace;
+    font-size:14px; font-weight:600; background:#00000014; padding:1px 5px; border-radius:2px;
+  }
+  .seg.lit .seg-age{
+    font-family:"IBM Plex Mono", ui-monospace, monospace;
+    font-size:12px; color:#3a2c04; font-weight:700;
+  }
+  @keyframes caution{ 0%,55%{ background:var(--amber);} 56%,100%{ background:#c9880a;} }
+  @media (prefers-reduced-motion: reduce){ .seg.lit{ animation:none; } }
+
+  /* calm mode: no caution, panel quiet but alive (no reassuring microcopy) */
+  body.calm .seg.lit{ animation:none; background:var(--dormant); flex:1 1 0; cursor:default;}
+  body.calm .seg.lit .seg-legend{ color:var(--legend); font-size:11px; letter-spacing:1.3px; font-weight:600;}
+  body.calm .seg.lit .seg-state{ color:#5b5647; }
+  body.calm .seg.lit .seg-q, body.calm .seg.lit .seg-age{ display:none; }
+  body.calm .master .mc-word::after{ content:""; }
+
+  /* ===================================================================
+     MAIN — board (3 columns) + capacity instrument cluster
+     =================================================================== */
+  .main{
+    display:grid;
+    grid-template-columns:1fr 318px;
+    gap:22px;
+    min-height:0;
+  }
+
+  .board{ display:grid; grid-template-columns:repeat(3,1fr); gap:18px; min-height:0;}
+  .col{ display:flex; flex-direction:column; min-height:0;}
+  .col-head{
+    display:flex; align-items:baseline; justify-content:space-between;
+    padding:0 2px 8px; margin-bottom:10px;
+    border-bottom:1px solid var(--seam);
+  }
+  .col-head .name{ font-size:12px; letter-spacing:2px; text-transform:uppercase; font-weight:700; color:var(--ink);}
+  .col-head .ct{ color:var(--label); font-size:13px;}
+  .col-body{ display:flex; flex-direction:column; gap:12px; overflow:auto; padding-bottom:6px;}
+
+  /* ---- monitored-channel card ---- */
+  .card{
+    background:var(--panel-in);
+    border:1px solid var(--seam);
+    border-radius:2px;
+    box-shadow:inset 1px 0 0 #ffffff55, inset -1px -1px 0 #00000010; /* physical inset seam, no drop shadow */
+    padding:11px 13px 12px 15px;
+    position:relative;
+    cursor:pointer;
+  }
+  .card::before{ /* printed flow index mark — thin, never a fill */
+    content:""; position:absolute; left:5px; top:11px; bottom:11px; width:2px;
+    background:var(--flowA);
+  }
+  .card.fb::before{ background:var(--flowB); }
+
+  .card-top{ display:flex; align-items:baseline; justify-content:space-between; gap:8px;}
+  .chid{ font-size:11px; letter-spacing:.5px; color:var(--label);}
+  /* printed status word in a fixed monospace slot */
+  .status{
+    font-family:"IBM Plex Mono", ui-monospace, monospace;
+    font-size:12px; font-weight:700; letter-spacing:1.5px;
+    min-width:46px; text-align:right;
+  }
+  .s-run{ color:var(--green);} .s-hold{ color:var(--label);}
+  .s-wait{ color:#9a6b00;} .s-done{ color:var(--label);}
+
+  .title{ font-size:14.5px; font-weight:600; margin:5px 0 9px; letter-spacing:.1px; line-height:1.2;}
+
+  .tel{ display:grid; grid-template-columns:52px 1fr; gap:2px 8px;}
+  .tel dt{ font-size:11px; letter-spacing:1px; text-transform:uppercase; color:var(--label); padding-top:1px;}
+  .tel dd{
+    font-family:"IBM Plex Mono", ui-monospace, monospace;
+    font-size:12.5px; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .flowtag{ font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; color:var(--flowA); font-weight:600;}
+  .card.fb .flowtag{ color:var(--flowB);}
+  .prog{ margin-top:9px; padding-top:8px; border-top:1px solid var(--seam);
+         font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12px; color:var(--ink);}
+  .prog .dim{ color:var(--label);}
+
+  /* waiting card — amber border, cross-refs annunciator */
+  .card.waiting{ border-color:var(--amber); box-shadow:inset 0 0 0 1px var(--amber);}
+  .card.waiting .prog{ color:#9a6b00; border-top-color:#e6a01155;}
+  .xref{ font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; color:#9a6b00; font-weight:700; letter-spacing:.5px;}
+  .card.done{ opacity:.82;}
+
+  /* ============ CAPACITY instrument cluster ============ */
+  .capacity{
+    background:var(--panel-in);
+    border:1px solid var(--seam);
+    border-radius:2px;
+    box-shadow:inset 1px 1px 0 #ffffff55, inset -1px -1px 0 #00000010;
+    padding:16px 18px 18px;
+    display:flex; flex-direction:column;
+    align-self:start;
+  }
+  .cluster-label{
+    font-size:11px; letter-spacing:2.4px; text-transform:uppercase; font-weight:700; color:var(--label);
+    border-bottom:1px solid var(--seam); padding-bottom:10px; margin-bottom:16px;
+    display:flex; justify-content:space-between;
+  }
+  .cluster-label .sub{ letter-spacing:1px; font-weight:600;}
+
+  .tape{ margin-bottom:16px;}
+  .tape-head{ display:flex; align-items:baseline; justify-content:space-between; margin-bottom:5px;}
+  .tape-name{ font-size:11px; letter-spacing:1.2px; text-transform:uppercase; color:var(--label); font-weight:600;}
+  .tape-read{ font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:15px; font-weight:700; color:var(--ink);}
+  .tape-read small{ font-size:11px; font-weight:600; color:var(--label);}
+  .track{
+    position:relative; height:14px; background:var(--panel);
+    border:1px solid var(--seam); border-radius:1px; overflow:hidden;
+    box-shadow:inset 0 1px 1px #00000012;
+  }
+  .fill{ position:absolute; top:0; bottom:0; left:0; background:var(--green);}
+  .fill.graphite{ background:#5e5a4e;}
+  /* engraved tick marks */
+  .track .ticks{ position:absolute; inset:0; background-image:repeating-linear-gradient(90deg,#0000 0 calc(10% - 1px), #00000022 calc(10% - 1px) 10%);}
+  .tape-foot{ display:flex; justify-content:space-between; margin-top:4px;
+    font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--label);}
+
+  .verdict{
+    margin-top:6px; padding-top:14px; border-top:1px solid var(--seam);
+  }
+  .verdict .v-label{ font-size:10.5px; letter-spacing:1.6px; text-transform:uppercase; color:var(--label); font-weight:600;}
+  .verdict .v-line{
+    font-family:"IBM Plex Mono",ui-monospace,monospace;
+    font-size:16px; font-weight:800; color:var(--green); letter-spacing:.3px; margin-top:5px;
+    display:flex; align-items:center; gap:8px;
+  }
+  .verdict .v-line::before{ content:""; width:9px; height:9px; background:var(--green); border-radius:1px; flex:0 0 auto;}
+  .verdict .v-note{ font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12px; color:var(--label); margin-top:6px;}
+
+  /* sim toggle — tiny, corner, not chrome noise */
+  .sim{ position:fixed; right:10px; bottom:8px; font-size:10px; letter-spacing:1px;
+        color:var(--label); background:transparent; border:1px solid var(--seam);
+        padding:3px 8px; border-radius:2px; cursor:pointer; text-transform:uppercase;}
+</style>
+</head>
+<body>
+<div class="deck">
+
+  <!-- silent chrome -->
+  <div class="rail">
+    <div class="brand">GHOSTLING <span>/ MISSION CONTROL</span></div>
+    <div class="rail-r eng clock mono" id="railStatus">6 CHANNELS · 1 CAUTION · 14:32:07</div>
+  </div>
+
+  <!-- ============ SIGNATURE: MASTER CAUTION ANNUNCIATOR ============ -->
+  <div class="annun" id="annun">
+    <div class="master">
+      <div class="mc-word">MASTER<br>CAUTION</div>
+      <div class="mc-sub" id="mcsub">NO CAUTION</div>
+    </div>
+    <div class="segrow">
+      <div class="seg"><div class="seg-legend">TASK-10 RELAY</div><div class="seg-state">RUN · 12m</div></div>
+      <div class="seg"><div class="seg-legend">PROGRESS.YAML</div><div class="seg-state">TEST · 4m</div></div>
+      <div class="seg"><div class="seg-legend">QUOTA PANEL</div><div class="seg-state">RUN · 2m</div></div>
+      <div class="seg lit" onclick="alert('Summon terminal: likec4 story pane')">
+        <div class="seg-legend">LIKEC4 STORY PANE · SAHAIDACHNY</div>
+        <div class="seg-q">APPROVE TOOL USE? <span class="cmd">write schema.sql</span></div>
+        <div class="seg-age">WAIT · 4m — CLAUDE HOLDING FOR APPROVAL</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ MAIN ============ -->
+  <div class="main">
+
+    <div class="board">
+      <!-- QUEUE -->
+      <div class="col">
+        <div class="col-head"><span class="name">Queue</span><span class="ct mono">02</span></div>
+        <div class="col-body">
+          <div class="card fb" onclick="">
+            <div class="card-top"><span class="chid mono">CH-411</span><span class="status s-hold">HOLD</span></div>
+            <div class="title">task-11 codex quota adapter</div>
+            <dl class="tel">
+              <dt>Repo</dt><dd>agentic-coding-kanban</dd>
+              <dt>Agent</dt><dd>codex <span class="flowtag">FLOW B</span></dd>
+              <dt>Branch</dt><dd>fix/badges</dd>
+            </dl>
+            <div class="prog"><span class="dim">queued</span></div>
+          </div>
+
+          <div class="card" onclick="">
+            <div class="card-top"><span class="chid mono">CH-118</span><span class="status s-hold">HOLD</span></div>
+            <div class="title">harness badge polish</div>
+            <dl class="tel">
+              <dt>Repo</dt><dd>agentic-coding-kanban</dd>
+              <dt>Agent</dt><dd>claude <span class="flowtag">FLOW A</span></dd>
+            </dl>
+            <div class="prog"><span class="dim">queued</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RUNNING -->
+      <div class="col">
+        <div class="col-head"><span class="name">Running</span><span class="ct mono">04</span></div>
+        <div class="col-body">
+
+          <!-- waiting channel: stays in RUNNING, amber, xrefs annunciator -->
+          <div class="card waiting" id="waitCard" onclick="alert('Summon terminal: likec4 story pane')">
+            <div class="card-top"><span class="chid mono">CH-201</span><span class="status s-wait" id="waitStatus">WAIT</span></div>
+            <div class="title">likec4 story pane</div>
+            <dl class="tel">
+              <dt>Repo</dt><dd>sahaidachny</dd>
+              <dt>Agent</dt><dd>claude <span class="flowtag">FLOW A</span></dd>
+            </dl>
+            <div class="prog" id="waitProg"><span class="xref">▲ SEE CAUTION</span> · approve tool use · 4m</div>
+          </div>
+
+          <div class="card" onclick="">
+            <div class="card-top"><span class="chid mono">CH-402</span><span class="status s-run">RUN</span></div>
+            <div class="title">task-10 remote env relay</div>
+            <dl class="tel">
+              <dt>Repo</dt><dd>agentic-coding-kanban</dd>
+              <dt>Agent</dt><dd>claude <span class="flowtag">FLOW A</span></dd>
+            </dl>
+            <div class="prog">12m · iter 3 · <span class="dim">editing</span> HookNormalizer.swift</div>
+          </div>
+
+          <div class="card" onclick="">
+            <div class="card-top"><span class="chid mono">CH-207</span><span class="status s-run">TEST</span></div>
+            <div class="title">progress.yaml writeback</div>
+            <dl class="tel">
+              <dt>Repo</dt><dd>sahaidachny</dd>
+              <dt>Agent</dt><dd>claude <span class="flowtag">FLOW A</span></dd>
+            </dl>
+            <div class="prog">running tests · 4m · <span class="dim">pytest</span> 34/40</div>
+          </div>
+
+          <div class="card fb" onclick="">
+            <div class="card-top"><span class="chid mono">CH-390</span><span class="status s-run">RUN</span></div>
+            <div class="title">quota panel clipping</div>
+            <dl class="tel">
+              <dt>Repo</dt><dd>agentic-coding-kanban</dd>
+              <dt>Agent</dt><dd>claude <span class="flowtag">FLOW B</span></dd>
+            </dl>
+            <div class="prog">2m · <span class="dim">swift test</span></div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- DONE -->
+      <div class="col">
+        <div class="col-head"><span class="name">Done</span><span class="ct mono">02</span></div>
+        <div class="col-body">
+          <div class="card done" onclick="">
+            <div class="card-top"><span class="chid mono">CH-142</span><span class="status s-done">DONE</span></div>
+            <div class="title">board font zoom</div>
+            <dl class="tel">
+              <dt>Repo</dt><dd>agentic-coding-kanban</dd>
+              <dt>Agent</dt><dd>claude <span class="flowtag">FLOW A</span></dd>
+            </dl>
+            <div class="prog">done · 1h · <span class="dim">142/142 green</span></div>
+          </div>
+
+          <div class="card done" onclick="">
+            <div class="card-top"><span class="chid mono">CH-133</span><span class="status s-done">DONE</span></div>
+            <div class="title">stop-event semantics</div>
+            <dl class="tel">
+              <dt>Repo</dt><dd>agentic-coding-kanban</dd>
+              <dt>Agent</dt><dd>claude <span class="flowtag">FLOW A</span></dd>
+            </dl>
+            <div class="prog">done · 3h · <span class="dim">merged</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ CAPACITY CLUSTER ============ -->
+    <div class="capacity">
+      <div class="cluster-label"><span>Capacity</span><span class="sub mono">3 POOLS</span></div>
+
+      <div class="tape">
+        <div class="tape-head"><span class="tape-name">Anthropic 5H</span>
+          <span class="tape-read">82<small>% LEFT</small></span></div>
+        <div class="track"><div class="fill" style="width:82%"></div><div class="ticks"></div></div>
+        <div class="tape-foot"><span>ROLLING 5H</span><span>RESET 02:14</span></div>
+      </div>
+
+      <div class="tape">
+        <div class="tape-head"><span class="tape-name">Anthropic WK</span>
+          <span class="tape-read">41<small>% LEFT</small></span></div>
+        <div class="track"><div class="fill graphite" style="width:41%"></div><div class="ticks"></div></div>
+        <div class="tape-foot"><span>WEEKLY CAP</span><span>RESET 3d</span></div>
+      </div>
+
+      <div class="tape">
+        <div class="tape-head"><span class="tape-name">Codex WK</span>
+          <span class="tape-read">86<small>% LEFT</small></span></div>
+        <div class="track"><div class="fill" style="width:86%"></div><div class="ticks"></div></div>
+        <div class="tape-foot"><span>WEEKLY CAP</span><span>RESET 5d</span></div>
+      </div>
+
+      <div class="verdict">
+        <div class="v-label">Computed verdict</div>
+        <div class="v-line">SAFE TO LAUNCH INTERACTIVE</div>
+        <div class="v-note">5h pool has headroom · route saha to Codex</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<button class="sim mono" onclick="document.body.classList.toggle('calm'); syncMc();">SIM: toggle caution</button>
+<script>
+  function syncMc(){
+    var calm = document.body.classList.contains('calm');
+    document.getElementById('mcsub').textContent = calm ? 'NO CAUTION' : '1 CHANNEL WAITING';
+    document.getElementById('railStatus').textContent = calm
+      ? '6 CHANNELS · NO CAUTION · 14:32:07' : '6 CHANNELS · 1 CAUTION · 14:32:07';
+    // keep the board coherent with the annunciator: CH-201 stops waiting when calm
+    var card=document.getElementById('waitCard');
+    var st=document.getElementById('waitStatus');
+    var pg=document.getElementById('waitProg');
+    if(calm){
+      card.classList.remove('waiting');
+      st.className='status s-run'; st.textContent='RUN';
+      pg.innerHTML='8m · <span class="dim">rendering</span> story-pane · likec4 build';
+    } else {
+      card.classList.add('waiting');
+      st.className='status s-wait'; st.textContent='WAIT';
+      pg.innerHTML='<span class="xref">▲ SEE CAUTION</span> · approve tool use · 4m';
+    }
+  }
+  // support ?state=calm for screenshotting
+  if (new URLSearchParams(location.search).get('state')==='calm'){ document.body.classList.add('calm'); }
+  syncMc();
+</script>
+</body>
+</html>

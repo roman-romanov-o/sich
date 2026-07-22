@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ghostling — paper terminal</title>
+<style>
+  :root{
+    /* Acme paper palette — 6 named inks */
+    --paper:      #FFFFEA;   /* pane background, Acme pale yellow */
+    --tag:        #EAFFFF;   /* tag bar / column header, Acme pale blue */
+    --ink:        #1A1A12;   /* dark ink text */
+    --ink-mute:   #6B6B5A;   /* muted metadata */
+    --rule:       #C7C7A8;   /* hairline rules on paper */
+    --rule-soft:  #DEDEC2;
+
+    /* state signals — appear ONLY as state */
+    --run:        #445F04;   /* deep terminal green = working */
+    --wait:       #C6350B;   /* warm red-orange = waiting on human */
+    --done:       #5A5A52;   /* graphite = done */
+    --idle:       #5F5F45;   /* ink-muted = queued/idle (AA on paper) */
+
+    /* flow identity — thin marker only */
+    --flow-saha:  #7A5FB8;   /* autonomous saha = violet */
+    --flow-int:   #20A896;   /* interactive = teal */
+
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --cell: 8.4px;   /* approx 1ch at our size, for reference */
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+
+  html,body{
+    background:#E4E4CF;                 /* desk behind the paper */
+    color:var(--ink);
+    font-family:var(--mono);
+    font-size:14px;
+    line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+    font-feature-settings:"liga" 0;     /* terminals don't ligate */
+  }
+
+  .screen{
+    width:100%;
+    max-width:1512px;
+    min-height:900px;
+    margin:0 auto;
+    background:var(--paper);
+    border:1px solid var(--rule);
+    display:flex;
+    flex-direction:column;
+  }
+
+  /* ───────────────────────── header / capacity readout ──────────────── */
+  header{
+    background:var(--tag);
+    border-bottom:1px solid var(--rule);
+    padding:6px 12px 7px;
+  }
+  .titlebar{
+    display:flex;
+    align-items:baseline;
+    gap:2ch;
+    border-bottom:1px solid var(--rule-soft);
+    padding-bottom:5px;
+    margin-bottom:6px;
+  }
+  .brand{ font-weight:700; letter-spacing:0.05ch; }
+  .brand b{ background:var(--ink); color:var(--tag); padding:0 0.6ch; }
+  .menu{ color:var(--ink-mute); }
+  .menu a{ color:var(--ink); text-decoration:none; }
+  .menu a:hover{ background:var(--ink); color:var(--tag); }
+  .titlebar .spacer{ flex:1; }
+  .clock{ color:var(--ink-mute); }
+
+  /* capacity — the two Anthropic pools never merged */
+  .capacity{
+    display:flex;
+    align-items:baseline;
+    gap:3ch;
+    font-size:13px;
+    white-space:nowrap;
+    flex-wrap:wrap;
+  }
+  .gauge{ color:var(--ink); }
+  .gauge .lbl{ color:var(--ink-mute); }
+  .bar{ letter-spacing:-0.05ch; }
+  .bar.ok{ color:var(--run); }
+  .bar.warn{ color:var(--wait); }
+  .verdict{ margin-left:auto; color:var(--run); }
+  .verdict b{ background:var(--run); color:var(--paper); padding:0 0.6ch; }
+
+  /* ───────────────────────── board ─────────────────────────────────── */
+  .board{
+    flex:1;
+    display:grid;
+    grid-template-columns:1fr 1fr 1fr 1fr;
+  }
+  .col{
+    border-left:1px solid var(--rule);
+    padding:0 10px 16px;
+    display:flex;
+    flex-direction:column;
+    min-width:0;
+  }
+  .col:first-child{ border-left:0; }
+
+  .colhead{
+    position:sticky; top:0;
+    background:var(--tag);
+    border-bottom:1px solid var(--rule);
+    margin:0 -10px 10px;
+    padding:5px 10px;
+    display:flex;
+    align-items:baseline;
+    gap:1ch;
+    font-weight:700;
+    letter-spacing:0.15ch;
+  }
+  .colhead .n{ color:var(--ink-mute); font-weight:400; }
+  .colhead.attn{ background:var(--wait); color:var(--paper); }
+  .colhead.attn .n{ color:var(--paper); }
+
+  /* ───────────────────────── card = mini terminal pane ─────────────── */
+  .card{
+    background:var(--paper);
+    border:1px solid var(--rule);
+    margin-bottom:12px;
+    cursor:pointer;
+    position:relative;
+  }
+  .card:hover{ border-color:var(--ink); }
+  .card:focus{ outline:2px solid var(--flow-int); outline-offset:-1px; }
+
+  /* left flow rule */
+  .card::before{
+    content:"";
+    position:absolute; left:0; top:0; bottom:0;
+    width:3px;
+  }
+  .card.flow-saha::before{ background:var(--flow-saha); }
+  .card.flow-int::before{ background:var(--flow-int); }
+
+  /* tag bar — Acme style, reverse-video state word */
+  .tagbar{
+    display:flex;
+    align-items:baseline;
+    gap:1ch;
+    background:var(--tag);
+    border-bottom:1px solid var(--rule);
+    padding:3px 8px 3px 10px;
+  }
+  .tagbar .title{ font-weight:700; flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tagbar .flowmark{ font-size:12px; }
+  .flow-saha .flowmark{ color:var(--flow-saha); }
+  .flow-int  .flowmark{ color:var(--flow-int); }
+
+  .state{
+    padding:0 0.7ch;
+    font-weight:700;
+    letter-spacing:0.05ch;
+    text-transform:uppercase;
+    font-size:12px;
+  }
+  .state.run{  background:var(--run);  color:var(--paper); }
+  .state.wait{ background:var(--wait); color:var(--paper); }
+  .state.done{ background:var(--done); color:var(--paper); }
+  .state.idle{ background:transparent; color:var(--idle); border:1px solid var(--idle); }
+
+  /* body = status lines */
+  .body{
+    padding:6px 8px 7px 10px;
+    font-size:13px;
+    line-height:1.45;
+  }
+  .meta{ color:var(--ink-mute); font-size:12px; margin-bottom:3px; }
+  .meta .repo{ color:var(--ink); }
+  .statusline{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .statusline .k{ color:var(--ink-mute); }
+  .statusline.run{ color:var(--run); }
+  .statusline.wait{ color:var(--wait); font-weight:700; }
+  .ok{ color:var(--run); }
+  .warn{ color:var(--wait); }
+
+  /* blinking block cursor on running cards */
+  .cursor{
+    display:inline-block;
+    width:1ch;
+    background:var(--run);
+    color:var(--run);
+    animation:blink 1.05s steps(1) infinite;
+  }
+  @keyframes blink{ 50%{ opacity:0; } }
+  @media (prefers-reduced-motion: reduce){
+    .cursor{ animation:none; }
+  }
+
+  /* the waiting card must dominate the board */
+  .card.waiting{
+    border:2px solid var(--wait);
+  }
+  .card.waiting .tagbar{ background:var(--wait); }
+  .card.waiting .tagbar .title{ color:var(--paper); }
+  .card.waiting .tagbar .flowmark{ color:var(--paper); }
+  .card.waiting::before{ display:none; }
+  .card.waiting .state.wait{ background:var(--paper); color:var(--wait); }
+  .card.waiting .prompt{
+    margin-top:5px;
+    border-top:1px dashed var(--rule);
+    padding-top:5px;
+    color:var(--wait);
+  }
+  .card.waiting .prompt b{ font-weight:700; }
+  .card.waiting .answer{ color:var(--ink-mute); margin-top:4px; letter-spacing:0.02ch; }
+  .card.waiting .answer u{ text-decoration:none; color:var(--ink); }
+  .card.waiting .answer .key{ background:var(--wait); color:var(--paper); padding:0 0.5ch; font-weight:700; }
+
+  /* empty column marker */
+  .empty{
+    color:var(--rule);
+    font-size:20px;
+    padding:6px 2px;
+    user-select:none;
+  }
+
+  /* done cards read quieter */
+  .card.is-done{ opacity:0.82; }
+  .card.is-done .tagbar{ background:var(--paper); border-bottom:1px solid var(--rule-soft); }
+
+  footer{
+    border-top:1px solid var(--rule);
+    background:var(--tag);
+    padding:4px 12px;
+    color:var(--ink-mute);
+    font-size:12px;
+    display:flex;
+    gap:3ch;
+  }
+  footer .spacer{ flex:1; }
+</style>
+</head>
+<body>
+<div class="screen">
+
+  <header>
+    <div class="titlebar">
+      <span class="brand"><b>ghostling</b> mission control</span>
+      <span class="menu"><a href="#">[board]</a> <a href="#">[+]</a> <a href="#">[−]</a> <a href="#">[filter: waiting]</a></span>
+      <span class="spacer"></span>
+      <span class="clock">6 sessions · 1 waiting · 14:22</span>
+    </div>
+    <div class="capacity">
+      <span class="gauge"><span class="lbl">anthropic 5h</span> <span class="bar ok">▮▮▮▮▮▮▮▮▯▯</span> 82% left <span class="lbl">· resets 2h14m</span></span>
+      <span class="gauge"><span class="lbl">anthropic wk</span> <span class="bar warn">▮▮▮▮▯▯▯▯▯▯</span> 41% left <span class="lbl">· resets 3d</span></span>
+      <span class="gauge"><span class="lbl">codex wk</span> <span class="bar ok">▮▮▮▮▮▮▮▮▮▯</span> 86% left</span>
+      <span class="verdict"><b>verdict</b> safe to launch interactive</span>
+    </div>
+  </header>
+
+  <div class="board">
+
+    <!-- ───────────── QUEUE ───────────── -->
+    <section class="col">
+      <div class="colhead">QUEUE <span class="n">2</span></div>
+
+      <article class="card flow-int" tabindex="0">
+        <div class="tagbar">
+          <span class="flowmark">◆</span>
+          <span class="title">task-11 codex quota adapter</span>
+          <span class="state idle">queued</span>
+        </div>
+        <div class="body">
+          <div class="meta"><span class="repo">agentic-coding-kanban</span> · codex</div>
+          <div class="statusline"><span class="k">branch</span> fix/badges <span class="k">· interactive flow</span></div>
+        </div>
+      </article>
+
+      <article class="card flow-saha" tabindex="0">
+        <div class="tagbar">
+          <span class="flowmark">❖</span>
+          <span class="title">harness badge polish</span>
+          <span class="state idle">queued</span>
+        </div>
+        <div class="body">
+          <div class="meta"><span class="repo">agentic-coding-kanban</span> · claude</div>
+          <div class="statusline"><span class="k">saha flow · awaiting slot</span></div>
+        </div>
+      </article>
+    </section>
+
+    <!-- ───────────── RUNNING ───────────── -->
+    <section class="col">
+      <div class="colhead">RUNNING <span class="n">3</span></div>
+
+      <article class="card flow-saha" tabindex="0">
+        <div class="tagbar">
+          <span class="flowmark">❖</span>
+          <span class="title">task-10 remote env relay</span>
+          <span class="state run">working</span>
+        </div>
+        <div class="body">
+          <div class="meta"><span class="repo">agentic-coding-kanban</span> · claude · saha flow</div>
+          <div class="statusline run">iter 3/5 · build <span class="ok">✓</span> · 12m</div>
+          <div class="statusline"><span class="k">editing</span> HookNormalizer.swift<span class="cursor">▉</span></div>
+        </div>
+      </article>
+
+      <article class="card flow-saha" tabindex="0">
+        <div class="tagbar">
+          <span class="flowmark">❖</span>
+          <span class="title">progress.yaml writeback</span>
+          <span class="state run">tests</span>
+        </div>
+        <div class="body">
+          <div class="meta"><span class="repo">sahaidachny</span> · claude · saha flow</div>
+          <div class="statusline run">running tests · pytest 34/40 · 4m</div>
+          <div class="statusline"><span class="k">test_progress_writeback.py</span><span class="cursor">▉</span></div>
+        </div>
+      </article>
+
+      <article class="card flow-int" tabindex="0">
+        <div class="tagbar">
+          <span class="flowmark">◆</span>
+          <span class="title">quota panel clipping</span>
+          <span class="state run">working</span>
+        </div>
+        <div class="body">
+          <div class="meta"><span class="repo">agentic-coding-kanban</span> · claude · interactive flow</div>
+          <div class="statusline run">swift test · 2m</div>
+          <div class="statusline"><span class="k">QuotaPanel.swift</span><span class="cursor">▉</span></div>
+        </div>
+      </article>
+    </section>
+
+    <!-- ───────────── NEEDS YOU ───────────── -->
+    <section class="col">
+      <div class="colhead attn">NEEDS YOU <span class="n">1</span></div>
+
+      <article class="card waiting flow-saha" tabindex="0">
+        <div class="tagbar">
+          <span class="flowmark">❖</span>
+          <span class="title">likec4 story pane</span>
+          <span class="state wait">waiting 4m</span>
+        </div>
+        <div class="body">
+          <div class="meta"><span class="repo">sahaidachny</span> · claude · saha flow</div>
+          <div class="statusline wait">approve tool use? (write schema.sql)</div>
+          <div class="prompt"><b>blocked on your call</b> · idle 4m, no progress until answered</div>
+          <div class="answer"><u><span class="key">y</span> approve</u>&nbsp;&nbsp;<u><span class="key">n</span> deny</u>&nbsp;&nbsp;<u><span class="key">↵</span> open session</u></div>
+        </div>
+      </article>
+    </section>
+
+    <!-- ───────────── DONE ───────────── -->
+    <section class="col">
+      <div class="colhead">DONE <span class="n">2</span></div>
+
+      <article class="card is-done flow-int" tabindex="0">
+        <div class="tagbar">
+          <span class="flowmark">◆</span>
+          <span class="title">board font zoom</span>
+          <span class="state done">done</span>
+        </div>
+        <div class="body">
+          <div class="meta"><span class="repo">agentic-coding-kanban</span> · claude</div>
+          <div class="statusline"><span class="k">1h ago ·</span> <span class="ok">142/142 green</span></div>
+        </div>
+      </article>
+
+      <article class="card is-done flow-saha" tabindex="0">
+        <div class="tagbar">
+          <span class="flowmark">❖</span>
+          <span class="title">stop-event semantics</span>
+          <span class="state done">done</span>
+        </div>
+        <div class="body">
+          <div class="meta"><span class="repo">agentic-coding-kanban</span> · claude</div>
+          <div class="statusline"><span class="k">3h ago ·</span> merged</div>
+        </div>
+      </article>
+    </section>
+
+  </div>
+
+  <footer>
+    <span>tab: cards · ↵: open session · esc: board · f: jump to waiting</span>
+    <span style="color:var(--flow-saha)">❖ saha</span>
+    <span style="color:var(--flow-int)">◆ interactive</span>
+    <span class="spacer"></span>
+    <span>suggest: <b>saha run</b> task-11 → spends codex wk (86% free)</span>
+  </footer>
+
+</div>
+</body>
+</html>

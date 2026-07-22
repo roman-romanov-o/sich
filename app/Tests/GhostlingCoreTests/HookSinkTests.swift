@@ -7,8 +7,8 @@ import Testing
 /// classifier,reconciler,registry}.py`, driven by an observe-only append-only file
 /// (DD-002). These pin the durable tail (offset/rotation/partial line), the
 /// `_HOOK_KIND` normalization + test-runner inference, the reconciler precedence +
-/// staleness sweep, and (TC-INT-324) full parity against the frozen Python detector
-/// on shared recorded sequences.
+/// stall guard (CARD-STATUS.md rule 2.1), and (TC-INT-324) parity against the
+/// recorded oracle scenarios (re-baselined to the CARD-STATUS.md contract).
 ///
 /// Harness rules (inherited): never spawns `claude -p`, never opens a port, never
 /// reads the real `~/.ghostling`. Every case builds its own event file under the
@@ -49,10 +49,10 @@ struct HookSinkTests {
         HookNormalizer.normalize(Data(json.utf8), arrival: arrival)
     }
 
-    // MARK: - TC-INT-320: append a Stop line → idle within one poll, NO server
+    // MARK: - TC-INT-320: append a Stop line → NEEDS YOU within one poll, NO server
 
-    @Test("TC-INT-320: append a Stop line → session clears running status within one poll, no server")
-    func appendStopLineMovesSessionToIdle() throws {
+    @Test("TC-INT-320: append a Stop line → session flips to NEEDS YOU within one poll, no server")
+    func appendStopLineMovesSessionToNeedsYou() throws {
         let file = makeEventsFile()
         defer { try? FileManager.default.removeItem(at: file) }
         let now = date("2026-06-16T12:00:00Z")
@@ -63,8 +63,9 @@ struct HookSinkTests {
         let store = HookSessionStore()
         store.ingest(tail.poll().compactMap { HookNormalizer.normalize($0, arrival: now) })
 
-        // Stop clears active status. Notification/permission hooks carry "needs input".
-        #expect(store.entry(for: "S")?.state == .idle)
+        // Stop = the turn ended and the agent awaits the operator (CARD-STATUS.md
+        // rule 3) — the attention signal the board exists for.
+        #expect(store.entry(for: "S")?.state == .waitingForInput)
     }
 
     // MARK: - TC-INT-321: _HOOK_KIND map parity (table)
@@ -119,25 +120,27 @@ struct HookSinkTests {
         let arrival = date("2026-06-16T12:00:00Z")
         let event = normalize(#"{"hook_event_name":"Stop","session_id":"S"}"#, arrival: arrival)
         #expect(event?.timestamp == arrival)
-        // Staleness then measures silence from arrival: still inside the threshold,
-        // not yet stale; past it, swept off running.
-        let store = HookSessionStore(staleThreshold: 30)
+        // The stall guard then measures silence from arrival: still inside the
+        // threshold, not yet stalled; past it, the guard flags it for attention.
+        let store = HookSessionStore(stallThreshold: 30)
         // Use a running signal stamped at arrival.
         let running = normalize(#"{"hook_event_name":"PreToolUse","session_id":"S"}"#, arrival: arrival)!
         store.ingest([running])
         store.sweepStale(now: arrival.addingTimeInterval(10))
         #expect(store.entry(for: "S")?.state == .running)
-        // The sweep lands an unreported running session in explicit unknown; what this
-        // case pins is the 30s arrival-relative edge.
+        // Past the threshold the stall guard routes the silent session to NEEDS YOU
+        // (CARD-STATUS.md rule 2.1); what this case pins is the arrival-relative edge.
         store.sweepStale(now: arrival.addingTimeInterval(31))
-        #expect(store.entry(for: "S")?.state == .unknown)
+        #expect(store.entry(for: "S")?.state == .waitingForInput)
     }
 
     // MARK: - TC-INT-324: reconciler precedence parity vs frozen Python oracle
 
-    /// Parity against the frozen detector oracle. Unknown stays explicit: silence or
-    /// unrecognized hooks must not be guessed into attention.
-    @Test("TC-INT-324: reconciled transition path + final state match the frozen Python detector")
+    /// Parity against the recorded oracle scenarios. The oracle was RE-BASELINED to
+    /// the CARD-STATUS.md contract (Stop → NEEDS YOU; silent stall → NEEDS YOU) when
+    /// the Swift store became authoritative — it pins the spec now, not the retired
+    /// Python detector's old semantics.
+    @Test("TC-INT-324: reconciled transition path + final state match the recorded oracle")
     func reconcilerParityWithFrozenPythonOracle() throws {
         let fixtures = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -145,7 +148,7 @@ struct HookSinkTests {
         let oracle = try OracleDetector.load(fixtures.appendingPathComponent("oracle-detector.json"))
 
         for scenario in oracle {
-            let store = HookSessionStore(staleThreshold: 30)
+            let store = HookSessionStore(stallThreshold: 30)
             store.ingest(loadScenario(scenario.fixture, in: fixtures))
             if let sweep = scenario.sweepAt { store.sweepStale(now: sweep) }
             let path = store.transitions(for: scenario.sessionID).map(\.rawValue)
@@ -190,11 +193,11 @@ struct HookSinkTests {
         #expect(state != .waitingForInput)
     }
 
-    // MARK: - TC-INT-326: silent past threshold → swept to unknown
+    // MARK: - TC-INT-326: silent past the stall threshold → NEEDS YOU (rule 2.1)
 
-    @Test("TC-INT-326: a session silent past the stale threshold is swept off running, not left running")
-    func silentPastThresholdSweptOffRunning() {
-        let store = HookSessionStore(staleThreshold: 30)
+    @Test("TC-INT-326: a session silent past the stall threshold moves to NEEDS YOU, not left running")
+    func silentPastThresholdStallsToNeedsYou() {
+        let store = HookSessionStore(stallThreshold: 30)
         let start = date("2026-06-16T12:00:00Z")
         let running = SignalEvent(kind: .toolUse, source: .hook, sessionID: "S", timestamp: start, cwd: "/repo")
         store.ingest([running])
@@ -203,38 +206,40 @@ struct HookSinkTests {
         // Within threshold: still running.
         store.sweepStale(now: start.addingTimeInterval(10))
         #expect(store.entry(for: "S")?.state == .running)
-        // Past threshold: explicit unknown, never a false attention or done claim.
+        // Past threshold: the stall guard routes attention (CARD-STATUS.md rule 2.1)
+        // — a silent WORKING loop is hung, stuck, or dead. Never a false done claim.
         store.sweepStale(now: start.addingTimeInterval(31))
         let final = store.entry(for: "S")?.state
-        #expect(final == .unknown)
+        #expect(final == .waitingForInput)
         #expect(final != .done)
         // The project dir established earlier survives the state-only sweep.
         #expect(store.entry(for: "S")?.projectDir == "/repo")
     }
 
-    @Test("TC-INT-326 guard: a terminal (done) session is never swept to unknown")
-    func terminalSessionNotSwept() {
-        let store = HookSessionStore(staleThreshold: 30)
+    @Test("TC-INT-326 guard: a closed session rests idle (resumable) and is never touched by the stall guard")
+    func closedSessionRestsNotSwept() {
+        let store = HookSessionStore(stallThreshold: 30)
         let start = date("2026-06-16T12:00:00Z")
-        // SessionEnd is the real terminal signal (the session closed); Stop is only a
-        // turn boundary. A closed session stays done through any later sweep.
+        // SessionEnd means the process closed — a RESUMABLE rest (`.idle`), never
+        // auto-`done` (DONE is manual-only, CARD-STATUS.md rule 4: restarts
+        // `claude --resume` the same id). At rest, sweeps leave it alone.
         store.ingest([SignalEvent(kind: .sessionEnd, source: .hook, sessionID: "S", timestamp: start)])
-        store.sweepStale(now: start.addingTimeInterval(120))
-        #expect(store.entry(for: "S")?.state == .done)
-    }
-
-    @Test("TC-INT-326 guard: an idle (Stop) session is never swept to unknown")
-    func idleSessionNotSwept() {
-        let store = HookSessionStore(staleThreshold: 30)
-        let start = date("2026-06-16T12:00:00Z")
-        store.ingest([SignalEvent(kind: .stop, source: .hook, sessionID: "S", timestamp: start)])
         store.sweepStale(now: start.addingTimeInterval(120))
         #expect(store.entry(for: "S")?.state == .idle)
     }
 
+    @Test("TC-INT-326 guard: a stopped (turn-end) session rests in NEEDS YOU through silence")
+    func stoppedSessionNotSwept() {
+        let store = HookSessionStore(stallThreshold: 30)
+        let start = date("2026-06-16T12:00:00Z")
+        store.ingest([SignalEvent(kind: .stop, source: .hook, sessionID: "S", timestamp: start)])
+        store.sweepStale(now: start.addingTimeInterval(120))
+        #expect(store.entry(for: "S")?.state == .waitingForInput)
+    }
+
     // MARK: - TC-INT-327: dropped / raced hooks reconcile correctly
 
-    @Test("TC-INT-327: a dropped Stop hook is recovered by a lower-precedence JSONL turn-completed → idle")
+    @Test("TC-INT-327: a dropped Stop hook is recovered by a lower-precedence JSONL turn-completed → NEEDS YOU")
     func droppedStopReconciledViaJSONL() {
         let store = HookSessionStore()
         let start = date("2026-06-16T12:00:00Z")
@@ -246,9 +251,9 @@ struct HookSinkTests {
         ]
         store.ingest(events)
         let final = store.entry(for: "S")?.state
-        // The recovered turn-end clears running; it does NOT stay stuck in running and
-        // does NOT claim attention without a notification.
-        #expect(final == .idle)
+        // The recovered turn-end lands the same place a live Stop would: the agent
+        // awaits the operator (CARD-STATUS.md rule 3), not stuck in running.
+        #expect(final == .waitingForInput)
         #expect(final != .running)
         #expect(store.transitions(for: "S").contains(.blocked) == false)
     }

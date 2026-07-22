@@ -1,8 +1,8 @@
 import AppKit
 import GhostlingCore
 
-/// A Mission Control v5 board card (US-003 AC#2): faint project line, big task
-/// title with an age stamp, and a dim meta footer naming the flow + agent. Done
+/// A Mission Control v5 board card (US-003 AC#2): project line with the
+/// harness badge top-right, then the task title with an age stamp. Done
 /// cards collapse to a compact ✓ row. Single responsibility: present one
 /// ``BoardCard``, report clicks for drill-in (US-002 AC#1), and act as the drag
 /// source for a manual column move. Board logic stays in `GhostlingCore`.
@@ -94,17 +94,17 @@ final class SessionCard: NSView, NSDraggingSource {
         }
     }
 
-    /// The full card face: project → title + age → meta.
+    /// The full card face: project + harness badge → title + age.
     private func buildFullCard() {
         stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
-        stack.addArrangedSubview(repoChip())
+        let header = headerRow()
+        stack.addArrangedSubview(header)
+        header.widthAnchor.constraint(
+            equalTo: stack.widthAnchor, constant: -28).isActive = true
         let title = titleRow()
         stack.addArrangedSubview(title)
         title.widthAnchor.constraint(
             equalTo: stack.widthAnchor, constant: -28).isActive = true
-        let meta = label(metaText, font: BoardTheme.sansTiny, color: BoardTheme.textDim)
-        stack.setCustomSpacing(8, after: title)
-        stack.addArrangedSubview(meta)
     }
 
     /// A DONE card is a compact row: ✓ + title over project, age on the right.
@@ -118,9 +118,11 @@ final class SessionCard: NSView, NSDraggingSource {
         text.orientation = .vertical
         text.alignment = .leading
         text.spacing = 2
-            text.addArrangedSubview(label(
-                card.title ?? BoardTheme.shortPath(card.projectDir),
-                font: NSFont.systemFont(ofSize: 13, weight: .medium), color: BoardTheme.textMuted))
+        let doneTitle = label(
+            card.title ?? BoardTheme.shortPath(card.projectDir),
+            font: NSFont.systemFont(ofSize: 13, weight: .medium), color: BoardTheme.textMuted)
+        doneTitle.yieldWidthToWindow(.defaultLow)   // longest text squeezes first
+        text.addArrangedSubview(doneTitle)
         if card.title != nil {
             text.addArrangedSubview(repoText(font: BoardTheme.sansTiny))
         }
@@ -138,13 +140,18 @@ final class SessionCard: NSView, NSDraggingSource {
         let row = NSStackView()
         row.alignment = .firstBaseline
         row.spacing = 8
-        let title = label(
-            card.title ?? BoardTheme.shortPath(card.projectDir),
-            font: BoardTheme.cardTitle, color: BoardTheme.textPrimary)
-        title.maximumNumberOfLines = 2
+        // An untitled (hook-observed) card shows its project-dir leaf dimmed, so
+        // a path never masquerades as a task name.
+        let titleColor: NSColor = card.title == nil ? BoardTheme.textMuted : BoardTheme.textPrimary
+        let title = NSTextField(labelWithAttributedString: BoardTheme.cardTitleText(
+            card.title ?? BoardTheme.shortPath(card.projectDir), color: titleColor))
+        // The card grows for a long title rather than cutting it off — but only
+        // to an extent: three lines, then truncation.
+        title.maximumNumberOfLines = 3
         title.lineBreakMode = .byTruncatingTail
         title.cell?.wraps = true
         title.cell?.truncatesLastVisibleLine = true
+        title.yieldWidthToWindow(.defaultLow)   // longest text squeezes first
         row.addArrangedSubview(title)
         row.addArrangedSubview(NSView())   // flexible spacer
         let ageColor: NSColor = card.state.needsAttention
@@ -155,11 +162,21 @@ final class SessionCard: NSView, NSDraggingSource {
         return row
     }
 
-    /// The dim footer: flow + agent, e.g. "terminal · Claude Code" / "autonomous ·
-    /// Claude Code". This is where the two-flow cue lives now (no more lane rows).
-    private var metaText: String {
-        let flow = card.flow == .a ? "autonomous" : "terminal"
-        return "\(flow) · \(card.agent.displayName)"
+    /// The top line: project identity left, harness badge in the top-right
+    /// corner. The flow is labelled only when it's the exception — a small
+    /// "auto" for an autonomous run; a terminal session (the default) carries
+    /// no flow text at all.
+    private func headerRow() -> NSView {
+        let row = NSStackView()
+        row.spacing = 6
+        row.alignment = .centerY
+        row.addArrangedSubview(repoChip())
+        row.addArrangedSubview(NSView())   // flexible spacer
+        if card.flow == .a {
+            row.addArrangedSubview(label("auto", font: BoardTheme.sansTiny, color: BoardTheme.textDim))
+        }
+        row.addArrangedSubview(HarnessBadge(agent: card.agent))
+        return row
     }
 
     /// Compact "12m" / "1h 04m" age from the card's last observation; empty when
@@ -179,6 +196,8 @@ final class SessionCard: NSView, NSDraggingSource {
         field.isBezeled = false
         field.drawsBackground = false
         field.isEditable = false
+        field.lineBreakMode = .byTruncatingTail
+        field.yieldWidthToWindow()
         return field
     }
 
@@ -186,17 +205,12 @@ final class SessionCard: NSView, NSDraggingSource {
         label(BoardTheme.projectLabel(card.projectDir), font: font, color: BoardTheme.repoColor(card.projectDir))
     }
 
+    /// The project line — colour alone carries the project identity (one coding
+    /// channel; the old fill+stroke+colour pill triple-coded it and made the
+    /// queue read as a wall of badges before any title).
     private func repoChip() -> NSTextField {
-        let chip = ChipLabel(text: BoardTheme.projectLabel(card.projectDir))
-        chip.font = BoardTheme.sansSmall
-        let color = BoardTheme.repoColor(card.projectDir)
-        chip.textColor = color
-        chip.wantsLayer = true
-        chip.themedBackground = color.withAlphaComponent(0.12)
-        chip.themedBorder = color.withAlphaComponent(0.34)
-        chip.layer?.borderWidth = 1
-        chip.layer?.cornerRadius = 5
-        return chip
+        label(BoardTheme.projectLabel(card.projectDir),
+              font: BoardTheme.chip, color: BoardTheme.repoColor(card.projectDir))
     }
 
     // MARK: - Drill-in (click) + drag (move) + rename (right-click)
@@ -251,7 +265,7 @@ final class SessionCard: NSView, NSDraggingSource {
 /// `NSView` with a *child* label does NOT paint reliably on this hand-painted
 /// dark UI (the iter-4 invisible-pill defect), so the chip IS the label.
 @MainActor
-final class ChipLabel: NSTextField {
+class ChipLabel: NSTextField {
     init(text: String) {
         super.init(frame: .zero)
         stringValue = text
@@ -259,6 +273,8 @@ final class ChipLabel: NSTextField {
         isEditable = false
         isSelectable = false
         drawsBackground = false   // the LAYER paints the fill
+        lineBreakMode = .byTruncatingTail
+        yieldWidthToWindow()
     }
 
     required init?(coder: NSCoder) { nil }

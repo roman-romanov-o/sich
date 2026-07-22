@@ -228,7 +228,7 @@ final class PlanningModeView: NSView {
     let reviewLeftField = NSTextField(labelWithString: "")
     let terminalStatusField = NSTextField(labelWithString: "")
     let railDraftField = NSTextField(labelWithString: "")
-    private let terminalFontControls = FontSizeControls(scope: .terminal)
+    private let terminalFontControls = FontSizeControls()
     /// The design's span-comment composer, scoped to the selected file. Editable —
     /// the one stock text field here; typing is not a custom-drawn interaction.
     let commentField = NSTextField()

@@ -6,17 +6,17 @@
         "running",
         "waiting-for-input",
         "running",
-        "idle"
+        "waiting-for-input"
       ],
-      "final_state": "idle"
+      "final_state": "waiting-for-input"
     },
     {
       "session_id": "sess-dropped",
       "transitions": [
         "running",
-        "idle"
+        "waiting-for-input"
       ],
-      "final_state": "idle"
+      "final_state": "waiting-for-input"
     },
     {
       "session_id": "sess-rapid",
@@ -29,9 +29,9 @@
       "session_id": "sess-silent",
       "transitions": [
         "running",
-        "unknown"
+        "waiting-for-input"
       ],
-      "final_state": "unknown"
+      "final_state": "waiting-for-input"
     }
   ]
 }

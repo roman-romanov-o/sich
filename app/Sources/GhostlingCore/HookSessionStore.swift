@@ -7,8 +7,10 @@ import Foundation
 /// agent-detected state; they share nothing but a name.
 ///
 /// `ingest(events:)` folds a (possibly bursty) signal stream into reconciled state
-/// using source precedence + sub-second coalescing; `sweepStale(now:)` decays a
-/// silent session to `unknown` at the same threshold as the Python `StateReconciler`.
+/// using source precedence + sub-second coalescing; `sweepStale(now:)` is the
+/// CARD-STATUS.md rule-2.1 stall guard: a WORKING session silent past the stall
+/// threshold moves to `waitingForInput` (NEEDS YOU) — a genuinely progressing agent
+/// emits *something*, so long silence means hung, stuck on a hidden prompt, or dead.
 /// The clock is always injected (`now:` / event timestamps) — the store never reads
 /// the wall clock, mirroring the Python `now=`/`clock=` seam (deterministic tests).
 public final class HookSessionStore {
@@ -41,13 +43,14 @@ public final class HookSessionStore {
     private static let sourceRank: [SignalSource: Int] = [.hook: 3, .jsonl: 2, .pty: 1]
 
     /// Resting states — the session is deliberately quiet, so silence after them is
-    /// NOT "stale" and must not decay to `unknown`. `idle` is a cleared status after
-    /// stop; `done`/`blocked` are terminal or action-blocked; `waitingForInput` is an
-    /// explicit notification/permission state.
-    private static let restingStates: Set<CardState> = [.idle, .done, .blocked, .waitingForInput]
+    /// NOT a stall and must not trip the guard. `idle`/`unknown` are at-rest (QUEUE);
+    /// `done`/`blocked` are terminal or action-blocked; `waitingForInput` already IS
+    /// the attention state the guard would move to.
+    private static let restingStates: Set<CardState> =
+        [.idle, .unknown, .done, .blocked, .waitingForInput]
 
     private let coalesceWindow: TimeInterval
-    private let staleThreshold: TimeInterval
+    private let stallThreshold: TimeInterval
 
     private var bySession: [String: Entry] = [:]
     private var projectDir: [String: String] = [:]
@@ -64,11 +67,13 @@ public final class HookSessionStore {
     /// - Parameters:
     ///   - coalesceWindow: sub-second burst window (default 1s, matching
     ///     `DEFAULT_COALESCE_WINDOW`).
-    ///   - staleThreshold: silence past which a session decays to `unknown`
-    ///     (default 30s, matching `DEFAULT_STALE_THRESHOLD`).
-    public init(coalesceWindow: TimeInterval = 1, staleThreshold: TimeInterval = 30) {
+    ///   - stallThreshold: WORKING silence past which the session is declared stalled
+    ///     and moves to `waitingForInput` (CARD-STATUS.md rule 2.1; default 10 min).
+    ///     A quiet subagent wait gets the same budget: subagent tool calls still fire
+    ///     hooks, so a genuinely progressing child resets the timer anyway.
+    public init(coalesceWindow: TimeInterval = 1, stallThreshold: TimeInterval = 600) {
         self.coalesceWindow = coalesceWindow
-        self.staleThreshold = staleThreshold
+        self.stallThreshold = stallThreshold
     }
 
     /// Every tracked session's current entry.
@@ -94,10 +99,12 @@ public final class HookSessionStore {
         }
     }
 
-    /// Decay every silent-past-threshold session to `unknown` against the injected
-    /// `now` (port of `StateReconciler.tick`, applied to all sessions on the board's
-    /// poll cadence — sweep-on-poll, no background timer). A positively terminal
-    /// state (`done`/`blocked`) is left untouched.
+    /// The stall guard (CARD-STATUS.md rule 2.1), applied to all sessions on the
+    /// board's poll cadence — sweep-on-poll, no background timer. A WORKING session
+    /// silent past `stallThreshold` moves to `waitingForInput` (NEEDS YOU): the
+    /// operator should look at a hung/stuck/dead loop. At-rest and terminal states
+    /// are left untouched, and any new observed event puts the session back to
+    /// WORKING through the normal classifier (which also resets the timer).
     public func sweepStale(now: Date) {
         for sessionID in bySession.keys {
             tick(sessionID: sessionID, now: now)
@@ -146,9 +153,10 @@ public final class HookSessionStore {
     private func tick(sessionID: String, now: Date) {
         guard let entry = bySession[sessionID], let last = lastEventAt[sessionID],
               !Self.restingStates.contains(entry.state) else { return }
-        if now.timeIntervalSince(last) > staleThreshold {
+        if now.timeIntervalSince(last) > stallThreshold {
             write(
-                sessionID: sessionID, state: Self.settled(prior: entry.state, next: .unknown),
+                sessionID: sessionID,
+                state: Self.settled(prior: entry.state, next: .waitingForInput),
                 at: now, projectDir: nil, cardID: nil, agent: nil
             )
         }
@@ -182,13 +190,15 @@ public final class HookSessionStore {
 
     /// Signals whose target state never depends on the prior state (port of `_ABSOLUTE`).
     private static let absolute: [SignalKind: CardState] = [
-        .sessionStart: .running,
         .toolUse: .running,
+        .subagentStart: .running,
         .permissionRequest: .waitingForInput,
         .testRunStart: .runningTests,
         .errorExit: .blocked,
-        .stop: .idle,
-        .sessionEnd: .done,   // the SESSION actually closed — the only real "done"
+        // Stop is the root turn boundary (CARD-STATUS.md rule 3): the agent finished
+        // its turn and is idle until the operator types — the attention signal the
+        // board exists for. Queue is reserved for work that has not started.
+        .stop: .waitingForInput,
         .staleTimeout: .unknown,
         .contradictorySignals: .unknown,
         .unknown: .unknown,
@@ -198,21 +208,38 @@ public final class HookSessionStore {
     /// resumes a waiting session to `running`; on any non-waiting prior it leaves the
     /// state untouched rather than guessing.
     private func classify(prior: CardState, event: SignalEvent) -> CardState {
-        if event.agent == .codex, event.kind == .sessionStart {
-            return .idle
-        }
-        if event.kind == .userInput {
+        switch event.kind {
+        case .sessionStart:
+            // NEUTRAL: launching an agent is not starting work (CARD-STATUS.md
+            // rule 1 — a created card auto-launches claude, and it must stay QUEUE
+            // until the first prompt). Claude also re-emits SessionStart mid-session
+            // on `--resume`, `/clear`, and compaction, so the prior must survive.
+            // A fresh session gets `currentState`'s at-rest default and still lands
+            // an entry (the write carries cwd + card binding).
+            return prior
+        case .subagentStop:
+            // NEUTRAL: a child finishing says nothing about the root turn — mid-run
+            // it is still running, and a straggler SubagentStop landing after the
+            // root Stop must not revive a waiting session to WORKING.
+            return prior
+        case .sessionEnd:
+            // The process exited — a RESUMABLE rest, not task-done. DONE is manual
+            // and board-owned only (CARD-STATUS.md rule 4): app restarts fire
+            // SessionEnd and then `claude --resume` the SAME session id, so a
+            // sticky store-level done would swallow every post-restart hook.
+            return Self.settled(prior: prior, next: .idle)
+        case .userInput:
             // A submitted prompt puts an at-rest session (fresh at its first prompt,
             // or awaiting your reply) to work; other priors are left untouched.
             return prior == .waitingForInput || prior == .idle ? .running : prior
+        default:
+            return Self.settled(prior: prior, next: Self.absolute[event.kind] ?? .unknown)
         }
-        return Self.settled(prior: prior, next: Self.absolute[event.kind] ?? .unknown)
     }
 
-    /// Preserve sticky terminal state, but do not infer attention from an at-rest
-    /// observation. This mirrors cmux's Claude hook integration: `Stop` clears the
-    /// running status, while `Notification`/permission hooks are the explicit
-    /// "needs input" signal for non-terminal sessions.
+    /// Preserve sticky terminal state (`done` is manual-and-sticky per CARD-STATUS.md
+    /// rule 4): a detector signal never overrides it; everything else takes the
+    /// classified `next`.
     private static func settled(prior: CardState, next: CardState) -> CardState {
         prior.detectorFallback ?? next
     }

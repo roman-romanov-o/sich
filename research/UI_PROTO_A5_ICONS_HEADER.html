@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ghostling — paper terminal · A5 icons + instrument bar</title>
+<style>
+  :root{
+    /* ── the five brand colors ── */
+    --alice:      #EDF5FC;   /* canvas / board material — cool porcelain */
+    --white:      #FFFFFF;   /* card body fill (lifts off the alice canvas) */
+    --powder:     #B8C5D6;   /* ALL structure: rules, borders, tracks */
+    --lilac:      #A39BA8;   /* muted / secondary (pure hue) */
+    --jet:        #272D2D;   /* primary ink · wordmark block · THE ALARM */
+    --emerald:    #23CE6B;   /* the single positive accent (fills) */
+
+    /* ── derived tints/shades (only within the five families + white) ── */
+    --powder-tint: #E3EAF2;  /* pale Powder Blue — title bars, col heads, tracks bg */
+    --powder-soft: #D6DFEA;  /* slightly deeper pale powder — footer / header strip */
+    --lilac-ink:   #6E6674;  /* darkened Lilac Ash — AA muted text at body size */
+    --emerald-ink: #0E7A3D;  /* darkened Emerald — AA green text (tallies, verdict) */
+
+    /* ── project inks: deep AA-safe shades within the palette families ── */
+    --proj-kanban: #274B73;  /* deep slate blue  (Powder Blue family) */
+    --proj-saha:   #6E3A6B;  /* deep plum/lilac  (Lilac Ash family) */
+    --proj-flow:   #10693F;  /* deep emerald     (Emerald family) */
+
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+
+  html,body{
+    background:#DCE6F1;                 /* desk behind the board */
+    color:var(--jet);
+    font-family:var(--mono);
+    font-size:14px;
+    line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+    font-feature-settings:"liga" 0;
+  }
+
+  .screen{
+    width:100%;
+    max-width:1512px;
+    min-height:900px;
+    margin:0 auto;
+    background:var(--alice);
+    border:1px solid var(--powder);
+    display:flex;
+    flex-direction:column;
+  }
+
+  /* ─────────────────── header = ONE composed instrument bar ─────────────
+     three zones on a single shallow strip, divided by powder hairlines:
+       [ left: wordmark · menu · stats ]  [ mid: verdict ]  [ right: quota ]
+     nothing is parked in a corner; the mid zone absorbs the old dead zone. */
+  header{
+    background:var(--powder-tint);
+    border-bottom:1px solid var(--powder);
+    display:flex;
+    align-items:stretch;
+    overflow:visible;
+  }
+  .hz{
+    display:flex;
+    flex-direction:column;
+    justify-content:center;
+    padding:7px 16px;
+  }
+  .hz.mid{
+    flex:1;
+    min-width:0;
+    align-items:center;
+    text-align:center;
+    border-left:1px solid var(--powder);
+  }
+  .hz.right{
+    border-left:1px solid var(--powder);
+    padding:6px 16px;
+  }
+
+  /* left zone */
+  .hz.left{ gap:5px; }
+  .titlebar{ display:flex; align-items:baseline; gap:2ch; }
+  .brand{ font-weight:700; letter-spacing:0.05ch; font-size:15px; }
+  .brand b{ background:var(--jet); color:var(--white); padding:0 0.6ch; }
+  .menu{ color:var(--lilac-ink); }
+  .menu a{ color:var(--jet); text-decoration:none; }
+  .menu a:hover{ background:var(--jet); color:var(--white); }
+  .clock{ color:var(--lilac-ink); font-size:13px; }
+  .clock b{ color:var(--jet); font-weight:700; }
+
+  /* mid zone — the verdict, one calm centered line filling the middle */
+  .verdict{ font-size:12.5px; color:var(--jet); line-height:1.45; }
+  .verdict .mark{ color:var(--emerald-ink); font-weight:700; }
+  .verdict .k{ color:var(--lilac-ink); }
+  .verdict .cmd{ font-weight:700; color:var(--jet); }
+
+  /* right zone — flat PROVIDER × WINDOW quota grid (providers side by side) */
+  .capflat{ display:flex; align-items:stretch; gap:13px; }
+  .pblock{ display:flex; flex-direction:column; gap:5px; justify-content:center; }
+  .prow{ display:flex; align-items:center; gap:9px; }
+  .pdiv{ align-self:stretch; width:1px; background:var(--powder); margin:3px 0; }
+
+  /* provider = icon chip (name on hover); session tally on its own line below */
+  .iconwrap{ position:relative; display:inline-flex; }
+  .pchip{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    width:22px; height:22px;
+    border:1px solid var(--powder);
+    background:var(--powder-tint);
+    cursor:default;
+  }
+  .pchip svg{ display:block; }
+  .tally{ font-size:11px; white-space:nowrap; line-height:1.15; padding-left:1px; }
+  .tally .work{ color:var(--emerald-ink); font-weight:700; }
+  .tally .wait{ color:var(--jet); font-weight:700; }
+  .tally .sep{ color:var(--lilac-ink); }
+  .tally .u{ color:var(--lilac-ink); }
+
+  /* hover label — reverse-video jet chip beside the icon */
+  .iconlabel{
+    position:absolute;
+    left:-1px; top:26px;
+    background:var(--jet);
+    color:var(--white);
+    font-size:11px;
+    padding:1px 6px;
+    letter-spacing:0.04ch;
+    white-space:nowrap;
+    opacity:0;
+    pointer-events:none;
+    z-index:20;
+  }
+  .iconwrap:hover .iconlabel,
+  .iconwrap.force-hover .iconlabel{ opacity:1; }
+
+  /* one metered cell = tiny window label + bar (%inside) + countdown */
+  .cell{ display:flex; flex-direction:column; gap:3px; }
+  .clabel{ font-size:11px; letter-spacing:0.12ch; color:var(--lilac-ink); }
+  .bar{
+    position:relative;
+    width:74px;
+    height:20px;
+    background:var(--powder-tint);
+    border:1px solid var(--powder);
+    overflow:hidden;
+  }
+  .bar .fill{
+    position:absolute; left:0; top:0; bottom:0;
+    background:var(--emerald);
+  }
+  .bar .pctin{
+    position:absolute; left:5px; top:50%;
+    transform:translateY(-50%);
+    font-size:12px; font-weight:700;
+    color:var(--jet);
+    letter-spacing:-0.02ch;
+    z-index:2;
+  }
+  .countdown{ font-size:10.5px; color:var(--lilac-ink); white-space:nowrap; }
+
+  /* empty window cell (codex has no 5h window) */
+  .bar.empty .none{
+    position:absolute; left:0; right:0; top:50%;
+    transform:translateY(-50%);
+    text-align:center; font-size:11px; color:var(--lilac);
+  }
+  .countdown.none{ color:var(--lilac); }
+
+  /* ───────────────────────── board (identical to A4) ────────────────── */
+  .board{
+    flex:1;
+    display:grid;
+    grid-template-columns:1fr 1fr 1fr 1fr;
+  }
+  .col{
+    border-left:1px solid var(--powder);
+    padding:0 10px 16px;
+    display:flex;
+    flex-direction:column;
+    min-width:0;
+  }
+  .col:first-child{ border-left:0; }
+
+  .colhead{
+    position:sticky; top:0;
+    background:var(--powder-tint);
+    border-bottom:1px solid var(--powder);
+    margin:0 -10px 12px;
+    padding:6px 10px;
+    display:flex;
+    align-items:baseline;
+    gap:1ch;
+    font-weight:700;
+    letter-spacing:0.15ch;
+    color:var(--jet);
+  }
+  .colhead .n{ color:var(--lilac-ink); font-weight:400; }
+  .colhead.attn{ background:var(--jet); color:var(--white); border-bottom:1px solid var(--jet); }
+  .colhead.attn .n{ color:var(--white); }
+
+  /* ───────────────────────── card (identical to A4) ─────────────────── */
+  .card{
+    background:var(--white);
+    border:1px solid var(--powder);
+    margin-bottom:12px;
+    cursor:pointer;
+    position:relative;
+    padding-left:4px;
+  }
+  .card:hover{ border-color:var(--jet); }
+  .card:focus{ outline:2px solid var(--jet); outline-offset:-1px; }
+
+  .card::before{
+    content:"";
+    position:absolute; left:0; top:0; bottom:0;
+    width:4px;
+  }
+  .card.proj-kanban::before{ background:var(--proj-kanban); }
+  .card.proj-saha::before{   background:var(--proj-saha); }
+  .card.proj-flow::before{   background:var(--proj-flow); }
+
+  .tagbar{
+    background:var(--powder-tint);
+    border-bottom:1px solid var(--powder);
+    padding:5px 10px;
+  }
+  .tagbar .title{
+    font-weight:700;
+    font-size:15px;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    display:block;
+  }
+
+  .body{
+    padding:6px 10px 8px;
+    font-size:13px;
+    line-height:1.5;
+  }
+  .projline{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .projname{ font-weight:700; }
+  .proj-kanban .projname{ color:var(--proj-kanban); }
+  .proj-saha   .projname{ color:var(--proj-saha); }
+  .proj-flow   .projname{ color:var(--proj-flow); }
+  .body .mute{ color:var(--lilac-ink); }
+  .body .ok{ color:var(--emerald-ink); font-weight:700; }
+
+  .card.waiting{
+    background:var(--jet);
+    border:2px solid var(--jet);
+    padding-left:0;
+  }
+  .card.waiting::before{ display:none; }
+  .card.waiting .tagbar{
+    background:var(--jet);
+    border-bottom:1px solid #4A5252;
+    display:flex; align-items:baseline; gap:1ch;
+  }
+  .card.waiting .tagbar .title{ color:var(--white); flex:1; }
+  .card.waiting .state{
+    border:1px solid var(--white);
+    color:var(--white);
+    font-weight:700;
+    letter-spacing:0.06ch;
+    padding:0 0.6ch;
+    font-size:12px;
+    white-space:nowrap;
+  }
+  .card.waiting .body{ color:var(--alice); }
+  .card.waiting .projline .projname{ color:#C9A6C6; }
+  .card.waiting .projline .mute{ color:#9AA3A3; }
+  .card.waiting .prompt{
+    margin-top:7px;
+    border-top:1px solid #4A5252;
+    padding-top:7px;
+    color:var(--white);
+    font-weight:700;
+  }
+  .card.waiting .answer{ margin-top:7px; letter-spacing:0.02ch; color:var(--alice); }
+  .card.waiting .answer u{ text-decoration:none; }
+  .card.waiting .answer .key{
+    background:var(--white); color:var(--jet);
+    padding:0 0.5ch; font-weight:700;
+  }
+
+  .card.is-done{ opacity:0.82; }
+  .card.is-done .tagbar{ background:var(--white); border-bottom:1px solid var(--powder-tint); }
+  .card.is-done .projline{ white-space:normal; overflow:visible; }
+  .card.is-done .projname{ color:var(--lilac-ink); }
+
+  .empty{ color:var(--powder); font-size:20px; padding:6px 2px; user-select:none; }
+
+  footer{
+    border-top:1px solid var(--powder);
+    background:var(--powder-tint);
+    padding:6px 14px;
+    color:var(--lilac-ink);
+    font-size:13px;
+    display:flex;
+    gap:3ch;
+    align-items:baseline;
+  }
+  footer .spacer{ flex:1; }
+  footer b{ color:var(--jet); }
+  footer .mark{ color:var(--emerald-ink); font-weight:700; }
+</style>
+</head>
+<body>
+<div class="screen">
+
+  <header>
+    <!-- ── left zone: wordmark · menu · stats ── -->
+    <div class="hz left">
+      <div class="titlebar">
+        <span class="brand"><b>ghostling</b> mission control</span>
+        <span class="menu"><a href="#">[board]</a> <a href="#">[+]</a> <a href="#">[−]</a></span>
+      </div>
+      <div class="clock"><b>6</b> sessions · <b>1</b> waiting · 14:22</div>
+    </div>
+
+    <!-- ── mid zone: verdict, centered, absorbs the old dead zone ── -->
+    <div class="hz mid">
+      <div class="verdict">
+        <span class="mark">verdict:</span> safe to launch interactive <span class="k">· heavy →</span> <span class="cmd">codex</span>
+      </div>
+    </div>
+
+    <!-- ── right zone: flat PROVIDER × WINDOW quota grid ── -->
+    <div class="hz right">
+      <div class="capflat">
+
+        <!-- anthropic -->
+        <div class="pblock">
+          <div class="prow">
+            <span class="iconwrap">
+              <span class="pchip" title="anthropic" aria-label="anthropic">
+                <svg width="16" height="16" viewBox="0 0 22 22" aria-hidden="true">
+                  <g stroke="#272D2D" stroke-width="1.6" fill="none">
+                    <line x1="11" y1="2.5" x2="11" y2="8.5"/>
+                    <line x1="11" y1="13.5" x2="11" y2="19.5"/>
+                    <line x1="2.5" y1="11" x2="8.5" y2="11"/>
+                    <line x1="13.5" y1="11" x2="19.5" y2="11"/>
+                    <line x1="5" y1="5" x2="9.2" y2="9.2"/>
+                    <line x1="12.8" y1="12.8" x2="17" y2="17"/>
+                    <line x1="17" y1="5" x2="12.8" y2="9.2"/>
+                    <line x1="9.2" y1="12.8" x2="5" y2="17"/>
+                  </g>
+                </svg>
+              </span>
+              <span class="iconlabel">anthropic</span>
+            </span>
+            <div class="cell">
+              <span class="clabel">5H</span>
+              <span class="bar"><span class="fill" style="width:82%"></span><span class="pctin">82%</span></span>
+              <span class="countdown">in 2h 14m</span>
+            </div>
+            <div class="cell">
+              <span class="clabel">WEEKLY</span>
+              <span class="bar"><span class="fill" style="width:41%"></span><span class="pctin">41%</span></span>
+              <span class="countdown">in 3d</span>
+            </div>
+          </div>
+          <div class="tally"><span class="work">2 working</span> <span class="sep">·</span> <span class="wait">1</span> <span class="u">waiting</span></div>
+        </div>
+
+        <div class="pdiv"></div>
+
+        <!-- codex -->
+        <div class="pblock">
+          <div class="prow">
+            <span class="iconwrap">
+              <span class="pchip" title="codex" aria-label="codex">
+                <svg width="16" height="16" viewBox="0 0 22 22" aria-hidden="true">
+                  <g stroke="#272D2D" stroke-width="1.5" fill="none" stroke-linejoin="miter">
+                    <polygon points="11,2.6 18,6.8 18,15.2 11,19.4 4,15.2 4,6.8"/>
+                    <polygon points="11,7.2 14.4,9.1 14.4,12.9 11,14.8 7.6,12.9 7.6,9.1"/>
+                  </g>
+                  <circle cx="11" cy="11" r="1.15" fill="#272D2D"/>
+                </svg>
+              </span>
+              <span class="iconlabel">codex</span>
+            </span>
+            <div class="cell">
+              <span class="clabel">5H</span>
+              <span class="bar empty"><span class="none">—</span></span>
+              <span class="countdown none">no 5h window</span>
+            </div>
+            <div class="cell">
+              <span class="clabel">WEEKLY</span>
+              <span class="bar"><span class="fill" style="width:86%"></span><span class="pctin">86%</span></span>
+              <span class="countdown">in 5d 12h</span>
+            </div>
+          </div>
+          <div class="tally"><span class="work">1 working</span></div>
+        </div>
+
+      </div>
+    </div>
+  </header>
+
+  <div class="board">
+
+    <!-- ───────────── QUEUE ───────────── -->
+    <section class="col">
+      <div class="colhead">QUEUE <span class="n">2</span></div>
+
+      <article class="card proj-kanban" tabindex="0">
+        <div class="tagbar"><span class="title">Codex quota adapter</span></div>
+        <div class="body">
+          <div class="projline"><span class="projname">agentic-coding-kanban</span> <span class="mute">· codex · fix/badges</span></div>
+        </div>
+      </article>
+
+      <article class="card proj-kanban" tabindex="0">
+        <div class="tagbar"><span class="title">Harness badge polish</span></div>
+        <div class="body">
+          <div class="projline"><span class="projname">agentic-coding-kanban</span> <span class="mute">· claude</span></div>
+        </div>
+      </article>
+    </section>
+
+    <!-- ───────────── RUNNING ───────────── -->
+    <section class="col">
+      <div class="colhead">RUNNING <span class="n">3</span></div>
+
+      <article class="card proj-kanban" tabindex="0">
+        <div class="tagbar"><span class="title">Remote env relay</span></div>
+        <div class="body">
+          <div class="projline"><span class="projname">agentic-coding-kanban</span> <span class="mute">· claude</span></div>
+        </div>
+      </article>
+
+      <article class="card proj-saha" tabindex="0">
+        <div class="tagbar"><span class="title">Progress writeback</span></div>
+        <div class="body">
+          <div class="projline"><span class="projname">sahaidachny</span> <span class="mute">· claude</span></div>
+        </div>
+      </article>
+
+      <article class="card proj-flow" tabindex="0">
+        <div class="tagbar"><span class="title">Pomodoro card tagging</span></div>
+        <div class="body">
+          <div class="projline"><span class="projname">macos-flow</span> <span class="mute">· claude</span></div>
+        </div>
+      </article>
+    </section>
+
+    <!-- ───────────── NEEDS YOU ───────────── -->
+    <section class="col">
+      <div class="colhead attn">NEEDS YOU <span class="n">1</span></div>
+
+      <article class="card waiting proj-saha" tabindex="0">
+        <div class="tagbar">
+          <span class="title">Story pane reader</span>
+          <span class="state">WAITING 4M</span>
+        </div>
+        <div class="body">
+          <div class="projline"><span class="projname">sahaidachny</span> <span class="mute">· claude</span></div>
+          <div class="prompt">approve tool use? (write schema.sql)</div>
+          <div class="answer"><u><span class="key">y</span> approve</u>&nbsp;&nbsp;<u><span class="key">n</span> deny</u>&nbsp;&nbsp;<u><span class="key">↵</span> open session</u></div>
+        </div>
+      </article>
+    </section>
+
+    <!-- ───────────── DONE ───────────── -->
+    <section class="col">
+      <div class="colhead">DONE <span class="n">2</span></div>
+
+      <article class="card is-done proj-kanban" tabindex="0">
+        <div class="tagbar"><span class="title">Board font zoom</span></div>
+        <div class="body">
+          <div class="projline"><span class="projname">agentic-coding-kanban</span> <span class="mute">· 1h ago ·</span> <span class="ok">142/142 green</span></div>
+        </div>
+      </article>
+
+      <article class="card is-done proj-kanban" tabindex="0">
+        <div class="tagbar"><span class="title">Stop-event semantics</span></div>
+        <div class="body">
+          <div class="projline"><span class="projname">agentic-coding-kanban</span> <span class="mute">· 3h ago · merged</span></div>
+        </div>
+      </article>
+    </section>
+
+  </div>
+
+  <footer>
+    <span>tab: cards · ↵: open session · esc: board · f: jump to waiting</span>
+    <span class="spacer"></span>
+    <span>suggest: <b>saha run codex-quota-adapter</b> <span class="mark">→</span> spends codex wk (86% free)</span>
+  </footer>
+
+</div>
+</body>
+</html>

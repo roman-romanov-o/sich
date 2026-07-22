@@ -62,4 +62,60 @@ struct HookNormalizerTests {
         store.ingest([event])
         #expect(store.entry(for: "C")?.state == .waitingForInput)
     }
+
+    @Test func codexSubagentLifecycleStaysWorkingUntilRootStop() throws {
+        func codex(_ name: String, at offset: TimeInterval) throws -> SignalEvent {
+            try #require(normalize(
+                #"{"hook_event_name":"\#(name)","ghostling_agent":"codex","session_id":"C","timestamp":\#(arrival.timeIntervalSince1970 + offset)}"#
+            ))
+        }
+
+        let store = HookSessionStore(stallThreshold: 600)
+        store.ingest([try codex("UserPromptSubmit", at: 0)])
+        store.ingest([try codex("SubagentStart", at: 2)])
+        #expect(store.entry(for: "C")?.state == .running)
+
+        // The main agent can be silent while it waits for the child, then while it
+        // collects that result. Within the stall budget neither interval is a
+        // user-facing wait (CARD-STATUS.md rule 2: waiting-for-subagent is WORKING).
+        store.sweepStale(now: arrival.addingTimeInterval(120))
+        #expect(store.entry(for: "C")?.state == .running)
+        store.ingest([try codex("SubagentStop", at: 121)])
+        store.sweepStale(now: arrival.addingTimeInterval(240))
+        #expect(store.entry(for: "C")?.state == .running)
+
+        store.ingest([try codex("Stop", at: 241)])
+        #expect(store.entry(for: "C")?.state == .waitingForInput)
+        #expect(store.entry(for: "C")?.state.needsAttention == true)
+
+        store.ingest([try codex("UserPromptSubmit", at: 242)])
+        #expect(store.entry(for: "C")?.state == .running)
+    }
+
+    /// The subagent-turn quiet budget is BOUNDED by the stall guard: if the root
+    /// Stop is lost (crash / dropped hook / truly hung child), the card cannot stay
+    /// pinned to WORKING forever — past the stall threshold it routes to NEEDS YOU
+    /// (CARD-STATUS.md rule 2.1: a genuinely progressing child fires its own tool
+    /// hooks, which reset the timer).
+    @Test func subagentTurnStillRecoversWhenRootStopIsLost() throws {
+        func codex(_ name: String, at offset: TimeInterval) throws -> SignalEvent {
+            try #require(normalize(
+                #"{"hook_event_name":"\#(name)","ghostling_agent":"codex","session_id":"C","timestamp":\#(arrival.timeIntervalSince1970 + offset)}"#
+            ))
+        }
+
+        // Fast, deterministic clock: a 10s stall budget instead of the default 10 min.
+        let store = HookSessionStore(stallThreshold: 10)
+        store.ingest([try codex("UserPromptSubmit", at: 0)])
+        store.ingest([try codex("SubagentStart", at: 1)])
+        #expect(store.entry(for: "C")?.state == .running)
+
+        // Within the stall budget: still WORKING.
+        store.sweepStale(now: arrival.addingTimeInterval(6))
+        #expect(store.entry(for: "C")?.state == .running)
+
+        // Root Stop never arrives. Past the budget the stall guard routes attention.
+        store.sweepStale(now: arrival.addingTimeInterval(20))
+        #expect(store.entry(for: "C")?.state == .waitingForInput)
+    }
 }

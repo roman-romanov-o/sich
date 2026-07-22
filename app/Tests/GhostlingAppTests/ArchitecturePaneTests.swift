@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import GhostlingCore
 import Testing
+import WebKit
 
 @testable import GhostlingApp
 
@@ -90,5 +91,31 @@ struct ArchitecturePaneTests {
         #expect(!view.architecturePane.isHidden)
         try click()
         #expect(view.architecturePane.isHidden)
+    }
+
+    /// LikeC4's details card ellipsizes long single-value `metadata` entries to one nowrap
+    /// line with no expand affordance, so decision rationale was unreadable. The pane's
+    /// webview configuration injects a scoped wrap override; this loads real HTML shaped
+    /// like the card (dialog > tabpanel > truncated value) into a live WKWebView and
+    /// asserts the computed style actually flips to wrapping.
+    @Test func injectedStylesheetUnclampsMetadataValues() async throws {
+        let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 400, height: 300),
+                            configuration: ArchitecturePane.makeConfiguration())
+        web.loadHTMLString("""
+            <dialog open><div role="tabpanel">
+                <div id="v" class="white-space_nowrap"
+                     style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+                    a very long metadata paragraph that must wrap to stay readable
+                </div>
+            </div></dialog>
+            """, baseURL: nil)
+        var whiteSpace: String?
+        for _ in 0..<100 {
+            whiteSpace = try? await web.evaluateJavaScript(
+                "getComputedStyle(document.getElementById('v')).whiteSpace") as? String
+            if whiteSpace == "pre-wrap" { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(whiteSpace == "pre-wrap")
     }
 }

@@ -104,4 +104,33 @@ struct SessionsFeedTests {
         #expect(snapshot.contains { $0.sessionID == "B" },
                 "the read must have fired because the FS-watch fired (backstop disabled)")
     }
+
+    // MARK: - Batch arrival stamping: file order decides a coalesced burst
+
+    /// Hook payloads carry no timestamp, so a whole poll batch used to share one
+    /// arrival stamp — the burst's tie-break then kept the FIRST event (`max(by:)`
+    /// on all-equal), letting a SubagentStop hide the Notification written after it.
+    /// `normalize` must stamp lines strictly increasing in file order so the
+    /// LAST-written event of a same-rank burst is dominant.
+    @Test func batchStampsPreserveFileOrderSoLastEventWins() {
+        let lines = [
+            Data(#"{"hook_event_name":"SubagentStop","session_id":"s"}"#.utf8),
+            Data(#"{"hook_event_name":"Notification","session_id":"s"}"#.utf8),
+        ]
+        let arrival = Date(timeIntervalSince1970: 1_750_000_000)
+        let events = SessionsFeed.normalize(lines, arrival: arrival)
+
+        #expect(events.count == 2)
+        #expect(events[0].timestamp < events[1].timestamp,
+                "each line must carry a strictly increasing stamp in file order")
+
+        // End-to-end through the reconciler: the whole batch coalesces into one
+        // burst, and the LAST-written Notification must decide it — with equal
+        // stamps the neutral SubagentStop would win and the attention signal
+        // would vanish.
+        let store = HookSessionStore(stallThreshold: 600)
+        store.ingest(events)
+        #expect(store.entry(for: "s")?.state == .waitingForInput,
+                "the last event of the batch (Notification) must be dominant")
+    }
 }

@@ -16,11 +16,11 @@ enum SystemNotifier {
         deliver(title: title, body: body, category: "attention")
     }
 
-    /// Fire when a task's agent finishes (rising edge into DONE). Names the task so
-    /// the operator knows which of several parallel sessions completed.
+    /// Fire on a task's manual transition into DONE. Names the task so the operator
+    /// knows which of several parallel tasks was completed.
     static func notifyDone(taskName: String) {
         deliver(title: "✅ Task done — \(taskName)",
-                body: "The agent finished. Review the changes when you're ready.",
+                body: "The task was marked complete.",
                 category: "done")
     }
 

@@ -1,5 +1,6 @@
 #include "pty_support.h"
 
+#include <stdlib.h>      // setenv
 #include <unistd.h>
 #include <sys/ioctl.h>   // TIOCSWINSZ
 
@@ -20,7 +21,18 @@ int gl_spawn_in_pty(char *const argv[],
         return -1;
     }
     if (pid == 0) {
-        // Child: only async-signal-safe calls until exec.
+        // Child: this app IS the terminal emulator, so it must define the terminal
+        // it presents instead of laundering whatever env it was launched with. An
+        // app started outside a terminal (Finder, `open`, Xcode) has no TERM at
+        // all, which silently disables zsh's line editor (backspace echoes as a
+        // literal byte) and strips color from every capability-checking CLI.
+        setenv("TERM", "xterm-256color", 1);
+        setenv("COLORTERM", "truecolor", 1);
+        // Same Finder-launch hole for locale: no LANG means "C" (multibyte off),
+        // which garbles every TUI's box-drawing. Respect an inherited locale.
+        if (getenv("LANG") == NULL) {
+            setenv("LANG", "en_US.UTF-8", 1);
+        }
         execvp(argv[0], argv);
         _exit(127);  // exec failed
     }

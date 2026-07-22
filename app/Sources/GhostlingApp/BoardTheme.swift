@@ -1,26 +1,26 @@
 import AppKit
 import GhostlingCore
 
-/// The **Solarized Osaka Night** palette in one place so every board view stays
-/// consistent. Base tones and accents are the canonical Solarized Osaka Night
-/// tokens (craftzdog's colour scheme): a blue-black base ramp (base04→base02)
-/// under the classic Solarized accents. Semantic helpers (`stateColor`/
+/// A **Ghostty-default-inspired** palette in one place so every board view stays
+/// consistent. Its dark appearance grows outward from Ghostty's `#282c34`
+/// blue-charcoal terminal and uses Ghostty's default ANSI colours for accents.
+/// Semantic helpers (`stateColor`/
 /// `flowColor`/`agentColor`) keep the colour policy here, not smeared across views.
 @MainActor
 enum BoardTheme {
-    // MARK: - Surfaces (theme-aware Solarized: Osaka Night dark ramp / canonical
+    // MARK: - Surfaces (theme-aware Ghostty blue-charcoal dark ramp / canonical
     // a neutral high-contrast light ramp — resolved per system appearance so the
     // whole board follows light/dark live, not just the terminal). Accents below are
-    // deliberately shared across both modes (Solarized accents are dual-scheme).
-    static let canvas = dynamic(dark: hex(0x000D1A), light: hex(0xF1F4F7))          // base04 / cool page
-    static let canvasSunken = dynamic(dark: hex(0x00111F), light: hex(0xE5EBF0))    // sunken tracks/rails
-    static let cardFill = dynamic(dark: hex(0x001A2E), light: hex(0xFFFFFF))        // cards above the canvas
-    static let cardFillRaised = dynamic(dark: hex(0x00304A), light: hex(0xF8FBFD))  // raised / hover
-    static let documentSurface = dynamic(dark: hex(0x00182B), light: hex(0xFFFFFF))
-    static let documentChrome = dynamic(dark: hex(0x00080F), light: hex(0xE7EDF2))  // chrome below the canvas
-    static let cardStroke = dynamic(dark: hex(0x003D52), light: hex(0xC8D2DA))      // cool light edge
-    static let cardStrokeStrong = dynamic(dark: hex(0x0A506B), light: hex(0x9EACB8))
-    static let hairline = dynamic(dark: hex(0x00263D), light: hex(0xD3DCE3))
+    // deliberately shared across both modes.
+    static let canvas = dynamic(dark: hex(0x20242B), light: hex(0xF1F4F7))          // cool page
+    static let canvasSunken = dynamic(dark: hex(0x191D23), light: hex(0xE5EBF0))    // sunken tracks/rails
+    static let cardFill = dynamic(dark: hex(0x282C34), light: hex(0xFFFFFF))        // Ghostty default / cards
+    static let cardFillRaised = dynamic(dark: hex(0x323842), light: hex(0xF8FBFD))  // raised / hover
+    static let documentSurface = dynamic(dark: hex(0x282C34), light: hex(0xFFFFFF))
+    static let documentChrome = dynamic(dark: hex(0x171A20), light: hex(0xE7EDF2))  // chrome below the canvas
+    static let cardStroke = dynamic(dark: hex(0x414956), light: hex(0xC8D2DA))      // cool light edge
+    static let cardStrokeStrong = dynamic(dark: hex(0x596576), light: hex(0x9EACB8))
+    static let hairline = dynamic(dark: hex(0x343B46), light: hex(0xD3DCE3))
     /// The NEEDS YOU column's warm-tinted background — the whole column reads amber.
     static let needsYouColumn = dynamic(dark: hex(0x1A0F03), light: hex(0xFFF7E8))
     /// A NEEDS YOU card's warm fill; stroke is `attention` (fresh) or `needsYouStroke` (aging).
@@ -39,17 +39,17 @@ enum BoardTheme {
 
     // MARK: - Text (dark: light-on-dark; light: deliberately darker than Solarized
     // base greys so dense board labels stay readable on the neutral surface).
-    static let textPrimary = dynamic(dark: hex(0xB3BAC4), light: hex(0x24313A))
-    static let textMuted = dynamic(dark: hex(0x8794A0), light: hex(0x3A4A54))
-    static let textFaint = dynamic(dark: hex(0x667980), light: hex(0x586975))
-    static let documentText = dynamic(dark: hex(0xA6ADBA), light: hex(0x24313A))
+    static let textPrimary = dynamic(dark: hex(0xF0F2F5), light: hex(0x24313A))
+    static let textMuted = dynamic(dark: hex(0xC5C8C6), light: hex(0x3A4A54))
+    static let textFaint = dynamic(dark: hex(0x9299A5), light: hex(0x586975))
+    static let documentText = dynamic(dark: hex(0xE2E5E9), light: hex(0x24313A))
     /// Dimmest tier — card meta lines and footnotes.
-    static let textDim = dynamic(dark: hex(0x4A5A63), light: hex(0x4F606B))
+    static let textDim = dynamic(dark: hex(0x747C89), light: hex(0x4F606B))
 
-    // MARK: - Accents (Solarized accents)
+    // MARK: - Accents (Ghostty default ANSI family)
     /// The interactive brand blue — create affordance, drop ring. Kept distinct
     /// from the (deeper) running-state blue so a UI accent never reads as a state.
-    static let brand = hex(0x3A9ADE)             // solarized blue
+    static let brand = hex(0x7AA6DA)             // Ghostty bright blue
     /// Amber "needs you" accent — attention header/edge.
     static let attention = hex(0xD97A3A)         // solarized orange
     /// Cool cyan for inline `code` spans — deliberately distinct from the amber file-link
@@ -61,17 +61,17 @@ enum BoardTheme {
     /// white text clears WCAG AA (the bright `alert` red at white text falls short).
     static let attentionBadge = hex(0xB0302A)
 
-    // MARK: - Terminal surface (theme-aware: a rich Solarized console in the dark,
-    // a warm Solarized-light paper one in the light — resolved per system appearance).
-    static let termBg = dynamic(dark: hex(0x001F33), light: hex(0xFAFBFC))   // base03 / neutral paper
-    static let termFg = dynamic(dark: hex(0xA6ADBA), light: hex(0x24313A))   // base0 / ink
-    static let termCursor = dynamic(dark: hex(0x20A896), light: hex(0x009966)) // cyan / cyan700
+    // MARK: - Terminal surface (Ghostty's zero-config dark console; neutral paper
+    // in the light appearance — resolved per system appearance).
+    static let termBg = dynamic(dark: hex(0x282C34), light: hex(0xFAFBFC))
+    static let termFg = dynamic(dark: hex(0xFFFFFF), light: hex(0x24313A))
+    static let termCursor = dynamic(dark: hex(0xFFFFFF), light: hex(0x009966))
 
     // MARK: - Terminal ANSI palette
     //
     // The 16 colours a child's SGR indices (`\e[31m`, `ls --color`, any TUI) resolve
-    // through. Drawn from the same Solarized accent family as the board's own accents
-    // so a coloured shell reads as part of the app rather than a foreign window.
+    // through. The dark ramp is Ghostty's zero-config palette so the embedded shell
+    // looks at home beside a stock Ghostty window.
     //
     // The two ramps are NOT lighter/darker twins of each other. On the dark console a
     // "bright" colour is genuinely brighter; on light paper brightening would erase it,
@@ -84,10 +84,10 @@ enum BoardTheme {
     /// ANSI order: black, red, green, yellow, blue, magenta, cyan, white, then the
     /// eight bright variants.
     private static let ansiDark = [
-        hex(0x00141F), hex(0xE84C3D), hex(0x99CC00), hex(0xB39900),
-        hex(0x3A9ADE), hex(0xD4599F), hex(0x20A896), hex(0xA6ADBA),
-        hex(0x4A5A63), hex(0xFF6E63), hex(0xB4E82B), hex(0xD9B826),
-        hex(0x6BB6EA), hex(0xE87CBA), hex(0x4CCFBE), hex(0xE6EAF0),
+        hex(0x1D1F21), hex(0xCC6666), hex(0xB5BD68), hex(0xF0C674),
+        hex(0x81A2BE), hex(0xB294BB), hex(0x8ABEB7), hex(0xC5C8C6),
+        hex(0x666666), hex(0xD54E53), hex(0xB9CA4A), hex(0xE7C547),
+        hex(0x7AA6DA), hex(0xC397D8), hex(0x70C0B1), hex(0xEAEAEA),
     ]
 
     private static let ansiLight = [
@@ -136,23 +136,88 @@ enum BoardTheme {
     }
 
     // MARK: - Fonts
-    static var boardFontScale: CGFloat = 1.0
 
-    private static func scaled(_ size: CGFloat) -> CGFloat {
-        (size * boardFontScale).rounded(.toNearestOrAwayFromZero)
+    /// The operator's manual zoom (⌘+ / ⌘−).
+    static var boardFontScale: CGFloat = 1.0
+    /// Automatic shrink applied on top of the manual zoom when the window is
+    /// narrower than the 1400pt design width, so board text stops overflowing
+    /// before it has to truncate. 1.0 on a full-width board, floored at 0.85.
+    static var responsiveFontScale: CGFloat = 1.0
+
+    /// The responsive factor for a given window content width, quantized to 0.05
+    /// steps so a live resize only reflows the board when it crosses a step, not
+    /// on every dragged pixel. Pure, so tests can pin the curve.
+    static func responsiveScale(forContentWidth width: CGFloat) -> CGFloat {
+        let raw = min(1.0, max(0.85, width / 1400))
+        return (raw * 20).rounded(.toNearestOrAwayFromZero) / 20
     }
 
+    private static func scaled(_ size: CGFloat) -> CGFloat {
+        (size * boardFontScale * responsiveFontScale).rounded(.toNearestOrAwayFromZero)
+    }
+
+    // Type policy: sans carries prose, mono carries data (counts, %, durations,
+    // paths, commands), and the card title anchors by SIZE, not weight — it is
+    // the largest text on a card face while staying medium, so cards read calm.
+
     static var mono: NSFont { .monospacedSystemFont(ofSize: scaled(11), weight: .regular) }
-    static var monoBold: NSFont { .monospacedSystemFont(ofSize: scaled(12), weight: .semibold) }
+    static var monoBold: NSFont { .monospacedSystemFont(ofSize: scaled(11), weight: .semibold) }
     static var monoSmall: NSFont { .monospacedSystemFont(ofSize: scaled(10), weight: .regular) }
     /// The percent riding inside a quota bar — semibold so it holds up against the fill.
     static var gaugeLabel: NSFont { .monospacedSystemFont(ofSize: scaled(11), weight: .semibold) }
     static var title: NSFont { .systemFont(ofSize: scaled(13), weight: .semibold) }
-    static var columnTitle: NSFont { .systemFont(ofSize: scaled(13), weight: .heavy) }
-    /// The card headline (POC: 16px/600; 15pt reads the same at AppKit metrics).
-    static var cardTitle: NSFont { .systemFont(ofSize: scaled(15), weight: .semibold) }
+    /// Column wayfinding caps — tracking (see ``caps(_:color:)``), not weight,
+    /// does the work, so headers stop competing with card titles.
+    static var columnTitle: NSFont { .systemFont(ofSize: scaled(11), weight: .semibold) }
+    /// The card headline — the size anchor on a card face (see type policy above).
+    static var cardTitle: NSFont { .systemFont(ofSize: scaled(15), weight: .medium) }
     static var sansSmall: NSFont { .systemFont(ofSize: scaled(11), weight: .medium) }
     static var sansTiny: NSFont { .systemFont(ofSize: scaled(10), weight: .regular) }
+    /// Sans prose emphasis — advisory headlines. Prose never sets in mono.
+    static var sansStrong: NSFont { .systemFont(ofSize: scaled(12), weight: .semibold) }
+    /// Sans prose body — advisory detail lines.
+    static var sansBody: NSFont { .systemFont(ofSize: scaled(11), weight: .regular) }
+    /// The project chip on a card — tiny; the project colour carries the identity.
+    static var chip: NSFont { .systemFont(ofSize: scaled(10), weight: .medium) }
+
+    /// An ALL-CAPS wayfinding label with letter tracking, e.g. column headers.
+    static func caps(_ text: String, color: NSColor) -> NSAttributedString {
+        NSAttributedString(string: text, attributes: [
+            .font: columnTitle, .kern: 0.6, .foregroundColor: color,
+        ])
+    }
+
+    /// The card headline as an attributed string — one font for EVERY title so
+    /// the column scans as a uniform list, with tightened two-line leading (SF
+    /// wants slightly negative tracking above 13pt, and the default leading lets
+    /// a wrapped title float apart). Word wrapping keeps slug titles breaking at
+    /// their hyphens.
+    static func cardTitleText(_ title: String, color: NSColor) -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byWordWrapping
+        let lineHeight = (cardTitle.pointSize * 1.15).rounded()
+        paragraph.minimumLineHeight = lineHeight
+        paragraph.maximumLineHeight = lineHeight
+        return NSAttributedString(string: title, attributes: [
+            .font: cardTitle, .foregroundColor: color,
+            .kern: -0.2, .paragraphStyle: paragraph,
+        ])
+    }
+
+    /// Prose set in sans with its embedded data tokens (percentages, durations,
+    /// /commands) picked back out into mono — the sans-for-prose / mono-for-data
+    /// rule applied inside a single line.
+    static func prose(_ text: String, font: NSFont, color: NSColor) -> NSAttributedString {
+        let result = NSMutableAttributedString(
+            string: text, attributes: [.font: font, .foregroundColor: color])
+        let mono = NSFont.monospacedSystemFont(ofSize: font.pointSize, weight: .regular)
+        let pattern = #"/[\w:-]+|\d+(?:\.\d+)?%|\d+[dhm]\b"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return result }
+        for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+            result.addAttribute(.font, value: mono, range: match.range)
+        }
+        return result
+    }
 
     // MARK: - Semantic colour (the policy lives here)
 
@@ -178,8 +243,42 @@ enum BoardTheme {
     static func agentColor(_ agent: CardAgent) -> NSColor {
         switch agent {
         case .claude: return hex(0xD97A3A)    // solarized orange
-        case .codex: return hex(0x99CC00)     // solarized green
+        case .codex: return dynamic(dark: hex(0xE8EAED), light: hex(0x1A1A1A))  // OpenAI monochrome ink (black; inverted on dark so it stays legible)
         case .gemini: return hex(0x3A9ADE)    // solarized blue
+        }
+    }
+
+    /// The harness's official brand mark — Anthropic's, OpenAI's, and Google
+    /// Gemini's actual logos, vendored as vector PDFs under `Resources/` and rendered
+    /// tinted by ``HarnessBadge``. Vector so a 16pt badge stays crisp on retina; a
+    /// single silhouette per mark so ``agentColor`` can tint it to the two-flow palette.
+    /// Loaded once and cached — the PDF parse is not repeated per card.
+    static func agentMark(_ agent: CardAgent) -> NSImage? {
+        if let cached = markCache[agent] { return cached }
+        let name: String
+        switch agent {
+        case .claude: name = "claude"
+        case .codex: name = "codex"
+        case .gemini: name = "gemini"
+        }
+        guard let url = Bundle.module.url(
+            forResource: name, withExtension: "pdf", subdirectory: "Resources"),
+            let image = NSImage(contentsOf: url)
+        else { return nil }
+        markCache[agent] = image
+        return image
+    }
+
+    private static var markCache: [CardAgent: NSImage] = [:]
+
+    /// A text fallback for the mark, used where a real image can't be mounted (the
+    /// creation palette's mono-glyph rows). Variation selectors pin text presentation
+    /// so the glyph takes its colour instead of an emoji face.
+    static func agentGlyph(_ agent: CardAgent) -> String {
+        switch agent {
+        case .claude: return "\u{2733}\u{FE0E}"   // ✳ starburst
+        case .codex: return "\u{2B21}\u{FE0E}"    // ⬡ hexagon
+        case .gemini: return "\u{2726}\u{FE0E}"   // ✦ spark
         }
     }
 
@@ -240,5 +339,22 @@ enum BoardTheme {
             blue: CGFloat(rgb & 0xFF) / 255,
             alpha: 1
         )
+    }
+}
+
+/// Window-resize etiquette for board chrome. AppKit resolves a user's resize
+/// drag at layout priority 510 and the window's "keep my size" preference at
+/// 500, so any view defending its intrinsic width at the default 750 becomes an
+/// unbreakable window minimum — and the board's equal-width columns multiply the
+/// single worst card across all five, once wedging the window at 2053pt on an
+/// 1800pt screen. Board text, buttons, and badges therefore yield just below the
+/// window (490): they truncate or clip when the operator squeezes the window
+/// instead of pinning its size.
+extension NSView {
+    /// Let a window resize squeeze this view horizontally. Long prose (card
+    /// titles) passes `.defaultLow` so it gives way before the short metadata
+    /// (ages, counts, chips) that stays legible longest.
+    func yieldWidthToWindow(_ priority: NSLayoutConstraint.Priority = .init(490)) {
+        setContentCompressionResistancePriority(priority, for: .horizontal)
     }
 }

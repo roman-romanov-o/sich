@@ -40,11 +40,18 @@ enum SessionsFeed {
     /// write dedups a Stop that arrives on BOTH streams by sessionID+timestamp, so it
     /// lands once.
     static func normalize(_ lines: [Data], arrival: Date) -> [SignalEvent] {
-        lines.compactMap { line in
-            guard TurnDiffNormalizer.normalize(line, arrival: arrival) == nil else { return nil }
+        lines.enumerated().compactMap { index, line in
+            // File order IS arrival order. Hook payloads carry no timestamp, so a
+            // whole poll batch would share one `arrival` stamp, coalesce into one
+            // burst, and let the reconciler's tie-break pick an ARBITRARY event of
+            // the batch (Swift `max(by:)` keeps the first on all-equal — e.g. a
+            // Notification hiding behind a SubagentStop). A strictly increasing
+            // sub-second offset per line keeps the last-written event dominant.
+            let stamped = arrival.addingTimeInterval(Double(index) / 1_000)
+            guard TurnDiffNormalizer.normalize(line, arrival: stamped) == nil else { return nil }
             return isJSONL(line)
-                ? JSONLNormalizer.normalize(line, arrival: arrival)
-                : HookNormalizer.normalize(line, arrival: arrival)
+                ? JSONLNormalizer.normalize(line, arrival: stamped)
+                : HookNormalizer.normalize(line, arrival: stamped)
         }
     }
 
@@ -86,15 +93,18 @@ public final class SessionsPoller {
     private var timer: Timer?
     private var watcher: FileWatcher?
 
+    /// `stallThreshold` rides through to the store's rule-2.1 stall guard (default
+    /// 10 min); injectable so an E2E test can provoke a real stall in seconds.
     public init(
         eventsFile: URL = SessionsPoller.defaultEventsFile,
         interval: TimeInterval = 3,
+        stallThreshold: TimeInterval = 600,
         diffSink: @escaping ([TurnDiff]) -> Void = { _ in },
         sink: @escaping ([BoardCard]) -> Void
     ) {
         self.eventsFile = eventsFile
         self.tail = HookEventTail(file: eventsFile)
-        self.store = HookSessionStore()
+        self.store = HookSessionStore(stallThreshold: stallThreshold)
         self.backstopInterval = interval
         self.diffSink = diffSink
         self.sink = sink

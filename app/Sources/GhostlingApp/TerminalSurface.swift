@@ -1,5 +1,6 @@
 import AppKit
 import GhostlingCore
+import os
 
 /// A thin AppKit view that renders one ``PTYSession``'s libghostty-vt screen and
 /// routes key events back into it. Single responsibility: one surface = one PTY.
@@ -13,6 +14,7 @@ import GhostlingCore
 public final class TerminalSurface: NSView {
     private let session: PTYSession
     private var readTimer: Timer?
+    private var readSource: DispatchSourceRead?
     private let font: NSFont
     private let inset: CGFloat = 9
     /// Back policy. When set, `⌘[` (the macOS "Back" idiom) is offered here; returning
@@ -37,6 +39,14 @@ public final class TerminalSurface: NSView {
     private var endBanner: String?
     private var selectionAnchor: GridPoint?
     private var selectionFocus: GridPoint?
+    private var refreshQueue = TerminalRefreshQueue()
+    private var scrollAccumulator = TerminalScrollAccumulator()
+    private lazy var frameCoordinator = TerminalFrameCoordinator { [weak self] in
+        self?.displayFrame() ?? false
+    }
+
+    private static let performanceLog = OSLog(
+        subsystem: "com.ghostling.terminal", category: .pointsOfInterest)
 
     /// A local model of the current input line — the bytes typed since the last
     /// Enter, so a suggest-only driver (Planning Mode, US-004) can tell whether the
@@ -89,9 +99,10 @@ public final class TerminalSurface: NSView {
     /// of leaving dark-console ANSI stranded on light paper.
     public override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
+        cachedTerminalBackground = nil
+        glyphAttrsCache.removeAll(keepingCapacity: true)
         applyTerminalTheme()
-        refresh()   // cells re-resolve their palette indices through the new theme
-        needsDisplay = true
+        requestRefresh(.full) // cells re-resolve through the new palette
     }
 
     /// Push this appearance's colour theme into the emulator so the child's ANSI
@@ -117,7 +128,7 @@ public final class TerminalSurface: NSView {
         session.resize(rows: UInt16(rows), cols: UInt16(cols),
                        cellWidthPx: UInt32(cellSize.width.rounded()),
                        cellHeightPx: UInt32(cellSize.height.rounded()))
-        refresh()
+        requestRefresh(.full)
     }
 
     public override func setFrameSize(_ newSize: NSSize) {
@@ -130,19 +141,16 @@ public final class TerminalSurface: NSView {
     /// Start reading the PTY on the main run loop so the emulator screen stays
     /// live without screen-scraping. Idempotent.
     ///
-    /// Driven by a run-loop `Timer` on a non-blocking fd, NOT a `.main`-queue
-    /// `DispatchSourceRead`: a `.main` dispatch source only fires when the main
-    /// *dispatch queue* is drained, which a plain run-loop (the spun-loop tests, and
-    /// some AppKit nesting) does not do — so the surface rendered nothing and the
-    /// terminal "didn't open." A `Timer` in `.common` modes fires identically under
-    /// `NSApp.run()` and a spun loop, on the main thread, with no cross-thread vt
-    /// access. ponytail: 30Hz poll of a non-blocking fd — swap for a kqueue source
-    /// only if idle wakeups ever show up in a power profile.
+    /// Production delivery is fd-readiness driven, so the first byte after an idle
+    /// prompt does not wait for the polling interval. A low-frequency run-loop timer
+    /// remains as a backstop because a plain spun run loop (tests and some nested
+    /// AppKit modes) does not necessarily drain `.main` dispatch sources.
     public func startReading() {
         guard readTimer == nil, session.masterFD >= 0 else { return }
         session.setNonBlocking()
         syncTerminalSize()   // match the child to the window before the first paint
-        scheduleTimer(hz: Self.activeHz)
+        armReadSource()
+        scheduleTimer(hz: Self.idleHz)
         onTick()   // paint whatever is already buffered without waiting a frame
     }
 
@@ -151,20 +159,33 @@ public final class TerminalSurface: NSView {
         // an unmounted surface can't release the hold, and the buffer would grow
         // unwatched while the board pump keeps draining the pty.
         session.holdOutput = false
+        readSource?.cancel()
+        readSource = nil
         readTimer?.invalidate()
         readTimer = nil
     }
 
-    // Adaptive cadence: 30Hz while output flows, 4Hz once the child has been
+    // Adaptive cadence: 60Hz while output flows, 4Hz once the child has been
     // quiet for ~1s — the shell-at-its-prompt case that otherwise burns battery.
     // First byte after idle upshifts immediately (worst added latency: 250ms).
-    private static let activeHz = 30.0
+    private static let activeHz = 60.0
     private static let idleHz = 4.0
-    private static let idleTickThreshold = 30   // ~1s of silence at 30Hz
+    private static let idleTickThreshold = 60   // ~1s of silence at 60Hz
     private var idleTicks = 0
+    private var readHz = idleHz
+    private func armReadSource() {
+        guard readSource == nil, session.masterFD >= 0 else { return }
+        let source = DispatchSource.makeReadSource(fileDescriptor: session.masterFD, queue: .main)
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.onReadable() }
+        }
+        readSource = source
+        source.resume()
+    }
 
     private func scheduleTimer(hz: Double) {
         readTimer?.invalidate()
+        readHz = hz
         let timer = Timer(timeInterval: 1.0 / hz, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.onTick() }
         }
@@ -173,14 +194,22 @@ public final class TerminalSurface: NSView {
     }
 
     private func onTick() {
+        consumeAvailableOutput()
+    }
+
+    private func onReadable() {
+        consumeAvailableOutput()
+    }
+
+    private func consumeAvailableOutput() {
         if session.holdOutput, session.heldByteCount > Self.maxHeldBytes {
             clearSelection()             // abandoned selection: stop hoarding output
         }
         switch session.pumpAvailable() {
         case .data:
-            if idleTicks >= Self.idleTickThreshold { scheduleTimer(hz: Self.activeHz) }
+            if readHz != Self.activeHz { scheduleTimer(hz: Self.activeHz) }
             idleTicks = 0
-            refresh()
+            requestRefresh(.output)
         case .idle:
             idleTicks += 1
             if idleTicks == Self.idleTickThreshold { scheduleTimer(hz: Self.idleHz) }
@@ -190,11 +219,47 @@ public final class TerminalSurface: NSView {
         }
     }
 
-    private func refresh() {
+    /// Coalesce output, scrolling and geometry changes to the next refresh of the
+    /// display containing this window, at that display's native cadence.
+    private func requestRefresh(_ reason: TerminalRefreshReason) {
+        refreshQueue.request(reason)
+        frameCoordinator.requestFrame()
+    }
+
+    /// One display-link frame: consume the coalesced damage and repaint. Returns
+    /// whether there was work — the coordinator uses a run of workless frames to
+    /// pause itself once output goes quiet.
+    private func displayFrame() -> Bool {
+        guard let reason = refreshQueue.consume() else { return false }
+        refresh(reason: reason)
+        return true
+    }
+
+    /// (Re)bind the frame clock to the display that actually contains this window —
+    /// `NSView.displayLink` follows the view across displays, so a move to the
+    /// 144Hz screen re-paces frames automatically.
+    public override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        frameCoordinator.attach(to: self)
+        // Damage requested while unhosted was delivered via the headless fallback,
+        // but anything still pending should ride the fresh link immediately.
+        if window != nil, refreshQueue.pending != nil { frameCoordinator.requestFrame() }
+    }
+
+    private func refresh(reason: TerminalRefreshReason = .output) {
+        let signpost = OSSignpostID(log: Self.performanceLog)
+        os_signpost(.begin, log: Self.performanceLog, name: "Terminal snapshot", signpostID: signpost)
+        defer { os_signpost(.end, log: Self.performanceLog, name: "Terminal snapshot", signpostID: signpost) }
         let snap = session.terminal.snapshot()
         guard snap.rows > 0 else { return }   // never blank a good screen on a failed read
         let old = grid
         grid = snap
+        // During viewport scrolling practically every row changes. Comparing every
+        // cell first only adds CPU work, so repaint the surface directly.
+        guard reason == .output else {
+            needsDisplay = true
+            return
+        }
         // Damage-diff: invalidate only the rows that actually changed (plus the
         // cursor's old/new rows), so a one-line update repaints one strip, not the
         // whole surface. Geometry change = everything moved: full repaint.
@@ -232,9 +297,6 @@ public final class TerminalSurface: NSView {
 
     // MARK: - Input
 
-    // Fractional wheel rows not yet applied (trackpads report sub-row deltas).
-    private var scrollResidue: CGFloat = 0
-
     /// Wheel/trackpad routing, in the order a stock terminal resolves it:
     /// 1. child enabled mouse tracking (Claude Code's chat pane, vim `mouse=a`)
     ///    → encode the wheel as the mouse report it asked for and send it down
@@ -245,18 +307,16 @@ public final class TerminalSurface: NSView {
     /// Typing snaps back to the live bottom.
     public override func scrollWheel(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        let rowsDelta = event.hasPreciseScrollingDeltas
-            ? event.scrollingDeltaY / cellSize.height   // px → rows
-            : event.scrollingDeltaY                     // already in lines
-        scrollResidue += rowsDelta
-        let rows = Int(scrollResidue)
+        let rows = scrollAccumulator.rows(
+            deltaY: event.scrollingDeltaY,
+            precise: event.hasPreciseScrollingDeltas,
+            cellHeight: cellSize.height)
         guard rows != 0 else { return }
-        scrollResidue -= CGFloat(rows)
         if forwardWheelToChild(event, up: rows > 0, ticks: abs(rows)) { return }
         if sendAlternateScrollArrows(up: rows > 0, ticks: abs(rows)) { return }
         // Wheel-up (positive deltaY) moves BACK into history (negative delta).
         session.terminal.scrollViewport(delta: -rows)
-        refresh()
+        requestRefresh(.viewport)
     }
 
     private func forwardWheelToChild(_ event: NSEvent, up: Bool, ticks: Int) -> Bool {
@@ -489,6 +549,9 @@ public final class TerminalSurface: NSView {
     // MARK: - Rendering
 
     public override func draw(_ dirtyRect: NSRect) {
+        let signpost = OSSignpostID(log: Self.performanceLog)
+        os_signpost(.begin, log: Self.performanceLog, name: "Terminal draw", signpostID: signpost)
+        defer { os_signpost(.end, log: Self.performanceLog, name: "Terminal draw", signpostID: signpost) }
         BoardTheme.termBg.setFill()
         dirtyRect.fill()
         // Honor the damage rect: repaint only the rows it covers (refresh()
@@ -516,23 +579,32 @@ public final class TerminalSurface: NSView {
             col += 1
             while col < grid.cols {
                 let c = grid.cell(col: col, row: row)
-                if c.fg != first.fg || c.bg != first.bg { break }
+                if c.fg != first.fg || c.bg != first.bg || c.style != first.style { break }
                 col += 1
             }
-            drawRun(row: row, from: start, to: col, fg: first.fg, bg: first.bg)
+            drawRun(row: row, from: start, to: col, cell: first)
         }
     }
 
-    private func drawRun(row: Int, from start: Int, to end: Int, fg: RGB?, bg: RGB?) {
+    private func drawRun(row: Int, from start: Int, to end: Int, cell: TerminalCell) {
+        let colors = effectiveColors(for: cell)
         let x = inset + CGFloat(start) * cellSize.width
         let y = inset + CGFloat(row) * cellSize.height
-        if let bg {
+        if let bg = colors.bg {
             nsColor(bg).setFill()
             NSRect(x: x, y: y, width: CGFloat(end - start) * cellSize.width, height: cellSize.height).fill()
         }
+        guard !cell.style.invisible else { return }
         let text = runText(row: row, from: start, to: end)
         guard text.contains(where: { $0 != " " }) else { return }   // blank run: bg only
-        (text as NSString).draw(at: NSPoint(x: x, y: y), withAttributes: glyphAttrs(fg: fg, bg: bg))
+        (text as NSString).draw(
+            at: NSPoint(x: x, y: y),
+            withAttributes: glyphAttrs(fg: colors.fg, bg: colors.bg, style: cell.style))
+    }
+
+    private func effectiveColors(for cell: TerminalCell) -> (fg: RGB?, bg: RGB?) {
+        guard cell.style.inverse else { return (cell.fg, cell.bg) }
+        return (cell.bg ?? grid.defaultBg, cell.fg ?? grid.defaultFg)
     }
 
     private func runText(row: Int, from start: Int, to end: Int) -> String {
@@ -560,7 +632,11 @@ public final class TerminalSurface: NSView {
         BoardTheme.termCursor.withAlphaComponent(0.55).setFill()
         NSRect(x: x, y: y, width: cellSize.width, height: cellSize.height).fill()
         if let scalar = grid.cell(col: cur.x, row: cur.y).scalar {
-            (String(scalar) as NSString).draw(at: NSPoint(x: x, y: y), withAttributes: glyphAttrs(fg: nil))
+            let cell = grid.cell(col: cur.x, row: cur.y)
+            let colors = effectiveColors(for: cell)
+            (String(scalar) as NSString).draw(
+                at: NSPoint(x: x, y: y),
+                withAttributes: glyphAttrs(fg: colors.fg, bg: colors.bg, style: cell.style))
         }
     }
 
@@ -580,9 +656,38 @@ public final class TerminalSurface: NSView {
     /// output — the pixel result is a human sign-off, this is the knob.
     private static let minimumTextContrast = 3.5
 
-    private func glyphAttrs(fg: RGB?, bg: RGB? = nil) -> [NSAttributedString.Key: Any] {
-        [.font: font, .foregroundColor: legibleFg(fg, on: bg),
-         .ligature: 0, .kern: 0]
+    private var nsColorCache: [RGB: NSColor] = [:]
+    private struct GlyphKey: Hashable {
+        let color: RGB
+        let style: TerminalCellStyle
+    }
+    private var glyphAttrsCache: [GlyphKey: [NSAttributedString.Key: Any]] = [:]
+    private var cachedTerminalBackground: RGB?
+
+    private func glyphAttrs(
+        fg: RGB?, bg: RGB? = nil, style: TerminalCellStyle = .plain
+    ) -> [NSAttributedString.Key: Any] {
+        let base = fg ?? grid.defaultFg
+        guard let base else {
+            return [.font: font, .foregroundColor: BoardTheme.termFg,
+                    .ligature: 0, .kern: 0]
+        }
+        let adjusted = ContrastColor.adjusted(
+            base, against: bg ?? terminalBackgroundRGB(),
+            minimumRatio: Self.minimumTextContrast)
+        let key = GlyphKey(color: adjusted, style: style)
+        if let cached = glyphAttrsCache[key] { return cached }
+        var traits: NSFontTraitMask = []
+        if style.bold { traits.insert(.boldFontMask) }
+        if style.italic { traits.insert(.italicFontMask) }
+        let styledFont = traits.isEmpty ? font : NSFontManager.shared.convert(font, toHaveTrait: traits)
+        var attrs: [NSAttributedString.Key: Any] = [
+            .font: styledFont, .foregroundColor: nsColor(adjusted), .ligature: 0, .kern: 0,
+        ]
+        if style.underline != 0 { attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue }
+        if style.strikethrough { attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
+        glyphAttrsCache[key] = attrs
+        return attrs
     }
 
     /// Resolve a cell's foreground to an NSColor, first lifting it to meet the
@@ -601,14 +706,21 @@ public final class TerminalSurface: NSView {
     /// appearance (this runs inside `draw(_:)`, where the dynamic colour resolves to
     /// light/dark correctly) so the contrast maths use the real backdrop.
     private func terminalBackgroundRGB() -> RGB {
+        if let cachedTerminalBackground { return cachedTerminalBackground }
         guard let srgb = BoardTheme.termBg.usingColorSpace(.sRGB) else { return RGB(r: 0, g: 0, b: 0) }
-        return RGB(r: UInt8(srgb.redComponent * 255),
-                   g: UInt8(srgb.greenComponent * 255),
-                   b: UInt8(srgb.blueComponent * 255))
+        let resolved = RGB(r: UInt8(srgb.redComponent * 255),
+                           g: UInt8(srgb.greenComponent * 255),
+                           b: UInt8(srgb.blueComponent * 255))
+        cachedTerminalBackground = resolved
+        return resolved
     }
 
     private func nsColor(_ c: RGB) -> NSColor {
-        NSColor(srgbRed: CGFloat(c.r) / 255, green: CGFloat(c.g) / 255, blue: CGFloat(c.b) / 255, alpha: 1)
+        if let cached = nsColorCache[c] { return cached }
+        let color = NSColor(srgbRed: CGFloat(c.r) / 255, green: CGFloat(c.g) / 255,
+                            blue: CGFloat(c.b) / 255, alpha: 1)
+        nsColorCache[c] = color
+        return color
     }
 
     /// Test seam: the exact fg the draw path would paint for a cell (fg on bg), so a
@@ -688,10 +800,10 @@ public final class TerminalSurface: NSView {
         let point = convert(event.locationInWindow, from: nil)
         if point.y < inset {
             session.terminal.scrollViewport(delta: -1)
-            refresh()
+            requestRefresh(.viewport)
         } else if point.y > bounds.maxY - inset {
             session.terminal.scrollViewport(delta: 1)
-            refresh()
+            requestRefresh(.viewport)
         }
     }
 }

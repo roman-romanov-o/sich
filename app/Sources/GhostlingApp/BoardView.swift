@@ -4,7 +4,8 @@ import GhostlingCore
 /// The mission-control board surface (US-003), in the Mission Control v5 layout:
 /// four full-height, equal-width columns — QUEUE / WORKING / NEEDS YOU / DONE —
 /// instead of raw state columns × flow swimlanes. Flow is card
-/// metadata now ("autonomous" vs "terminal · Claude Code"), not a lane.
+/// metadata now (the harness badge + an "auto" marker on autonomous
+/// cards only), not a lane.
 ///
 /// It is a projection of a `[BoardCard]` snapshot: ``render(cards:)`` lays the
 /// cards out by attention group. Live column moves come from the host re-calling
@@ -95,8 +96,10 @@ final class BoardView: NSView {
         cells = [:]
         countLabels = [:]
         var previous: NSView?
-        for group in groups {
-            let column = makeColumn(group)
+        // Four equal columns: QUEUE → WORKING → NEEDS YOU → DONE. (The backlog
+        // lives on its own page now — ⌘B — so the board keeps its width for live work.)
+        let columns = groups.map { makeColumn($0) }
+        for column in columns {
             column.translatesAutoresizingMaskIntoConstraints = false
             addSubview(column)
             NSLayoutConstraint.activate([
@@ -142,26 +145,58 @@ final class BoardView: NSView {
         let cell = BoardCell(column: group.dropColumn)
         cell.onDrop = { [weak self] id, col in self?.onMove?(id, col) }
         cells[group] = cell
-        stack.addArrangedSubview(cell)
-        cell.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        // The cell stretches to the column bottom so the whole column is a drop target.
-        cell.bottomAnchor.constraint(equalTo: column.bottomAnchor, constant: -20).isActive = true
+        let scroll = columnScroll(around: cell)
+        stack.addArrangedSubview(scroll)
+        scroll.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        // The scroll region reaches the column bottom so the whole column stays a
+        // drop target; surplus cards scroll instead of clipping off-screen.
+        scroll.bottomAnchor.constraint(equalTo: column.bottomAnchor, constant: -20).isActive = true
         return column
     }
 
+    /// Wrap a column's card container in a transparent vertical scroller: cards
+    /// beyond the window height were simply unreachable before — now they scroll.
+    /// The cell is kept at least clip-view tall so an empty column bottom still
+    /// accepts drops, and having no intrinsic height of its own the scroll view
+    /// also stops a tall column from propping the window open.
+    private func columnScroll(around cell: BoardCell) -> NSScrollView {
+        let scroll = NSScrollView()
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.scrollerStyle = .overlay
+        scroll.documentView = cell
+        cell.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            cell.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
+            cell.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
+            cell.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+            cell.heightAnchor.constraint(
+                greaterThanOrEqualTo: scroll.contentView.heightAnchor),
+        ])
+        return scroll
+    }
+
+    /// Centered lane signage: dot + TITLE + count travel as one cluster (a
+    /// centered title with the count still glued to the right edge would read
+    /// as two disconnected floats). Equal-width spacers do the centering.
     private func columnHeader(_ group: ColumnGroup) -> NSView {
         let row = NSStackView()
         row.spacing = 8
+        let lead = NSView()
+        let trail = NSView()
+        row.addArrangedSubview(lead)
         if let dotColor = group.dotColor { row.addArrangedSubview(pulsingDot(dotColor)) }
         let titleColor: NSColor =
-            group == .needsYou ? BoardTheme.attention
-            : group == .done ? BoardTheme.textMuted : BoardTheme.textPrimary
-        row.addArrangedSubview(label(
-            group.title, font: BoardTheme.columnTitle, color: titleColor))
-        row.addArrangedSubview(NSView())   // flexible spacer
-        let count = label("", font: BoardTheme.monoBold, color: BoardTheme.textMuted)
+            group == .needsYou ? BoardTheme.attention : BoardTheme.textMuted
+        let title = label(group.title, font: BoardTheme.columnTitle, color: titleColor)
+        title.attributedStringValue = BoardTheme.caps(group.title, color: titleColor)
+        row.addArrangedSubview(title)
+        let count = label("", font: BoardTheme.mono, color: BoardTheme.textFaint)
         countLabels[group] = count
         row.addArrangedSubview(count)
+        row.addArrangedSubview(trail)
+        lead.widthAnchor.constraint(equalTo: trail.widthAnchor).isActive = true
         return row
     }
 
@@ -191,7 +226,8 @@ final class BoardView: NSView {
         button.bezelStyle = .rounded
         button.controlSize = .small
         button.contentTintColor = BoardTheme.brand
-        button.font = BoardTheme.monoBold
+        button.font = BoardTheme.sansSmall
+        button.yieldWidthToWindow()
         return button
     }
 
@@ -294,6 +330,8 @@ final class BoardView: NSView {
         focusedCard()?.setKeyboardFocus(false)
         focusedCardID = view?.card.id
         view?.setKeyboardFocus(true)
+        // Columns scroll now, so the focused card may sit off-screen — bring it in.
+        view?.scrollToVisible(view?.bounds ?? .zero)
     }
 
     /// After a re-render (all card views rebuilt), re-apply the ring to the view
@@ -324,6 +362,8 @@ final class BoardView: NSView {
         field.textColor = color
         field.isBezeled = false
         field.drawsBackground = false
+        field.lineBreakMode = .byTruncatingTail
+        field.yieldWidthToWindow()
         return field
     }
 }

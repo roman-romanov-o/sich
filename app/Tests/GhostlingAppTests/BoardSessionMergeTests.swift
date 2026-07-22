@@ -73,11 +73,10 @@ struct BoardSessionMergeTests {
         #expect(shell.cards.first?.state == .running)
     }
 
-    /// The owned terminal tracks the agent through its whole lifecycle from the hook
-    /// stream: idle → running → waiting-for-input (which lights the attention signal —
-    /// our "needs you" notification) → done. One card throughout, PTY preserved (still
-    /// drillable). This is "cards move themselves based on the model's output".
-    @Test func ownedTerminalMovesAcrossColumnsAsTheModelWorks() {
+    /// The owned terminal tracks live agent activity from the hook stream, but task
+    /// completion remains an operator decision. An observed session end cannot move the
+    /// task into DONE. One card throughout, PTY preserved (still drillable).
+    @Test func ownedTerminalMovesAcrossColumnsAsTheModelWorks() throws {
         let shell = ownedShell()
         func claude(_ state: CardState) -> BoardCard {
             BoardCard(sessionID: "claude-xyz", projectDir: "/work",
@@ -92,6 +91,11 @@ struct BoardSessionMergeTests {
         #expect(Attention.count(shell.cards) == 1)   // the notification: this card needs you
 
         shell.applySessions([claude(.done)])
+        #expect(shell.cards.first?.state == .waitingForInput,
+                "an agent/session completion must not complete the task")
+
+        let cardID = try #require(shell.cards.first).id
+        shell.move(cardID: cardID, to: .done)
         #expect(shell.cards.first?.state == .done)
 
         // One card the whole way through, still ours, still drillable.

@@ -306,6 +306,9 @@ flat surfaces, hairline borders, one confident accent, monospace for all data.
 
 ### 8.2 Semantic state colors (used for state dots, column headers, gauges)
 
+> When each state should apply — the column-movement contract — is specified in
+> [CARD-STATUS.md](CARD-STATUS.md).
+
 | State | Color | Hex | Notes |
 |---|---|---|---|
 | `idle` | slate | `#586173` | quiet, no emphasis |

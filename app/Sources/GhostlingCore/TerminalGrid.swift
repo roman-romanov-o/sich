@@ -3,11 +3,37 @@ import GhosttyVt
 /// A 24-bit RGB colour, the resolved cell colour libghostty-vt hands back (palette
 /// indices already looked up). `nil` anywhere a colour is optional means "no
 /// explicit colour — use the surface default".
-public struct RGB: Equatable, Sendable {
+public struct RGB: Hashable, Sendable {
     public let r: UInt8
     public let g: UInt8
     public let b: UInt8
     public init(r: UInt8, g: UInt8, b: UInt8) { self.r = r; self.g = g; self.b = b }
+}
+
+/// Visual attributes carried by the terminal's SGR state. Claude's TUI uses these
+/// heavily for hierarchy even when it keeps the default foreground colour.
+public struct TerminalCellStyle: Hashable, Sendable {
+    public let bold: Bool
+    public let italic: Bool
+    public let faint: Bool
+    public let inverse: Bool
+    public let invisible: Bool
+    public let strikethrough: Bool
+    public let underline: Int
+
+    public init(bold: Bool = false, italic: Bool = false, faint: Bool = false,
+                inverse: Bool = false, invisible: Bool = false,
+                strikethrough: Bool = false, underline: Int = 0) {
+        self.bold = bold
+        self.italic = italic
+        self.faint = faint
+        self.inverse = inverse
+        self.invisible = invisible
+        self.strikethrough = strikethrough
+        self.underline = underline
+    }
+
+    public static let plain = TerminalCellStyle()
 }
 
 /// One rendered cell: a base character (nil = blank) plus its resolved fg/bg.
@@ -17,8 +43,9 @@ public struct TerminalCell: Equatable, Sendable {
     public let scalar: Unicode.Scalar?
     public let fg: RGB?
     public let bg: RGB?
-    public init(scalar: Unicode.Scalar?, fg: RGB?, bg: RGB?) {
-        self.scalar = scalar; self.fg = fg; self.bg = bg
+    public let style: TerminalCellStyle
+    public init(scalar: Unicode.Scalar?, fg: RGB?, bg: RGB?, style: TerminalCellStyle = .plain) {
+        self.scalar = scalar; self.fg = fg; self.bg = bg; self.style = style
     }
     public static let blank = TerminalCell(scalar: nil, fg: nil, bg: nil)
 }
@@ -40,8 +67,10 @@ public struct TerminalGrid: Equatable, Sendable {
     public let cells: [TerminalCell]   // row-major, exactly cols*rows
     public let cursor: GridCursor?
     public let defaultFg: RGB?
+    public let defaultBg: RGB?
 
-    public static let empty = TerminalGrid(cols: 0, rows: 0, cells: [], cursor: nil, defaultFg: nil)
+    public static let empty = TerminalGrid(cols: 0, rows: 0, cells: [], cursor: nil,
+                                           defaultFg: nil, defaultBg: nil)
 
     public func cell(col: Int, row: Int) -> TerminalCell {
         let i = row * cols + col
@@ -113,7 +142,8 @@ final class RenderState {
         }
         return TerminalGrid(cols: cols, rows: rows, cells: cells,
                             cursor: readCursor(),
-                            defaultFg: defaultColor(GHOSTTY_RENDER_STATE_DATA_COLOR_FOREGROUND))
+                            defaultFg: defaultColor(GHOSTTY_RENDER_STATE_DATA_COLOR_FOREGROUND),
+                            defaultBg: defaultColor(GHOSTTY_RENDER_STATE_DATA_COLOR_BACKGROUND))
     }
 
     // MARK: - Row / cell walk
@@ -140,13 +170,34 @@ final class RenderState {
     private func readCell() -> TerminalCell {
         TerminalCell(scalar: cellScalar(),
                      fg: cellColor(GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_FG_COLOR),
-                     bg: cellColor(GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR))
+                     bg: cellColor(GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_BG_COLOR),
+                     style: cellStyle())
+    }
+
+    private func cellStyle() -> TerminalCellStyle {
+        var style = GhosttyStyle()
+        style.size = MemoryLayout<GhosttyStyle>.size
+        guard ghostty_render_state_row_cells_get(
+            rowCells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE, &style) == GHOSTTY_SUCCESS
+        else { return .plain }
+        return TerminalCellStyle(
+            bold: style.bold, italic: style.italic, faint: style.faint,
+            inverse: style.inverse, invisible: style.invisible,
+            strikethrough: style.strikethrough, underline: Int(style.underline))
     }
 
     private func cellScalar() -> Unicode.Scalar? {
         var len: UInt32 = 0
         _ = ghostty_render_state_row_cells_get(rowCells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_LEN, &len)
         guard len > 0 else { return nil }
+        // The overwhelmingly common case is one scalar. Avoid allocating a Swift
+        // array for every ordinary terminal cell on every snapshot.
+        if len == 1 {
+            var cp: UInt32 = 0
+            _ = ghostty_render_state_row_cells_get(
+                rowCells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_BUF, &cp)
+            return Unicode.Scalar(cp)
+        }
         var cps = [UInt32](repeating: 0, count: Int(len))
         cps.withUnsafeMutableBufferPointer { buf in
             _ = ghostty_render_state_row_cells_get(rowCells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_BUF, buf.baseAddress)

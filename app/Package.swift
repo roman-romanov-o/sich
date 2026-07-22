@@ -14,7 +14,7 @@ import PackageDescription
 // exec never touches the Swift runtime (async-signal-safety).
 let package = Package(
     name: "Ghostling",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS(.v14)],  // NSView.displayLink (CADisplayLink) needs 14+
     dependencies: [
         // YAML parsing for saha/v2 task tracking (`progress.yaml`).
         .package(url: "https://github.com/jpsim/Yams.git", from: "5.1.0"),
@@ -37,7 +37,10 @@ let package = Package(
         // GhostlingCore (KeyEncoder, Terminal.lines, SessionRegistry).
         .target(
             name: "GhostlingApp",
-            dependencies: ["GhostlingCore"]
+            dependencies: ["GhostlingCore"],
+            // Official harness marks (Anthropic/OpenAI/Google Gemini) as vector PDFs,
+            // rendered crisp+tinted by `HarnessBadge` in place of unicode approximations.
+            resources: [.copy("Resources")]
         ),
         .executableTarget(
             name: "ghostling-probe",

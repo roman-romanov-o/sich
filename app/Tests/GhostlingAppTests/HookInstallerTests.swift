@@ -118,8 +118,8 @@ final class HookInstallerTests: XCTestCase {
 
         let hook = home.appendingPathComponent(".ghostling/hooks/ghostling-codex-PermissionRequest.sh")
         let hookBody = try String(contentsOf: hook, encoding: .utf8)
-        XCTAssertTrue(hookBody.contains(#""ghostling_agent":"codex""#))
-        XCTAssertTrue(hookBody.contains(#"event_name="PermissionRequest""#))
+        XCTAssertTrue(hookBody.contains("plutil -replace ghostling_agent -string codex"))
+        XCTAssertTrue(hookBody.contains("plutil -replace ghostling_card_id"))
 
         let profile = home.appendingPathComponent(".codex/ghostling-hooks.config.toml")
         let profileBody = try String(contentsOf: profile, encoding: .utf8)
@@ -127,6 +127,10 @@ final class HookInstallerTests: XCTestCase {
         XCTAssertTrue(profileBody.contains("hooks = true"))
         XCTAssertTrue(profileBody.contains("[[hooks.SessionStart]]"))
         XCTAssertTrue(profileBody.contains("matcher = \"startup|resume\""))
+        XCTAssertTrue(profileBody.contains("[[hooks.SubagentStart]]"))
+        XCTAssertTrue(profileBody.contains("[[hooks.SubagentStop]]"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: home.appendingPathComponent(
+            ".ghostling/hooks/ghostling-codex-SubagentStart.sh").path))
         XCTAssertTrue(profileBody.contains(hook.path))
     }
 
@@ -168,6 +172,49 @@ final class HookInstallerTests: XCTestCase {
 
         _ = try run(shim.path, ["--help"], env: boundEnv)
         XCTAssertEqual(try loggedArgs(log), ["--help"], "help/version commands must not inject hooks")
+    }
+
+    func testCodexHooksAppendCompleteJSONAtomically() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ghostling-codex-atomic-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        XCTAssertTrue(HookInstaller.installCodexShim(home: home))
+
+        let events = home.appendingPathComponent("events.jsonl")
+        let hook = home.appendingPathComponent(
+            ".ghostling/hooks/ghostling-codex-PreToolUse.sh")
+        var processes: [Process] = []
+        for index in 0..<24 {
+            let process = Process()
+            process.executableURL = hook
+            var env = ProcessInfo.processInfo.environment
+            env["GHOSTLING_EVENTS_FILE"] = events.path
+            env["GHOSTLING_CARD_ID"] = "card-\(index)"
+            process.environment = env
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            let input = Pipe()
+            process.standardInput = input
+            try process.run()
+            let payload = #"{"session_id":"session-\#(index)","cwd":"/repo","tool_name":"Bash"}"#
+            input.fileHandleForWriting.write(Data(payload.utf8))
+            try input.fileHandleForWriting.close()
+            processes.append(process)
+        }
+        processes.forEach { $0.waitUntilExit() }
+
+        let lines = try String(contentsOf: events, encoding: .utf8)
+            .split(separator: "\n")
+        XCTAssertEqual(lines.count, 24)
+        for line in lines {
+            let object = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
+            let session = try XCTUnwrap(object?["session_id"] as? String)
+            let card = try XCTUnwrap(object?["ghostling_card_id"] as? String)
+            XCTAssertTrue(session.hasPrefix("session-"))
+            XCTAssertTrue(card.hasPrefix("card-"))
+            XCTAssertEqual(object?["cwd"] as? String, "/repo")
+            XCTAssertEqual(object?["tool_name"] as? String, "Bash")
+        }
     }
 
     func testClaudeShimInstallWritesScopedWrapperWithoutGlobalSettings() throws {
@@ -237,7 +284,11 @@ final class HookInstallerTests: XCTestCase {
         XCTAssertEqual(try loggedArgs(log), ["--help"], "help/version commands must not inject hooks")
 
         _ = try run(shim.path, ["--print", "hello"], env: boundEnv)
-        XCTAssertEqual(try loggedArgs(log), ["--print", "hello"], "headless Claude must not be hook-wrapped")
+        let printArgs = try loggedArgs(log)
+        XCTAssertEqual(printArgs.first, "--settings",
+                       "a bound headless turn must report the same lifecycle as interactive Claude")
+        XCTAssertEqual(Array(printArgs.suffix(2)), ["--print", "hello"])
+        XCTAssertNoThrow(try JSONSerialization.jsonObject(with: Data(printArgs[1].utf8)))
     }
 
     private func loadHooks(_ url: URL) throws -> [String: Any] {

@@ -15,7 +15,8 @@ enum HookInstaller {
     /// done (SessionEnd = the session actually closed — the only real Done).
     static let events = [
         "SessionStart", "UserPromptSubmit", "PreToolUse",
-        "PostToolUse", "Notification", "Stop", "SessionEnd",
+        "PostToolUse", "Notification", "SubagentStart", "SubagentStop",
+        "Stop", "SessionEnd",
     ]
 
     /// Merge the forwarder into every board event. Returns true if the file was
@@ -308,7 +309,8 @@ exit 0
 
 private let codexEvents = [
     "SessionStart", "UserPromptSubmit", "Stop",
-    "PreToolUse", "PostToolUse", "PermissionRequest", "SessionEnd",
+    "PreToolUse", "PostToolUse", "PermissionRequest",
+    "SubagentStart", "SubagentStop", "SessionEnd",
 ]
 
 private func codexProfile(hookDir: URL) -> String {
@@ -358,6 +360,18 @@ private func codexProfile(hookDir: URL) -> String {
     type = "command"
     command = "\(command("PermissionRequest"))"
     timeout = 120
+
+    [[hooks.SubagentStart]]
+    [[hooks.SubagentStart.hooks]]
+    type = "command"
+    command = "\(command("SubagentStart"))"
+    timeout = 10
+
+    [[hooks.SubagentStop]]
+    [[hooks.SubagentStop.hooks]]
+    type = "command"
+    command = "\(command("SubagentStop"))"
+    timeout = 10
 
     [[hooks.SessionEnd]]
     matcher = "stop"
@@ -433,7 +447,7 @@ should_inject() {
         fi
         case "$arg" in
             --) return 0 ;;
-            -p|--print|--help|-h|--version|-v|--bare|--safe-mode|--background|--bg)
+            --help|-h|--version|-v|--bare|--safe-mode|--background|--bg)
                 return 1 ;;
             -*)
                 case "$arg" in *=*) ;; *) option_consumes_value "$arg" && skip_next=1 ;; esac
@@ -452,7 +466,7 @@ if ! should_inject "$@"; then
     exec "$REAL_CLAUDE" "$@"
 fi
 
-settings='{"hooks":{"SessionStart":[{"matcher":"","hooks":[{"type":"command","command":"bash '"$HOME"'/.ghostling/ghostling-forward.sh","timeout":10}]}],"UserPromptSubmit":[{"matcher":"","hooks":[{"type":"command","command":"bash '"$HOME"'/.ghostling/ghostling-forward.sh","timeout":10}]}],"PreToolUse":[{"matcher":"","hooks":[{"type":"command","command":"bash '"$HOME"'/.ghostling/ghostling-forward.sh","timeout":120}]}],"PostToolUse":[{"matcher":"","hooks":[{"type":"command","command":"bash '"$HOME"'/.ghostling/ghostling-forward.sh","timeout":10}]}],"Notification":[{"matcher":"","hooks":[{"type":"command","command":"bash '"$HOME"'/.ghostling/ghostling-forward.sh","timeout":10}]}],"PermissionRequest":[{"matcher":"","hooks":[{"type":"command","command":"bash '"$HOME"'/.ghostling/ghostling-forward.sh","timeout":120}]}],"Stop":[{"matcher":"","hooks":[{"type":"command","command":"bash '"$HOME"'/.ghostling/ghostling-forward.sh","timeout":10}]}],"SessionEnd":[{"matcher":"","hooks":[{"type":"command","command":"bash '"$HOME"'/.ghostling/ghostling-forward.sh","timeout":10}]}]}}}'
+    settings='{"hooks":{"SessionStart":[{"matcher":"","hooks":[{"type":"command","command":"bash '"$HOME"'/.ghostling/ghostling-forward.sh","timeout":10}]}],"UserPromptSubmit":[{"matcher":"","hooks":[{"type":"command","command":"bash '"$HOME"'/.ghostling/ghostling-forward.sh","timeout":10}]}],"PreToolUse":[{"matcher":"","hooks":[{"type":"command","command":"bash '"$HOME"'/.ghostling/ghostling-forward.sh","timeout":120}]}],"PostToolUse":[{"matcher":"","hooks":[{"type":"command","command":"bash '"$HOME"'/.ghostling/ghostling-forward.sh","timeout":10}]}],"Notification":[{"matcher":"","hooks":[{"type":"command","command":"bash '"$HOME"'/.ghostling/ghostling-forward.sh","timeout":10}]}],"PermissionRequest":[{"matcher":"","hooks":[{"type":"command","command":"bash '"$HOME"'/.ghostling/ghostling-forward.sh","timeout":120}]}],"SubagentStart":[{"matcher":"","hooks":[{"type":"command","command":"bash '"$HOME"'/.ghostling/ghostling-forward.sh","timeout":10}]}],"SubagentStop":[{"matcher":"","hooks":[{"type":"command","command":"bash '"$HOME"'/.ghostling/ghostling-forward.sh","timeout":10}]}],"Stop":[{"matcher":"","hooks":[{"type":"command","command":"bash '"$HOME"'/.ghostling/ghostling-forward.sh","timeout":10}]}],"SessionEnd":[{"matcher":"","hooks":[{"type":"command","command":"bash '"$HOME"'/.ghostling/ghostling-forward.sh","timeout":10}]}]}}'
 
 exec "$REAL_CLAUDE" --settings "$settings" "$@"
 """#
@@ -568,40 +582,20 @@ private func codexHookScript(event: String) -> String {
     payload=$(mktemp "${TMPDIR:-/tmp}/ghostling-codex.XXXXXX" 2>/dev/null || mktemp -t ghostling-codex)
     cat > "$payload" || true
 
-    extract() {
-        /usr/bin/plutil -extract "$1" raw -o - "$payload" 2>/dev/null
-    }
-    json_escape() {
-        sed -e 's/\\\\/\\\\\\\\/g' -e 's/"/\\\\"/g' -e ':a' -e 'N' -e '$!ba' -e 's/\\n/\\\\n/g'
-    }
-    field() {
-        key="$1"
-        value="$2"
-        [ -n "$value" ] || return 0
-        escaped=$(printf '%s' "$value" | json_escape)
-        printf ',"%s":"%s"' "$key" "$escaped"
-    }
+    # Preserve Codex's canonical hook payload—including session_id, cwd and the
+    # event-specific fields—and add only Ghostling's binding metadata. plutil owns
+    # JSON escaping here, avoiding a shell re-serializer that previously replaced
+    # every ordinary one-line value with an empty string.
+    /usr/bin/plutil -replace ghostling_agent -string codex "$payload" 2>/dev/null || true
+    if [ -n "$GHOSTLING_CARD_ID" ]; then
+        /usr/bin/plutil -replace ghostling_card_id -string "$GHOSTLING_CARD_ID" "$payload" 2>/dev/null || true
+    fi
+    /usr/bin/plutil -replace ghostling_pid -string "${GHOSTLING_CODEX_PID:-$PPID}" "$payload" 2>/dev/null || true
 
-    session=$(extract session_id)
-    [ -n "$session" ] || session=$(extract conversation_id)
-    cwd=$(extract cwd)
-    [ -n "$cwd" ] || cwd="$PWD"
-    timestamp=$(extract timestamp)
-    transcript=$(extract transcript_path)
-    [ -n "$transcript" ] || transcript=$(extract transcriptPath)
-    tool=$(extract tool_name)
-    [ -n "$tool" ] || tool=$(extract toolName)
-
-    event_name="\(event)"
-    printf '{"hook_event_name":"%s","ghostling_agent":"codex"' "$event_name" >> "$file" 2>/dev/null
-    field session_id "$session" >> "$file" 2>/dev/null
-    field cwd "$cwd" >> "$file" 2>/dev/null
-    field timestamp "$timestamp" >> "$file" 2>/dev/null
-    field transcript_path "$transcript" >> "$file" 2>/dev/null
-    field tool_name "$tool" >> "$file" 2>/dev/null
-    field ghostling_card_id "$GHOSTLING_CARD_ID" >> "$file" 2>/dev/null
-    field ghostling_pid "${GHOSTLING_CODEX_PID:-$PPID}" >> "$file" 2>/dev/null
-    printf '}\\n' >> "$file" 2>/dev/null
+    # Read and append the complete record with one open/write so concurrent hooks
+    # cannot interleave fragments in the shared JSONL file.
+    line=$(cat "$payload")
+    printf '%s\\n' "$line" >> "$file" 2>/dev/null
     rm -f "$payload"
     echo '{}'
     exit 0

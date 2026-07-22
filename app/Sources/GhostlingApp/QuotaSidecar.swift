@@ -132,4 +132,16 @@ public enum RepoLocator {
         }
         return nil
     }
+
+    /// The dir the daily launch seeds the live-terminal card with. A Finder/`open`
+    /// launch starts the process at `/` — never a real project — which used to put
+    /// a permanent "/" card on the board; fall back to the user's home instead.
+    public static func launchProjectDir(
+        repoRoot: URL? = RepoLocator.repoRoot(),
+        cwd: String = FileManager.default.currentDirectoryPath,
+        home: String = NSHomeDirectory()
+    ) -> String {
+        if let repoRoot { return repoRoot.path }
+        return cwd == "/" ? home : cwd
+    }
 }

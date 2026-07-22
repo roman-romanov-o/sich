@@ -538,7 +538,8 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         addHeader("2/3 harness", completed: [projLeaf])
         add(sectionLabel("HARNESS — RUNS THE SESSION"))
         for option in Harness.allCases {
-            addNav(PaletteRow(glyph: "", title: option.title, subtitle: option.subtitle))
+            let glyph = option.cardAgent.map { BoardTheme.agentGlyph($0) } ?? ""
+            addNav(PaletteRow(glyph: glyph, title: option.title, subtitle: option.subtitle))
         }
         setFooter(["↵ next: task", "↑↓ navigate", "← back", "esc cancel"])
     }

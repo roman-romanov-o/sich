@@ -12,7 +12,7 @@ import UserNotifications
 /// never spawns `claude -p` — every session launches through the registry's pool
 /// firewall.
 @MainActor
-public final class BoardShell: NSObject, NSApplicationDelegate {
+public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let registry = SessionRegistry()
     private let seeds: [BoardSeed]
     private var quotaSources: [QuotaSourceInput]
@@ -23,7 +23,10 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     // not cover whether the board is actually hidden / restored on screen.
     let boardView = BoardView()
     let attention = AttentionIndicator()
-    let fontControls = FontSizeControls(scope: .board)
+    /// Backlog lives on its own full-window page (⌘B) so the active board keeps
+    /// its width; this button is the on-canvas way in, badged with the count.
+    let backlogButton = NSButton(title: "Backlog", target: nil, action: nil)
+    let backlogPage = BacklogPage()
     let drillIn = DrillInPanel()
     let planningMode = PlanningModeView()
     private(set) var sahaTaskChooser: SahaTaskChooserView?
@@ -31,6 +34,9 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     // The quota panel folded in as a right-side region — one assembled window
     // shows the board AND the four never-netted gauges (no separate binary).
     let quota = QuotaPanel()
+    /// The panel's width constraint — its constant tracks ``QuotaLayout/panelWidth``,
+    /// which scales with the board font, so a zoom can't clip the gauges off-window.
+    private var quotaWidth: NSLayoutConstraint?
     // The live data bridge — fully native after the Phase-03 cutover (DD-001/DD-002):
     // quota reads in-process from disk (no `GET /quota`, no sidecar) and sessions
     // arrive by tailing the observe-only event file (no `/sessions`, no port).
@@ -44,9 +50,18 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     // kernel buffer. Its own surface drains the drilled-in card, so the pump skips it.
     private var sessionPumpTimer: Timer?
     // Ctrl+Tab task-switch monitor — retained so it can be torn down; installed only
-    // on the real launch path, never the headless test build (tests drive cycleDrill
-    // and switchDirection directly, so no event-loop dependency).
+    // on the real launch path, never the headless test build (tests feed real NSEvents
+    // through handleTaskSwitchEvent directly, so no event-loop dependency).
     private var taskSwitchMonitor: Any?
+    /// Focus history, most recent first — the Ctrl+Tab switcher's ranking signal.
+    private var mruOrder: [UUID] = []
+    /// The Ctrl+Tab preview overlay plus its open-state snapshot. The list is frozen
+    /// at open so live status changes can't reshuffle it under the operator's fingers
+    /// mid-scroll; an empty snapshot means the switcher is closed.
+    let taskSwitcher = TaskSwitcherOverlay()
+    private(set) var switcherSnapshot: [BoardCard] = []
+    private(set) var switcherIndex = 0
+    var switcherIsOpen: Bool { !switcherSnapshot.isEmpty }
     private(set) var drilledInCardID: UUID?
     // Pump ticks since launch — the reconcile pass piggybacks on the pump timer at
     // a ~1s cadence (one waitpid(WNOHANG) per live session; no extra timer).
@@ -63,20 +78,33 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     // so the 3s poll doesn't tear down and rebuild identical card views (flicker).
     private var lastSessionsSignature: [String] = []
     private var idleHoldUntil: [UUID: Date] = [:]
+    /// Choice-screen waits inferred from terminal pixels. Hook-derived Needs You
+    /// states are deliberately absent so a normal Codex prompt cannot clear them.
+    private var codexChoiceWaitingCardIDs: Set<UUID> = []
     // User intent, not detector output: only a manual drop to DONE survives a restart
     // as DONE. Everything else starts from queue and must earn WORKING again from
     // fresh observations in the current app session.
     private var manuallyDoneCardIDs: Set<UUID> = []
-    // A card manually moved out of DONE must not be pulled straight back by the stale
-    // finished run still present in the hook/session feed. Let fresh work reopen the
-    // automatic done path.
-    private var manuallyReopenedDoneCardIDs: Set<UUID> = []
-
     private var selection = BoardSelection()
     private(set) var cards: [BoardCard] = []
     private(set) var planningModeCardID: UUID?
     private var ptyByCard: [UUID: PTYSession] = [:]
     var launchOverrideForTesting: ((BoardSeed) -> Session?)?
+    /// Durable task persistence — the task, not the session, is the root entity.
+    /// `nil` disables writes entirely: unit tests and the E2E capture harness stay
+    /// side-effect free; the real launch installs the Application Support store and
+    /// persistence tests inject a temp-dir store.
+    var taskStore: BoardTaskStore?
+    /// Backlog: durable task intent with no session yet. Array order = render order.
+    private(set) var backlogTasks: [TaskRecord] = []
+    /// The per-card slice of a ``TaskRecord`` the board model doesn't hold itself
+    /// (description, launch mode, creation time) — joined by card id and written
+    /// into the task book on every mutation.
+    private var taskMetaByCard: [UUID: CardTaskMeta] = [:]
+    /// Seeded utility cards (the launch live-terminal) are session furniture, not
+    /// operator tasks — excluded from the task book so they don't accrete a new
+    /// durable record on every app launch.
+    private var seededCardIDs: Set<UUID> = []
     /// Provisions one git worktree per task (`createSession(inWorktree:)`) —
     /// injectable so tests never mint real worktrees in this repo.
     var worktreeProvisioner: any WorktreeProvisioning = GitWorktreeProvisioner()
@@ -105,7 +133,11 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         installMainMenu()
         installTaskSwitchMonitor()
         wireInteractions()
-        refresh()
+        // Paint the board immediately. Quota construction and live reads are an
+        // independent startup concern: a slow transcript walk must never delay the
+        // first usable event-loop turn for the rest of the application.
+        refresh(includeQuota: false)
+        DispatchQueue.main.async { [weak self] in self?.startQuotaPolling() }
         // First paint should not wait for shell/PTY spawns, saved-session restore,
         // quota disk walks, event-tail setup, or idempotent integration installs.
         // Build and order the window first; hydrate the board just after AppKit gets
@@ -116,12 +148,18 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     }
 
     private func finishStartupAfterFirstPaint() {
+        // The durable task store comes up before restore so hydration can read the
+        // task book and rewrite it. Skipped under GHOSTLING_E2E (captures must not
+        // touch — or be polluted by — the real Application Support book).
+        if taskStore == nil, ProcessInfo.processInfo.environment["GHOSTLING_E2E"] == nil {
+            taskStore = BoardTaskStore.applicationSupport()
+        }
         // US-003: reload + re-open the pre-quit session tree before the fresh seed lands.
         restorePreviousSessions()
         seedSessions()
         refresh()
         startSessionPump()
-        startQuotaBridge()
+        startSessionsBridge()
         installPostLaunchIntegrations()
         handleLaunchCaptureRequests()
         maybeRunE2E()
@@ -190,6 +228,13 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         ptyByCard[card.id]?.send(bytes)
     }
 
+    /// E2E-only: the card's current terminal screen — failure-time diagnostics for a
+    /// harness that otherwise has no eyes on what the shell/agent actually printed.
+    func e2eScreenText(of card: BoardCard) -> String {
+        guard let pty = ptyByCard[card.id] else { return "" }
+        return (try? pty.terminal.plainText()) ?? ""
+    }
+
     public func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool {
         true
     }
@@ -211,7 +256,10 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     /// quota reads IN-PROCESS on a timer, and sessions arrive by tailing the
     /// observe-only event file. Degrades gracefully — the seeded gauges stay until the
     /// first read lands.
-    private func startQuotaBridge() {
+    private func startQuotaPolling() {
+        // Show the injected connecting/demo state first. This work is deliberately
+        // on the post-launch turn, after the window is already ordered and usable.
+        applyQuota(sources: quotaSources)
         // In E2E (design-review capture) keep the seeded two-pool demo quota on
         // screen: the native reader would overwrite it with the honest interactive +
         // all-"unknown" reading (no provider wiring yet for the other three pools),
@@ -221,6 +269,9 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
             poller.start()
             self.quotaPoller = poller
         }
+    }
+
+    private func startSessionsBridge() {
         let sessionsPoller = SessionsPoller(
             diffSink: { [weak self] diffs in
                 self?.turnDiffs = diffs
@@ -248,16 +299,17 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         sessionPumpTimer = nil
     }
 
-    // Adaptive cadence, mirroring TerminalSurface: 30Hz while any background child
+    // Adaptive cadence, mirroring TerminalSurface: 60Hz while any background child
     // produces output, 4Hz once ALL have been quiet ~1s. Back-pressure safety is
     // unaffected — even 4Hz full drains outrun a ~64KB tty buffer for a quiet child,
     // and the first busy tick upshifts again.
     // ponytail: still polling non-blocking fds; swap for kqueue only if the 4Hz
     // idle wakeups ever show up in a power profile.
-    private static let pumpActiveHz = 30.0
+    private static let pumpActiveHz = 60.0
     private static let pumpIdleHz = 4.0
     private var pumpIdleTicks = 0
     private var pumpHz = pumpActiveHz
+    private var lastCodexScanGeneration: [UUID: UInt64] = [:]
 
     private func schedulePump(hz: Double) {
         sessionPumpTimer?.invalidate()
@@ -279,12 +331,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         for (id, pty) in ptyByCard
         where id != drilledInCardID && id != planningModeCardID && pty.masterFD >= 0 {
             pty.setNonBlocking()          // idempotent
-            drain: while true {
-                switch pty.pumpAvailable() {
-                case .data: sawData = true; continue drain
-                case .idle, .eof: break drain
-                }
-            }
+            if case .data = pty.pumpAvailable() { sawData = true }
         }
         reconcileCodexChoiceScreens()
         adaptPumpCadence(sawData: sawData)
@@ -307,7 +354,12 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     /// screen for owned Codex cards and turn the narrow choice UI into the same
     /// `.waitingForInput` state the board already understands.
     private func reconcileCodexChoiceScreens() {
-        for (id, pty) in ptyByCard where pty.masterFD >= 0 {
+        for card in cards where card.agent == .codex && card.state != .done {
+            let id = card.id
+            guard let pty = ptyByCard[id], pty.masterFD >= 0 else { continue }
+            let generation = pty.outputGeneration
+            guard lastCodexScanGeneration[id] != generation else { continue }
+            lastCodexScanGeneration[id] = generation
             guard let screen = try? pty.terminal.plainText() else { continue }
             reconcileCodexChoiceScreen(cardID: id, screen: screen)
         }
@@ -327,10 +379,18 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
               cards[index].state != .done
         else { return }
         let waiting = CodexChoiceScreen.isWaitingForChoice(screen)
-        if waiting, cards[index].state != .waitingForInput {
-            cards[index] = cards[index].with(state: .waitingForInput)
-            refresh()
-        } else if !waiting, cards[index].state == .waitingForInput {
+        if waiting {
+            // Only claim ownership of a wait WE originated. If the card is already
+            // waiting (e.g. a hook PermissionRequest/Notification put it there), leave
+            // that hook-owned state untouched so a later clear of the pixel screen
+            // can't stomp a still-pending Needs You that the terminal can't see.
+            if cards[index].state != .waitingForInput {
+                codexChoiceWaitingCardIDs.insert(cardID)
+                cards[index] = cards[index].with(state: .waitingForInput)
+                refresh()
+            }
+        } else if codexChoiceWaitingCardIDs.remove(cardID) != nil,
+                  cards[index].state == .waitingForInput {
             cards[index] = cards[index].with(state: .running)
             refresh()
         }
@@ -376,8 +436,108 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     /// are rendered by the launch `refresh()` that runs right after seeding.
     private func restorePreviousSessions() {
         guard ProcessInfo.processInfo.environment["GHOSTLING_E2E"] == nil else { return }
-        restoreOnLaunch(store: SessionSnapshotStore.applicationSupport(),
-                        restorer: makeLaunchRestorer())
+        hydratePersistedState(sessionStore: SessionSnapshotStore.applicationSupport(),
+                              restorer: makeLaunchRestorer())
+    }
+
+    /// Launch-time hydration, task-book first: restore the pre-quit session tree
+    /// (US-003), then overlay the durable task book — the AUTHORITY on which tasks
+    /// exist. A board task the session layer failed to bring back (crash before the
+    /// quit-time snapshot, dead pane) resurrects as a session-less queue card
+    /// instead of silently vanishing; backlog tasks rejoin the backlog rail.
+    func hydratePersistedState(sessionStore: SessionSnapshotStore, restorer: SessionRestorer) {
+        let book = taskStore?.load()
+        _ = restoreOnLaunch(store: sessionStore, restorer: restorer)
+        adoptTaskBook(book)
+    }
+
+    /// Test seam: the exact launch hydration (task book + session snapshot through
+    /// the REAL restorer that rebuilds cards), against injected stores.
+    func hydrateForTesting(sessionStore: SessionSnapshotStore) {
+        hydratePersistedState(sessionStore: sessionStore, restorer: makeLaunchRestorer())
+    }
+
+    /// Fold the loaded task book onto the board. No book yet but restored cards →
+    /// first launch after the upgrade: synthesize the book from what the session
+    /// snapshot brought back (migration), so the next crash is already covered.
+    private func adoptTaskBook(_ book: TaskBook?) {
+        guard let book else {
+            persistTasks()
+            return
+        }
+        for record in book.tasks {
+            switch record.placement {
+            case .backlog: backlogTasks.append(record)
+            case .board(let state): adoptBoardRecord(record, state: state)
+            }
+        }
+        persistTasks()
+    }
+
+    /// One board-placed record rejoins the board: its metadata attaches to the
+    /// already-restored card with the same id; a record with NO surviving card comes
+    /// back as a session-less card in its durable column — the task outlives its shell.
+    private func adoptBoardRecord(_ record: TaskRecord, state: CardState) {
+        taskMetaByCard[record.id] = CardTaskMeta(
+            details: record.details, mode: record.mode, createdAt: record.createdAt
+        )
+        if state == .done { manuallyDoneCardIDs.insert(record.id) }
+        guard !cards.contains(where: { $0.id == record.id }) else { return }
+        cards.append(BoardCard(
+            id: record.id,
+            sessionID: record.id.uuidString,
+            title: record.title.isEmpty ? nil : record.title,
+            projectDir: record.projectDir ?? NSHomeDirectory(),
+            agent: record.agent.flatMap(CardAgent.init(rawValue:)) ?? .claude,
+            flow: record.mode == .saha ? .a : .b,
+            state: state,
+            taskFolder: record.taskFolder
+        ))
+    }
+
+    /// Write the durable task book — every backlog task plus every operator-created
+    /// board card — through the injected store. Runs on each mutation (create, move,
+    /// rename, delete, backlog edits), so a crash can never roll the board back to
+    /// the last clean quit. No store configured → no-op.
+    private func persistTasks() {
+        guard let taskStore else { return }
+        let board = cards
+            .filter { !seededCardIDs.contains($0.id) }
+            .map(taskRecord(for:))
+        _ = try? taskStore.save(tasks: backlogTasks + board)
+    }
+
+    /// A board card's durable record. Placement goes through
+    /// ``persistedRestartState(for:)`` — the same restart policy the session snapshot
+    /// applies: only a manual DONE is durable intent; everything else restarts from
+    /// queue and must earn WORKING again from fresh observations.
+    private func taskRecord(for card: BoardCard) -> TaskRecord {
+        let meta = taskMetaByCard[card.id] ?? CardTaskMeta()
+        return TaskRecord(
+            id: card.id,
+            title: card.title ?? "",
+            details: meta.details,
+            placement: .board(persistedRestartState(for: card)),
+            agent: card.agent.rawValue,
+            mode: meta.mode ?? (card.flow == .a ? .saha : .interactive),
+            projectDir: card.projectDir,
+            taskFolder: card.taskFolder,
+            createdAt: meta.createdAt,
+            sessionRef: sessionRef(for: card)
+        )
+    }
+
+    /// Resume hints only: the pinned Claude conversation id (if the card's session is
+    /// driving one) and the last known cwd. Joined through the shared pty — the one
+    /// identity the card and its registry session agree on.
+    private func sessionRef(for card: BoardCard) -> TaskSessionRef {
+        let session = ptyByCard[card.id].flatMap { pty in
+            registry.all.first { $0.pty === pty }
+        }
+        return TaskSessionRef(
+            claudeSessionID: session?.claudeSessionID,
+            lastCwd: session?.reportedCwd ?? card.projectDir
+        )
     }
 
     /// US-003 quit side: persist the live window/pane tree so the next launch can restore
@@ -624,6 +784,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
             )
             cards.append(card)
             ptyByCard[card.id] = session.pty
+            seededCardIDs.insert(card.id)
         }
     }
 
@@ -654,6 +815,8 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
                                      action: #selector(newRemoteTmuxMenuAction), keyEquivalent: "r")
         remote.keyEquivalentModifierMask = [.command, .shift]
         remote.target = self
+        appMenu.addItem(withTitle: "Backlog", action: #selector(backlogMenuAction),
+                        keyEquivalent: "b").target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Increase Board Font",
                         action: #selector(increaseBoardFontMenuAction),
@@ -672,6 +835,13 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         terminalDown.keyEquivalentModifierMask = [.command, .shift]
         terminalDown.target = self
         appMenu.addItem(.separator())
+        // Recovery affordance: if the window ever ends up larger than the screen
+        // (its resize edges then sit off-screen and can't be grabbed), ⌘0 pulls
+        // it back without restarting — a restart would kill every live session.
+        appMenu.addItem(withTitle: "Fit Window to Screen",
+                        action: #selector(fitWindowMenuAction),
+                        keyEquivalent: "0").target = self
+        appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit Ghostling", action: #selector(NSApplication.terminate(_:)),
                         keyEquivalent: "q")
         let appItem = NSMenuItem()
@@ -682,6 +852,14 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     }
 
     @objc private func newTaskMenuAction() { openCreatePalette() }
+    /// ⌘B / the top-left button: toggle the backlog page. Only from the board —
+    /// while a terminal takeover (drill-in / planning) is up the chord is inert,
+    /// so it can't hide the board's chrome underneath a live terminal.
+    @objc private func backlogMenuAction() {
+        guard drillIn.isHidden, planningMode.isHidden else { return }
+        backlogPage.isHidden ? showBacklogPage() : hideBacklogPage()
+    }
+    @objc private func fitWindowMenuAction() { fitWindowToScreen() }
     @objc private func increaseBoardFontMenuAction() { changeBoardFont(by: 0.1) }
     @objc private func decreaseBoardFontMenuAction() { changeBoardFont(by: -0.1) }
     @objc private func increaseTerminalFontMenuAction() { changeTerminalFont(by: 1) }
@@ -769,17 +947,40 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         installShellIntegration(installRoot: Self.shellIntegrationRoot(), rc: Self.defaultZshrc())
     }
 
-    /// Ctrl+Tab / Ctrl+Shift+Tab jumps straight between focused tasks. A local key
-    /// monitor is the single choke point that fires BEFORE the drilled-in terminal's
-    /// first responder swallows the key — unlike ⌘-combos, a Control-modified key isn't
-    /// reliably routed through `performKeyEquivalent`, and plain Tab belongs to the
-    /// child. Works identically from the board, drill-in, and planning mode.
+    /// Ctrl+Tab / Ctrl+Shift+Tab opens the task switcher (a held-⌃ preview, VS Code
+    /// style — release ⌃ to commit, Esc to cancel). A local key monitor is the single
+    /// choke point that fires BEFORE the drilled-in terminal's first responder swallows
+    /// the key — unlike ⌘-combos, a Control-modified key isn't reliably routed through
+    /// `performKeyEquivalent`, and plain Tab belongs to the child. `.flagsChanged` is
+    /// watched too: the ⌃ release is what commits the highlighted task. Works
+    /// identically from the board, drill-in, and planning mode.
     private func installTaskSwitchMonitor() {
-        taskSwitchMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, let reverse = Self.switchDirection(for: event) else { return event }
-            self.cycleDrill(reverse: reverse)
+        taskSwitchMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.keyDown, .flagsChanged]
+        ) { [weak self] event in
+            self?.handleTaskSwitchEvent(event) ?? event
+        }
+    }
+
+    /// The monitor's single callback: a switch chord advances the preview, a ⌃ release
+    /// commits it, Esc backs out. Instance method fed REAL `NSEvent`s — tests dispatch
+    /// through this exact path, per the Interaction-AC Binding Rule. Returns `nil` to
+    /// consume the event (never for `.flagsChanged`: modifier transitions belong to
+    /// the app).
+    func handleTaskSwitchEvent(_ event: NSEvent) -> NSEvent? {
+        if event.type == .flagsChanged {
+            if switcherIsOpen, Self.isControlRelease(event) { commitSwitcher() }
+            return event
+        }
+        if let reverse = Self.switchDirection(for: event) {
+            advanceSwitcher(reverse: reverse)
             return nil   // consume it — never let plain Tab reach the child
         }
+        if switcherIsOpen, event.keyCode == 53 {   // Esc closes without switching
+            cancelSwitcher()
+            return nil
+        }
+        return event
     }
 
     /// Decode a key event into a switch direction (`false` = next, `true` = previous),
@@ -794,6 +995,19 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         else { return nil }
         return flags.contains(.shift)
     }
+
+    /// A `.flagsChanged` with Control no longer held — the "commit" gesture while the
+    /// switcher is up. Static + `NSEvent`-driven for the same test-dispatch reason.
+    static func isControlRelease(_ event: NSEvent) -> Bool {
+        event.type == .flagsChanged
+            && !event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.control)
+    }
+
+    /// Columns are equal-width and flexible and card text truncates, so the board
+    /// degrades gracefully when narrow — the floor only guards against a window too
+    /// small to be usable, and must stay below a 1280×832 built-in laptop screen
+    /// (the old 1360 floor made such screens impossible to resize on).
+    static let minContentSize = NSSize(width: 640, height: 420)
 
     private func makeWindow() {
         let window = NSWindow(
@@ -817,14 +1031,60 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         // surface, whose live-flip hook keys off appearance changes — from ever
         // resolving light. Following the system flips the whole app, terminal included.
         window.appearance = nil
-        // The fixed 5-column board clips below ~1360pt with no scroll signal
-        // (ColumnLayout's known ceiling) — stop the window from shrinking into it.
-        window.contentMinSize = NSSize(width: 1360, height: 640)
+        window.contentMinSize = Self.minContentSize
         window.contentView = makeContentView(in: window.frame.size)
         window.center()
+        window.delegate = self
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(boardView)   // arrow-key board navigation from launch
         self.window = window
+        // The 1400×860 default fits a wide external display but overflows a smaller
+        // built-in laptop screen. Correct that once on launch. Do not automatically
+        // refit later: `windowDidChangeScreen` fires midway through a cross-display
+        // drag, and changing the frame there traps the window on its original screen.
+        fitWindowToScreen()
+        // The fitted launch width may already be below the 1400pt design width
+        // (a built-in laptop screen) — size the type to it before first paint.
+        applyResponsiveTypography()
+    }
+
+    /// Shrink and reposition the window so it fits entirely inside its current
+    /// screen's `visibleFrame` (menu bar and Dock excluded). Only ever shrinks —
+    /// a window the user enlarged on a big display is left alone until it lands
+    /// somewhere it no longer fits. This is what makes dragging from an external
+    /// monitor onto the built-in screen not push content off the edges.
+    private func fitWindowToScreen() {
+        guard let window, let visible = (window.screen ?? NSScreen.main)?.visibleFrame
+        else { return }
+        // Never fight a native fullscreen window (or a transition into one):
+        // setFrame mid-transition wedges AppKit's animation and can strand the
+        // window at an off-screen oversized frame — the "stuck, can't resize" bug.
+        guard !window.styleMask.contains(.fullScreen) else { return }
+        let frame = window.frame
+        let fitted = Self.fittedFrame(frame, inside: visible)
+        if fitted != frame { window.setFrame(fitted, display: true, animate: false) }
+    }
+
+    /// Pure geometry shared by launch/screen-change fitting and tests.
+    static func fittedFrame(_ frame: NSRect, inside visible: NSRect) -> NSRect {
+        let width = min(frame.width, visible.width)
+        let height = min(frame.height, visible.height)
+        let x = min(max(frame.minX, visible.minX), visible.maxX - width)
+        let y = min(max(frame.minY, visible.minY), visible.maxY - height)
+        return NSRect(x: x, y: y, width: width, height: height)
+    }
+
+    /// Make the green zoom control — and title-bar double-click when macOS is set
+    /// to zoom — mean “fit this screen”. AppKit's default standard frame can retain
+    /// an oversized user frame, which is precisely the state this affordance must
+    /// recover from.
+    public func windowWillUseStandardFrame(
+        _ window: NSWindow, defaultFrame newFrame: NSRect
+    ) -> NSRect {
+        guard let visible = (window.screen ?? NSScreen.main)?.visibleFrame else {
+            return newFrame
+        }
+        return visible
     }
 
     private func makeContentView(in size: NSSize) -> NSView {
@@ -838,13 +1098,16 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         // `BoardTheme`'s dynamic light/dark tokens, and standard control chrome should
         // match the active system theme so the app reads light in light mode.
         layout(attention, in: root, header: true)
-        layoutFontControls(in: root)
+        layoutBacklogButton(in: root)
         layoutQuota(in: root)
         layout(boardView, in: root, header: false)
         drillIn.isHidden = true
         layoutDrillIn(in: root)
         planningMode.isHidden = true
         layoutFullWindow(planningMode, in: root)
+        backlogPage.isHidden = true
+        layoutFullWindow(backlogPage, in: root)
+        layoutFullWindow(taskSwitcher, in: root)   // last = topmost: floats over any mode
         return root
     }
 
@@ -864,22 +1127,29 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     private func layoutQuota(in root: NSView) {
         quota.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(quota)
+        let width = quota.widthAnchor.constraint(equalToConstant: QuotaLayout.panelWidth)
+        quotaWidth = width
         NSLayoutConstraint.activate([
             quota.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             quota.topAnchor.constraint(equalTo: root.topAnchor, constant: 32),
             quota.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-            quota.widthAnchor.constraint(equalToConstant: 340),
+            width,
         ])
     }
 
-    private func layoutFontControls(in root: NSView) {
-        fontControls.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(fontControls)
+    /// Top-left, where the font pill used to sit (board zoom is ⌘+/⌘− only now).
+    private func layoutBacklogButton(in root: NSView) {
+        backlogButton.target = self
+        backlogButton.action = #selector(backlogMenuAction)
+        backlogButton.bezelStyle = .rounded
+        backlogButton.controlSize = .small
+        backlogButton.font = BoardTheme.monoBold
+        backlogButton.contentTintColor = BoardTheme.brand
+        backlogButton.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(backlogButton)
         NSLayoutConstraint.activate([
-            fontControls.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
-            fontControls.topAnchor.constraint(equalTo: root.topAnchor, constant: 10),
-            fontControls.heightAnchor.constraint(equalToConstant: 30),
-            fontControls.widthAnchor.constraint(equalToConstant: fontControls.intrinsicContentSize.width),
+            backlogButton.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
+            backlogButton.topAnchor.constraint(equalTo: root.topAnchor, constant: 10),
         ])
     }
 
@@ -932,9 +1202,20 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         boardView.onMove = { [weak self] id, column in self?.move(cardID: id, to: column) }
         boardView.onRename = { [weak self] in self?.promptRename(for: $0) }
         boardView.onDelete = { [weak self] in self?.promptDelete(for: $0) }
+        backlogPage.onReturn = { [weak self] in self?.hideBacklogPage() }
+        backlogPage.onAdd = { [weak self] in self?.promptAddBacklogTask() }
+        backlogPage.onPromote = { [weak self] record in
+            guard let self else { return }
+            // A successful promote puts a card on the board — follow it there. A
+            // saha promote instead lands in planning mode, which has already taken
+            // the whole window (and hidden this page); restoring board chrome on
+            // top of it would clobber the takeover, so only follow when it didn't.
+            if self.promptPromoteBacklogTask(record) != nil, self.planningMode.isHidden {
+                self.hideBacklogPage()
+            }
+        }
+        backlogPage.onDelete = { [weak self] in self?.deleteBacklogTask(id: $0.id) }
         attention.onActivate = { [weak self] in self?.activateAttention() }
-        fontControls.onBoardSmaller = { [weak self] in self?.changeBoardFont(by: -0.1) }
-        fontControls.onBoardLarger = { [weak self] in self?.changeBoardFont(by: 0.1) }
         drillIn.onTerminalSmaller = { [weak self] in self?.changeTerminalFont(by: -1) }
         drillIn.onTerminalLarger = { [weak self] in self?.changeTerminalFont(by: 1) }
         planningMode.onTerminalSmaller = { [weak self] in self?.changeTerminalFont(by: -1) }
@@ -945,10 +1226,33 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
 
     private func changeBoardFont(by delta: CGFloat) {
         BoardTheme.boardFontScale = min(1.8, max(1.0, BoardTheme.boardFontScale + delta))
+        reflowBoardTypography()
+    }
+
+    /// Re-render everything whose metrics derive from the scaled board fonts —
+    /// the manual ⌘+/⌘− zoom and the responsive window-width shrink share this.
+    private func reflowBoardTypography() {
         boardView.applyFontScale()
         attention.update(count: attention.renderedCount)
-        quota.render(gauges: QuotaProjection.gauges(from: quotaSources))
+        quotaWidth?.constant = QuotaLayout.panelWidth
+        quota.render(gauges: QuotaProjection.gauges(from: quotaSources), cards: cards)
+        backlogButton.font = BoardTheme.monoBold
         window?.contentView?.layoutSubtreeIfNeeded()
+    }
+
+    /// Auto-shrink the board type on narrow windows. The scale is quantized in
+    /// ``BoardTheme/responsiveScale(forContentWidth:)`` so a live resize drag only
+    /// pays for a scaffold rebuild when it crosses a 0.05 step.
+    private func applyResponsiveTypography() {
+        guard let width = window?.contentView?.frame.width else { return }
+        let scale = BoardTheme.responsiveScale(forContentWidth: width)
+        guard scale != BoardTheme.responsiveFontScale else { return }
+        BoardTheme.responsiveFontScale = scale
+        reflowBoardTypography()
+    }
+
+    public func windowDidResize(_ notification: Notification) {
+        applyResponsiveTypography()
     }
 
     private func changeTerminalFont(by delta: CGFloat) {
@@ -1075,7 +1379,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     /// Recently-used project dirs, most-recent first, with the repo root guaranteed
     /// present as a fallback. Persisted in UserDefaults so the list survives relaunch.
     private func recentProjectDirs() -> [String] {
-        let root = repoRoot?.path ?? FileManager.default.currentDirectoryPath
+        let root = RepoLocator.launchProjectDir(repoRoot: repoRoot)
         var dirs = UserDefaults.standard.stringArray(forKey: Self.recentDirsKey) ?? []
         if !dirs.contains(root) { dirs.append(root) }
         return dirs
@@ -1111,7 +1415,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         sessionCounter += 1
         let chosen = (projectDir?.isEmpty == false) ? projectDir : nil
         var dir = chosen.map { ($0 as NSString).expandingTildeInPath }
-            ?? repoRoot?.path ?? FileManager.default.currentDirectoryPath
+            ?? RepoLocator.launchProjectDir(repoRoot: repoRoot)
         if inWorktree,
            let worktree = worktreeProvisioner.provision(repoDir: dir, slug: sessionSlug(title)) {
             // The card LIVES in its own checkout on a fresh task/<slug> branch, so
@@ -1155,7 +1459,11 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
             HookInstaller.installCodexShim()
             _ = session.pty.send(Array(Self.startCodexCommand().utf8))
         }
+        if taskMetaByCard[card.id] == nil {
+            taskMetaByCard[card.id] = CardTaskMeta(mode: flow == .a ? .saha : .interactive)
+        }
         refresh()
+        persistTasks()
         return card
     }
 
@@ -1178,6 +1486,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         cards.append(card)
         ptyByCard[card.id] = session.pty
         refresh()
+        persistTasks()
         return card
     }
 
@@ -1266,10 +1575,12 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     }
 
     private func enterPlanningMode(_ card: BoardCard) {
+        noteFocus(card.id)
         planningModeCardID = card.id
         boardView.isHidden = true
         attention.isHidden = true
-        fontControls.isHidden = true
+        backlogButton.isHidden = true
+        backlogPage.isHidden = true
         quota.isHidden = true
         drillIn.isHidden = true
         planningMode.show(card: card)
@@ -1301,23 +1612,166 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         return slug.isEmpty ? "terminal-\(sessionCounter)" : slug
     }
 
+    // MARK: - Backlog (durable tasks that have no session yet)
+
+    /// Add a task to the backlog: pure durable intent — title + description, no
+    /// session, no pty. Written through the task store immediately, so it survives
+    /// a crash one line later.
+    @discardableResult
+    func addBacklogTask(title: String, details: String = "", projectDir: String? = nil) -> TaskRecord {
+        let record = TaskRecord(
+            id: UUID(), title: title, details: details, placement: .backlog,
+            projectDir: projectDir
+        )
+        backlogTasks.append(record)
+        persistTasks()
+        refresh()
+        return record
+    }
+
+    /// Edit a backlog task in place (`nil` leaves a field unchanged).
+    func updateBacklogTask(id: UUID, title: String? = nil, details: String? = nil) {
+        guard let idx = backlogTasks.firstIndex(where: { $0.id == id }) else { return }
+        if let title { backlogTasks[idx].title = title }
+        if let details { backlogTasks[idx].details = details }
+        persistTasks()
+        refresh()
+    }
+
+    func deleteBacklogTask(id: UUID) {
+        guard backlogTasks.contains(where: { $0.id == id }) else { return }
+        backlogTasks.removeAll { $0.id == id }
+        persistTasks()
+        refresh()
+    }
+
+    /// Move a backlog task onto the board with an explicit launch choice — agent
+    /// (Claude/Codex) + mode (interactive terminal vs saha planning). On success the
+    /// task leaves the backlog and its description rides along on the new card's
+    /// durable record; a failed launch leaves the backlog untouched, so a task is
+    /// never lost to a spawn error.
+    @discardableResult
+    func promoteBacklogTask(
+        id: UUID, agent: CardAgent = .claude, mode: TaskMode = .interactive,
+        inWorktree: Bool = false
+    ) -> BoardCard? {
+        guard let idx = backlogTasks.firstIndex(where: { $0.id == id }) else { return nil }
+        let record = backlogTasks[idx]
+        guard let card = launchPromotedTask(record, agent: agent, mode: mode, inWorktree: inWorktree)
+        else { return nil }
+        backlogTasks.remove(at: idx)
+        // The card id supersedes the backlog id, but the task's description and
+        // original creation time survive the promotion on the card's record.
+        taskMetaByCard[card.id] = CardTaskMeta(
+            details: record.details, mode: mode, createdAt: record.createdAt
+        )
+        persistTasks()
+        refresh()
+        return card
+    }
+
+    private func launchPromotedTask(
+        _ record: TaskRecord, agent: CardAgent, mode: TaskMode, inWorktree: Bool
+    ) -> BoardCard? {
+        switch mode {
+        case .interactive:
+            return createSession(
+                title: record.title, projectDir: record.projectDir,
+                autoStartAgent: agent, inWorktree: inWorktree
+            )
+        case .saha:
+            let dir = record.projectDir ?? RepoLocator.launchProjectDir(repoRoot: repoRoot)
+            return try? createSahaSession(
+                title: record.title,
+                projectDirectory: URL(fileURLWithPath: dir, isDirectory: true),
+                script: sahaInitScript(),
+                scaffolder: TaskScaffolder(runner: FoundationTaskScaffoldRunner())
+            )
+        }
+    }
+
+    /// The "+ backlog task" prompt: title + free-form description. The model
+    /// mutation is ``addBacklogTask`` so tests drive it without the modal.
+    private func promptAddBacklogTask() {
+        let alert = NSAlert()
+        alert.messageText = "New Backlog Task"
+        alert.informativeText = "Saved durably now; start it later with the agent of your choice."
+        alert.addButton(withTitle: "Add")
+        alert.addButton(withTitle: "Cancel")
+        let title = NSTextField(frame: NSRect(x: 0, y: 38, width: 300, height: 24))
+        title.placeholderString = "Task title"
+        let details = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 32))
+        details.placeholderString = "Description (optional)"
+        let box = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 62))
+        box.addSubview(title)
+        box.addSubview(details)
+        alert.accessoryView = box
+        alert.window.initialFirstResponder = title
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let trimmed = title.stringValue.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        addBacklogTask(title: trimmed, details: details.stringValue)
+    }
+
+    /// The "start task" chooser for a backlog card: pick the agent + flow, then
+    /// promote through the same model API tests use. Returns the new board card,
+    /// or nil on cancel / failed launch — the page uses this to decide whether to
+    /// follow the task back to the board.
+    @discardableResult
+    private func promptPromoteBacklogTask(_ record: TaskRecord) -> BoardCard? {
+        let alert = NSAlert()
+        alert.messageText = "Start \(record.title)"
+        alert.informativeText = record.details.isEmpty ? "Choose how to run this task." : record.details
+        alert.addButton(withTitle: "Claude")
+        alert.addButton(withTitle: "Codex")
+        alert.addButton(withTitle: "Plan with saha")
+        alert.addButton(withTitle: "Cancel")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return promoteBacklogTask(id: record.id, agent: .claude)
+        case .alertSecondButtonReturn: return promoteBacklogTask(id: record.id, agent: .codex)
+        case .alertThirdButtonReturn: return promoteBacklogTask(id: record.id, mode: .saha)
+        default: return nil
+        }
+    }
+
+    // MARK: - Backlog page (full-window, ⌘B)
+
+    /// Swap the board chrome for the backlog page. Terminal takeovers guard the
+    /// entry (see ``backlogMenuAction``), so only board furniture hides here.
+    func showBacklogPage() {
+        backlogPage.render(backlogTasks)
+        boardView.isHidden = true
+        attention.isHidden = true
+        backlogButton.isHidden = true
+        quota.isHidden = true
+        backlogPage.isHidden = false
+        window?.makeFirstResponder(backlogPage)
+    }
+
+    /// Esc / "← board" / a successful promote: restore the board exactly as left.
+    func hideBacklogPage() {
+        backlogPage.isHidden = true
+        boardView.isHidden = false
+        attention.isHidden = false
+        backlogButton.isHidden = false
+        quota.isHidden = false
+        refresh()
+        window?.makeFirstResponder(boardView)
+    }
+
     /// A card was dragged to another column → set its state to that column's state
     /// (a manual lifecycle override). Identity and PTY are preserved, so a drilled-in
     /// terminal keeps working; only the state — hence the board column — changes.
     func move(cardID: UUID, to column: BoardColumn) {
         guard let idx = cards.firstIndex(where: { $0.id == cardID }) else { return }
-        let previousState = cards[idx].state
         cards[idx] = cards[idx].with(state: column.state)
         if column == .done {
             manuallyDoneCardIDs.insert(cardID)
-            manuallyReopenedDoneCardIDs.remove(cardID)
         } else {
-            if previousState == .done {
-                manuallyReopenedDoneCardIDs.insert(cardID)
-            }
             manuallyDoneCardIDs.remove(cardID)
         }
         refresh()
+        persistTasks()
     }
 
     /// Rename a card in place — identity, state, and PTY binding all preserved (the
@@ -1327,6 +1781,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         guard let idx = cards.firstIndex(where: { $0.id == cardID }) else { return }
         cards[idx] = cards[idx].with(title: newTitle)
         refresh()
+        persistTasks()
     }
 
     /// The "Rename Task…" context-menu prompt: a modal sheet-style alert with the
@@ -1385,9 +1840,14 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         cards.removeAll { $0.id == cardID }
         deadCardIDs.remove(cardID)
         idleHoldUntil.removeValue(forKey: cardID)
+        codexChoiceWaitingCardIDs.remove(cardID)
         lastCardStates.removeValue(forKey: cardID)
+        taskMetaByCard.removeValue(forKey: cardID)
+        seededCardIDs.remove(cardID)
+        manuallyDoneCardIDs.remove(cardID)
         refresh()
         persistOnTerminate(store: SessionSnapshotStore.applicationSupport())
+        persistTasks()
     }
 
     /// US-002: drill into a card → full-window terminal takeover (Altitude-1).
@@ -1395,6 +1855,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     /// is the only thing on screen.
     func drill(into card: BoardCard) {
         guard let pty = ptyByCard[card.id] else { return }
+        noteFocus(card.id)
         // A saha planning card re-opens the planning cockpit it was born in, not the
         // bare terminal takeover — otherwise leaving planning mode strands the operator
         // on the board with no way back into the pipeline/review (the "can't re-enter" bug).
@@ -1406,7 +1867,8 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         drilledInCardID = card.id   // its surface owns the fd now; the pump skips it
         boardView.isHidden = true
         attention.isHidden = true
-        fontControls.isHidden = true
+        backlogButton.isHidden = true
+        backlogPage.isHidden = true
         quota.isHidden = true
         drillIn.isHidden = false
         drillIn.focus(card: card, pty: pty, terminalFontSize: terminalFontSize)
@@ -1424,7 +1886,8 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         drilledInCardID = nil   // surface is detaching; the pump resumes draining this fd
         boardView.isHidden = false
         attention.isHidden = false
-        fontControls.isHidden = false
+        backlogButton.isHidden = false
+        backlogPage.isHidden = true
         quota.isHidden = false
         drillIn.isHidden = true
         // Release the planning terminal's view (the pump resumes draining its fd) but
@@ -1436,34 +1899,61 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         window?.makeFirstResponder(boardView)   // keyboard nav resumes on the board
     }
 
-    /// Ctrl+Tab: jump from the focused task straight to the next drillable one WITHOUT
-    /// bouncing off the board — the whole point is to skip "quit to board → open next".
-    /// Cycles owned cards in board order (Ctrl+Shift+Tab reverses), wrapping around. A
-    /// no-op with fewer than two candidates. From the board (nothing focused) it drills
-    /// into the first/last card, so the chord also works as "jump into a task".
-    func cycleDrill(reverse: Bool) {
-        let drillable = cards.filter { ptyByCard[$0.id] != nil }
-        let current = drilledInCardID ?? planningModeCardID
-        guard let target = Self.nextCard(in: drillable, after: current, reverse: reverse),
-              target.id != current else { return }
-        // Hand the target a clean single-reader slate: detach whichever focus surface is
-        // live now (drill-in OR planning) so a cross-mode switch never strands a second
-        // off-screen reader on one fd or a stale *ModeCardID. `drill(into:)` rebuilds
-        // the target's own surface; the pump resumes draining the card we just left.
-        teardownFocusForSwitch()
-        drill(into: target)
+    /// Ctrl+Tab: open the switcher preview on the first press — NOT a blind cycle; the
+    /// operator sees where they're going before anything switches — then step the
+    /// highlight on each further press while ⌃ stays held (⇧ reverses, wrapping). The
+    /// list is snapshotted at open: NEEDS YOU cards first, then the rest, each tier
+    /// most-recently-focused first. A no-op when there's nowhere else to go, so the
+    /// chord still means "jump into a task" from the board and stays quiet on a lone
+    /// focused card.
+    func advanceSwitcher(reverse: Bool) {
+        if switcherIsOpen {
+            let count = switcherSnapshot.count
+            switcherIndex = (switcherIndex + (reverse ? -1 : 1) + count) % count
+        } else {
+            let drillable = cards.filter { ptyByCard[$0.id] != nil }
+            let ordered = TaskSwitcherOverlay.ordered(cards: drillable, mru: mruOrder)
+            let current = drilledInCardID ?? planningModeCardID
+            guard ordered.contains(where: { $0.id != current }) else { return }
+            switcherSnapshot = ordered
+            switcherIndex = TaskSwitcherOverlay.initialHighlight(
+                in: ordered, current: current, reverse: reverse)
+        }
+        taskSwitcher.render(cards: switcherSnapshot, highlight: switcherIndex)
+        taskSwitcher.isHidden = false
     }
 
-    /// The next card to focus when cycling `after` the current one. From the board
-    /// (`current == nil`) that's the first (or last, reversed) card; otherwise it steps
-    /// one position with wraparound. Static + pure so the ordering is unit-testable.
-    static func nextCard(in cards: [BoardCard], after current: UUID?, reverse: Bool) -> BoardCard? {
-        guard !cards.isEmpty else { return nil }
-        guard let current, let idx = cards.firstIndex(where: { $0.id == current }) else {
-            return reverse ? cards.last : cards.first
-        }
-        let step = reverse ? -1 : 1
-        return cards[(idx + step + cards.count) % cards.count]
+    /// ⌃ released: switch to the highlighted card WITHOUT bouncing off the board.
+    /// Landing back on the current card — or on one that died while the overlay was
+    /// up — just closes the preview. The switch hands the target a clean single-reader
+    /// slate: detach whichever focus surface is live now (drill-in OR planning) so a
+    /// cross-mode switch never strands a second off-screen reader on one fd or a stale
+    /// *ModeCardID; `drill(into:)` rebuilds the target's own surface and the pump
+    /// resumes draining the card we just left.
+    func commitSwitcher() {
+        let chosen = switcherSnapshot.indices.contains(switcherIndex)
+            ? switcherSnapshot[switcherIndex] : nil
+        dismissSwitcher()
+        guard let chosen,
+              let live = cards.first(where: { $0.id == chosen.id }),
+              live.id != (drilledInCardID ?? planningModeCardID) else { return }
+        teardownFocusForSwitch()
+        drill(into: live)
+    }
+
+    /// Esc while the overlay is up: back out with no switch.
+    func cancelSwitcher() { dismissSwitcher() }
+
+    private func dismissSwitcher() {
+        switcherSnapshot = []
+        switcherIndex = 0
+        taskSwitcher.isHidden = true
+    }
+
+    /// Record a focus event (most recent first) — feeds the switcher's MRU ranking.
+    private func noteFocus(_ id: UUID) {
+        mruOrder.removeAll { $0 == id }
+        mruOrder.insert(id, at: 0)
     }
 
     /// Detach the live focus surface (drill-in and/or planning) without un-hiding the
@@ -1488,25 +1978,26 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
 
     /// Re-derive the view from the current model — the single render path, so a
     /// live state change just re-runs this (US-003 AC#3 / US-005 live update).
-    private func refresh() {
+    private func refresh(includeQuota: Bool = true) {
         let count = Attention.count(cards)
         attention.update(count: count)
         alertIfAttentionRose(to: count)
         notifyNewlyDone()
         boardView.render(cards: selection.visibleCards(from: cards))
-        quota.render(gauges: QuotaProjection.gauges(from: quotaSources))
+        backlogButton.title = backlogTasks.isEmpty ? "Backlog" : "Backlog · \(backlogTasks.count)"
+        if !backlogPage.isHidden { backlogPage.render(backlogTasks) }
+        if includeQuota {
+            quota.render(gauges: QuotaProjection.gauges(from: quotaSources), cards: cards)
+        }
         // Keep the drill-in's status pill / waiting banner tracking the live state.
         if let id = drilledInCardID, let card = cards.first(where: { $0.id == id }) {
             drillIn.update(state: card.state)
         }
     }
 
-    /// Fire a "task done" OS notification on the rising edge into `.done` — the
-    /// moment an agent finishes, so the operator can look away and be pulled back.
-    /// Edge-triggered off `lastCardStates` so it fires once per completion, not on
-    /// every 3s refresh while the card sits in DONE. Always notifies (unlike the
-    /// attention nudge) — "it's finished" is worth surfacing even while focused,
-    /// but only when the app isn't the frontmost window.
+    /// Fire a "task done" OS notification on the rising edge into the manual DONE
+    /// state. Edge-triggered off `lastCardStates` so it fires once per completion,
+    /// not on every refresh while the card remains there.
     private func notifyNewlyDone() {
         for card in cards {
             let previous = lastCardStates[card.id]
@@ -1536,7 +2027,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     func applyQuota(sources: [QuotaSourceInput]) {
         quotaSources = sources
         let gauges = QuotaProjection.gauges(from: quotaSources)
-        quota.render(gauges: gauges)
+        quota.render(gauges: gauges, cards: cards)
         drillIn.updateQuota(gauges)   // keep the drill-in header readout live too
     }
 
@@ -1551,12 +2042,13 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     /// An owned terminal **moves with the agent running inside it**: when you run
     /// `claude` in it, claude POSTs hooks under ITS OWN `session_id` (≠ our
     /// "terminal-N" id) but the SAME project dir, so the owned card ADOPTS that
-    /// session's detected state (idle → running → waiting → done) and slides between
+    /// session's live state (idle → running → waiting) and slides between those
     /// columns as the model works — instead of one physical terminal showing up as a
-    /// second, drifting card. Identity, title, and PTY are untouched, so a drilled-in
-    /// terminal keeps working; only the column changes. Observed sessions we never
-    /// spawned are merged in as status-only cards. Re-renders only on a real change,
-    /// and never yanks the board out from under an active drill-in.
+    /// second, drifting card. A detected session completion is deliberately ignored:
+    /// only a manual move changes task status to DONE. Identity, title, and PTY are
+    /// untouched, so a drilled-in terminal keeps working; only the column changes.
+    /// Observed sessions we never spawned are merged in as status-only cards. Re-renders
+    /// only on a real change, and never yanks the board out from under an active drill-in.
     func applySessions(_ observed: [BoardCard]) {
         let owned = cards.filter { ptyByCard[$0.id] != nil }
         // Dirs occupied by EXACTLY ONE owned card. Only there is "the agent in this dir
@@ -1570,7 +2062,10 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         // ptys carries that card's UUID (GHOSTLING_CARD_ID → hook line), so it binds to
         // its owned card even when several task cards share the repo dir and the dir
         // join is suppressed. This is what kills the "unclickable duplicate card".
-        let adopted = owned.map { card in
+        // A card with NO pty (a durable task resurrected from the task book, its shell
+        // long gone) passes through untouched — the 3s poll must not drop it.
+        let adopted = cards.map { card in
+            guard ptyByCard[card.id] != nil else { return card }
             let byDir = uniqueDirs.contains(Self.normDir(card.projectDir))
             let bound = observed.filter { $0.boundCardID == card.id.uuidString }
             if let freshest = bound.max(by: { Self.staler($0, $1) }) {
@@ -1606,16 +2101,17 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
     // A model "thinking" between tool calls emits no hook events for many seconds,
     // so the observed state dips to idle mid-turn; 2s was shorter than routine
     // thinking gaps and the card stuttered working→idle→working. Only a SUSTAINED
-    // idle should demote the card — attention/blocked/done stay immediate.
+    // idle should demote the card — attention/blocked and manual moves stay immediate.
     private static let idleHoldInterval: TimeInterval = 15.0
 
     /// Hook snapshots can briefly report `idle` between active tool events, and a
     /// long-running tool call (a 2-minute build emits nothing between PreToolUse and
     /// its result) decays to `unknown` via the stale sweep. Holding these two
     /// working→at-rest live transitions prevents column jitter while keeping
-    /// attention, blocked, done, and manual moves immediate.
+    /// attention, blocked, and manual moves immediate. Detector output never moves a
+    /// task into DONE; completion is an operator decision.
     private func smoothLiveState(card: BoardCard, observed state: CardState) -> BoardCard {
-        let next = startedSafe(card: card, observed: state)
+        let next = detectorSafeState(card: card, observed: state)
         guard state == .idle || state == .unknown,
               card.state == .running || card.state == .runningTests else {
             idleHoldUntil.removeValue(forKey: card.id)
@@ -1627,18 +2123,13 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         return now < deadline ? card : card.with(state: next)
     }
 
-    /// Apply sticky terminal state without guessing attention. A stopped or stale
-    /// observation should render as idle/unknown, while a completed card stays
-    /// completed until the operator manually moves it. Explicit notification/permission
-    /// events carry `.waitingForInput` only for non-terminal cards.
-    private func startedSafe(card: BoardCard, observed state: CardState) -> CardState {
-        if manuallyReopenedDoneCardIDs.contains(card.id) {
-            if state == .done { return card.state }
-            if state == .running || state == .runningTests {
-                manuallyReopenedDoneCardIDs.remove(card.id)
-            }
-        }
-        return card.state.detectorFallback ?? state
+    /// Reconcile detector output without surrendering manual task completion. DONE is
+    /// a manual-only column in both directions: a manually completed task stays there
+    /// until the operator moves it, and an observed session completion cannot put an
+    /// active task there. Other live states continue to move non-completed cards.
+    private func detectorSafeState(card: BoardCard, observed state: CardState) -> CardState {
+        if card.state == .done || state == .done { return card.state }
+        return state
     }
 
     /// The live state to show on an owned terminal card: the detected state of the
@@ -1690,4 +2181,13 @@ public final class BoardShell: NSObject, NSApplicationDelegate {
         case .unknown:                   return 0
         }
     }
+}
+
+/// The per-card slice of a ``TaskRecord`` that ``BoardCard`` doesn't carry itself:
+/// the backlog description, the chosen launch mode, and the task's original
+/// creation time (which predates the card when the task began in the backlog).
+struct CardTaskMeta {
+    var details: String = ""
+    var mode: TaskMode?
+    var createdAt = Date()
 }

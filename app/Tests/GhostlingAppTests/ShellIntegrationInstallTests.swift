@@ -52,6 +52,23 @@ struct ShellIntegrationInstallTests {
         let terminfo = root.appendingPathComponent(ShellIntegrationInstaller.terminfoName)
         #expect(FileManager.default.fileExists(atPath: integration.path))
         #expect(FileManager.default.fileExists(atPath: terminfo.path))
+        let integrationBody = try String(contentsOf: integration, encoding: .utf8)
+        #expect(integrationBody.contains(#"PATH="$HOME/.ghostling/bin:$PATH""#))
+    }
+
+    @Test func install_replacesStaleIntegrationPayload() throws {
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let rc = dir.appendingPathComponent(".zshrc")
+        let root = dir.appendingPathComponent("shell-integration")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let integration = root.appendingPathComponent(ShellIntegrationInstaller.integrationName)
+        try "old generated integration\n".write(to: integration, atomically: true, encoding: .utf8)
+
+        #expect(BoardShell().installShellIntegration(shell: .zsh, installRoot: root, rc: rc))
+        let upgraded = try String(contentsOf: integration, encoding: .utf8)
+        #expect(upgraded == ShellIntegrationInstaller.integrationScript)
+        #expect(upgraded.contains("$HOME/.ghostling/bin"))
     }
 
     /// Edge case: a non-zsh shell degrades gracefully — the launch seam no-ops and never

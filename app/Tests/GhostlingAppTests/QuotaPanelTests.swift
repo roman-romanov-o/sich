@@ -184,6 +184,45 @@ struct QuotaPanelTests {
         #expect(guessed.showsEstimatedCue)
     }
 
+    /// The provider column identifies each harness visually (badge) and shows its
+    /// live board load — "N working" / "N waiting" — sourced from the cards the
+    /// shell passes in, so pool demand renders beside pool remaining.
+    @Test("provider rows show the harness badge plus its working/waiting task load")
+    func providerRowsShowHarnessLoad() throws {
+        func c(_ agent: CardAgent, _ state: CardState) -> BoardCard {
+            BoardCard(sessionID: UUID().uuidString, projectDir: "/tmp/p",
+                      agent: agent, flow: .b, state: state)
+        }
+        let panel = QuotaPanel(frame: NSRect(x: 0, y: 0, width: 460, height: 560))
+        panel.render(
+            gauges: QuotaProjection.gauges(from: [
+                QuotaSeed.interactive(remainingFraction: 0.60, reset: QuotaSeed.hoursFromNow(1)),
+                QuotaSeed.codex(remainingFraction: 0.40, reset: QuotaSeed.hoursFromNow(20)),
+            ]),
+            cards: [
+                c(.claude, .running), c(.claude, .running), c(.claude, .waitingForInput),
+                c(.codex, .blocked),
+                c(.claude, .done),   // at rest — must not inflate the load
+            ]
+        )
+        #expect(panel.tallies[.claude] == AgentTaskTally(working: 2, waiting: 1))
+        #expect(panel.taskLines["claude"] == ["2 working", "1 waiting"])
+        #expect(panel.taskLines["codex"] == ["1 waiting"])
+
+        // Both provider rows carry a visual harness badge (glyph + tooltip), not text.
+        let badges = allSubviews(of: panel).compactMap { $0 as? HarnessBadge }
+        #expect(badges.contains { $0.agent == .claude && $0.toolTip == "Claude Code" })
+        #expect(badges.contains { $0.agent == .codex && $0.toolTip == "Codex" })
+
+        // A board-less render (the standalone quota window) shows no load lines.
+        panel.render(gauges: [])
+        #expect(panel.taskLines.values.allSatisfy { $0.isEmpty })
+    }
+
+    private func allSubviews(of view: NSView) -> [NSView] {
+        view.subviews + view.subviews.flatMap(allSubviews(of:))
+    }
+
     /// The per-minute ticker re-evaluates the countdown against the live clock —
     /// once the reset instant has passed the line collapses to "now".
     @Test("refreshReset re-evaluates the countdown against the clock")

@@ -175,7 +175,9 @@ final class DrillInPanel: NSView {
     private let statusPill = StatusPill()
     private let quotaField = NSTextField(labelWithString: "")
     private let tagField = NSTextField(labelWithString: "")
-    private let terminalFontControls = FontSizeControls(scope: .terminal)
+    /// Which harness runs in the focused terminal — the visual chip beside the tag.
+    private let harnessBadge = HarnessBadge(agent: .claude)
+    private let terminalFontControls = FontSizeControls()
     // Internal so a focus test can assert the worktree indicator is shown/hidden.
     let worktreeTag = WorktreePill()
     private let banner = NSView()
@@ -249,7 +251,7 @@ final class DrillInPanel: NSView {
         worktreeTag.isHidden = true
         let header = NSStackView(views: [
             backPill, slash, dirField, titleField, statusPill, spring,
-            worktreeTag, terminalFontControls, quotaField, tagField,
+            worktreeTag, terminalFontControls, quotaField, tagField, harnessBadge,
         ])
         header.orientation = .horizontal
         header.alignment = .centerY
@@ -313,7 +315,8 @@ final class DrillInPanel: NSView {
         closeDiff()
         titleField.stringValue = card.title ?? BoardTheme.shortPath(card.projectDir)
         dirField.stringValue = BoardTheme.projectLabel(card.projectDir)
-        tagField.stringValue = "libghostty · \(card.agent.displayName.lowercased())"
+        tagField.stringValue = "libghostty"
+        harnessBadge.set(agent: card.agent)
         showWorktreeTag(for: card.projectDir)
         update(state: card.state)
         detachSurface()
