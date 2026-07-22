@@ -74,7 +74,7 @@ Based on workflow order — the first `planning.*` entry that isn't `done`/`skip
 8. Verify → `/saha:verify`
 9. All done → `/saha:execute`
 
-Remind the user the plan is reviewable visually in ghostling's Planning Mode
+Remind the user the plan is reviewable visually in sich's Planning Mode
 (it renders a static `likec4 build` of `{task_path}/model` — never `likec4 start`).
 
 ## Example Output

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Register the Ghostling board's hook forwarder with Claude Code so REAL
+# Register the Sich board's hook forwarder with Claude Code so REAL
 # interactive sessions in this project appear on the mission-control board.
 #
 # Run this ONCE, yourself:   bash .claude/scripts/enable-board-hooks.sh
@@ -7,7 +7,7 @@
 # It edits .claude/settings.json — config Claude Code loads at startup — which is
 # why the agent can't write it for you (a self-modification guardrail). The merge
 # is idempotent (safe to re-run) and preserves every hook already there, including
-# the SessionStart welcome script. Undo by deleting the ghostling-forward.sh
+# the SessionStart welcome script. Undo by deleting the sich-forward.sh
 # entries it adds, or `git checkout .claude/settings.json`.
 set -euo pipefail
 cd "$(dirname "$0")/../.."   # repo root
@@ -17,7 +17,7 @@ import json, pathlib
 p = pathlib.Path(".claude/settings.json")
 cfg = json.loads(p.read_text()) if p.exists() else {}
 hooks = cfg.setdefault("hooks", {})
-FORWARD = "bash .claude/scripts/ghostling-forward.sh"
+FORWARD = "bash .claude/scripts/sich-forward.sh"
 # Lifecycle events the board cares about: appear → run → wait → done.
 EVENTS = ["SessionStart", "UserPromptSubmit", "PreToolUse",
           "PostToolUse", "Notification", "Stop"]

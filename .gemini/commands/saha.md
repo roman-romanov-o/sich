@@ -26,7 +26,7 @@ PLANNING COMMANDS — large tasks (in Claude Code):
   /saha:verify         Compile + cross-reference the whole plan
   /saha:status         Check planning progress (reads progress.yaml)
 
-  The plan is a LikeC4 model — review it visually in ghostling's Planning
+  The plan is a LikeC4 model — review it visually in sich's Planning
   Mode (a static `likec4 build` of `<task>/model` — never `likec4 start`). All tracking lives in the
   task's progress.yaml; model/*.c4 freezes once execution starts.
 

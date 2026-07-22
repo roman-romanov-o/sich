@@ -1,6 +1,6 @@
 # Architecture
 
-Ghostling is a native macOS/AppKit app (Swift 6, `app/`) that embeds
+Sich is a native macOS/AppKit app (Swift 6, `app/`) that embeds
 libghostty to become the terminal for managed agentic-coding sessions, with
 a kanban board and quota panel wrapped around it. There is no separate
 Python service in the running product — the earlier Python core was
@@ -13,16 +13,16 @@ retired; a tiny Python "sidecar" process is spawned locally only to serve
 - **CPtySupport** — C target for `fork()`/`execvp()`. Kept in C so the child
   process between fork and exec never touches the Swift runtime
   (async-signal-safety).
-- **GhostlingCore** — testable, headless logic: PTY session management,
+- **SichCore** — testable, headless logic: PTY session management,
   terminal grid/rendering model, session registry, quota gauge, pool
   firewall, hook-event parsing. No AppKit dependency.
-- **GhostlingApp** — AppKit layer: windows, board/quota views, drill-in
-  terminal surface, hook installer. Depends on GhostlingCore; keeps views
+- **SichApp** — AppKit layer: windows, board/quota views, drill-in
+  terminal surface, hook installer. Depends on SichCore; keeps views
   thin, pushes logic down into Core.
-- **ghostling-probe** — small executable for headless smoke-testing Core.
-- **ghostling** — the one shipped product binary: board + quota side panel +
+- **sich-probe** — small executable for headless smoke-testing Core.
+- **sich** — the one shipped product binary: board + quota side panel +
   drill-in terminal in a single window.
-- Test targets: `GhostlingCoreTests`, `GhostlingAppTests`.
+- Test targets: `SichCoreTests`, `SichAppTests`.
 
 ## Core concepts
 
@@ -33,7 +33,7 @@ run`). It is a cockpit for the `saha` planning/execution loop, not a
 generic kanban.
 
 ### Watcher, not spawner
-`PoolFirewall` (`GhostlingCore/PoolFirewall.swift`) enforces in code that
+`PoolFirewall` (`SichCore/PoolFirewall.swift`) enforces in code that
 the app never programmatically spawns headless `claude -p` calls — it only
 observes real interactive sessions the user starts themselves. This is a
 hard economic constraint from Anthropic's quota split, not a style
@@ -42,7 +42,7 @@ preference.
 ### Embedded terminal (DD-001)
 Rather than shelling out to an external terminal emulator, the app embeds
 libghostty directly (`Terminal`, `TerminalGrid`, `PTYSession` in
-GhostlingCore; `TerminalSurface` in GhostlingApp) and does the PTY read
+SichCore; `TerminalSurface` in SichApp) and does the PTY read
 in-process. `KeyEncoder` translates NSEvent keystrokes into PTY input.
 
 ### Session detection via hooks

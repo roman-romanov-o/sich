@@ -45,11 +45,11 @@ jobs:
       # from the cause. Restore them from a local cache keyed on the ghostty rev
       # pinned in app/Frameworks/README.md. Populate the cache by copying the
       # *.a files out of a working checkout, preserving the slice layout:
-      #   ~/Library/Caches/ghostling/ghostty-vt/<rev>/<slice>/lib*.a
+      #   ~/Library/Caches/sich/ghostty-vt/<rev>/<slice>/lib*.a
       - name: Restore vendored libghostty-vt
         run: |
           rev=ae52f97dcac558735cfa916ea3965f247e5c6e9e
-          cache="$HOME/Library/Caches/ghostling/ghostty-vt/$rev"
+          cache="$HOME/Library/Caches/sich/ghostty-vt/$rev"
           if [ ! -d "$cache" ]; then
             echo "::error::No cached libghostty-vt for rev $rev at $cache. Rebuild it (pinned rev + Zig 0.15.2) per app/Frameworks/README.md, then copy the *.a files into that path."
             exit 1

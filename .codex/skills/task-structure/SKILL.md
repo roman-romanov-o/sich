@@ -23,7 +23,7 @@ diagrams, and **all tracking lives in one YAML file** the tooling reads and writ
   statuses, test bindings, phase progress, iteration history — all here, and only the
   execution loop's manager phase writes it during execution.
 
-Tools (saha commands, the ghostling kanban app, the execution loop) read state from
+Tools (saha commands, the sich kanban app, the execution loop) read state from
 `progress.yaml` — never by scraping markdown.
 
 ## Task Folder Structure
@@ -40,7 +40,7 @@ task-XX-short-name/
 │   ├── test-specs.c4      # test scenarios as `ts-*` dynamic views
 │   └── phases.c4          # plan overview: phase elements + dependency arrows
 ├── research/*.md          # research stays markdown (prose)
-└── README.md              # 5-line human pointer (title, status, "open in ghostling")
+└── README.md              # 5-line human pointer (title, status, "open in sich")
 ```
 
 Templates for every file live in `claude_plugin/templates/` (`spec.c4`, `task.c4`,

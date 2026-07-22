@@ -1,8 +1,8 @@
 """TC-PROD-005 — producer-side rotation of the hook event log (US-001 AC3).
 
-The forwarder `.claude/scripts/ghostling-forward.sh` is a bash script, not Swift, so
+The forwarder `.claude/scripts/sich-forward.sh` is a bash script, not Swift, so
 this one producer test is pytest. It drives the script via subprocess with a temp
-`GHOSTLING_EVENTS_FILE` and a small `GHOSTLING_EVENTS_MAX_BYTES`, feeds enough bytes to
+`SICH_EVENTS_FILE` and a small `SICH_EVENTS_MAX_BYTES`, feeds enough bytes to
 cross the threshold, and asserts the live log gets rotated to `events.jsonl.1` while the
 live file stays bounded — and that the forwarder always exits 0 (a write hiccup must
 never fail the watched session).
@@ -13,7 +13,7 @@ import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-FORWARDER = REPO_ROOT / ".claude" / "scripts" / "ghostling-forward.sh"
+FORWARDER = REPO_ROOT / ".claude" / "scripts" / "sich-forward.sh"
 
 LINE = '{"hook_event_name":"PreToolUse","session_id":"S","tool_name":"Edit"}'
 
@@ -21,8 +21,8 @@ LINE = '{"hook_event_name":"PreToolUse","session_id":"S","tool_name":"Edit"}'
 def _forward(payload: str, events_file: Path, max_bytes: int) -> int:
     env = {
         **os.environ,
-        "GHOSTLING_EVENTS_FILE": str(events_file),
-        "GHOSTLING_EVENTS_MAX_BYTES": str(max_bytes),
+        "SICH_EVENTS_FILE": str(events_file),
+        "SICH_EVENTS_MAX_BYTES": str(max_bytes),
     }
     result = subprocess.run(["bash", str(FORWARDER)], input=payload, text=True, env=env)
     return result.returncode

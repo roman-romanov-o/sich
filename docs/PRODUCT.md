@@ -43,7 +43,7 @@ The secondary, differentiating need: **subscription quota is now split into non-
 
 - **task-01** (all six stories US-001..006) — complete and human-signed-off: embedded terminal, drill-in, board, attention signal, state detection, two-pool quota.
 - **task-04** (live detection) — complete.
-- The assembled app (`swift run ghostling`) folds board + quota + live terminal into one window and polls live data.
+- The assembled app (`swift run sich`) folds board + quota + live terminal into one window and polls live data.
 - Roadmap continues with **task-02** (estimation) and **task-03** (native core).
 
 ## References

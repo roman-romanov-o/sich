@@ -62,7 +62,7 @@ model {
       description 'Registers a session and returns its board card id.'
       metadata {
         contract_kind 'rest'         // rest | event | function | schema
-        file 'app/Sources/GhostlingCore/SessionRegistry.swift'
+        file 'app/Sources/SichCore/SessionRegistry.swift'
         contract '''
           POST /sessions
           Request:  { "cwd": "string — absolute repo path", "pid": "int" }

@@ -1,5 +1,5 @@
-#ifndef GHOSTLING_PTY_SUPPORT_H
-#define GHOSTLING_PTY_SUPPORT_H
+#ifndef SICH_PTY_SUPPORT_H
+#define SICH_PTY_SUPPORT_H
 
 #include <sys/types.h>
 
@@ -33,4 +33,4 @@ int gl_spawn_in_pty(char *const argv[],
  */
 int gl_set_winsize(int fd, unsigned short rows, unsigned short cols);
 
-#endif /* GHOSTLING_PTY_SUPPORT_H */
+#endif /* SICH_PTY_SUPPORT_H */

@@ -1,6 +1,6 @@
 ---
 name: execution-code-quality-native
-description: Multi-runtime code-quality gate for THIS project (Swift-primary), drop-in replacement for execution-code-quality with the same output contract. Routes each changed file by extension — `.swift` → swiftlint (installed at /opt/homebrew/bin/swiftlint) + `swift build` compiler warnings + this repo's rules (functions ≲50 lines, single-responsibility); `.py` → ruff (only a residue of repo-level tests remains); `.c`/`.h` → compiler warnings. Analyzes changed files only, filters false positives and pre-existing issues. Examples: <example>Context: iteration changed app/Sources/GhostlingCore/PTYSession.swift. assistant: 'Quality: swiftlint clean, swift build warning-free; PTYSession.read() is 38 lines, single-responsibility — pass.' <commentary>swiftlint runs first; the length/SRP review covers what the linter config doesn't.</commentary></example> <example>Context: a Swift function grew to 120 lines doing fork+exec+read+render. assistant: 'Quality: fail — spawnAndRead() is 120 lines with 4 responsibilities; split per the ≲50-line rule.' <commentary>It enforces this user's documented code-style rules on top of the linter.</commentary></example>
+description: Multi-runtime code-quality gate for THIS project (Swift-primary), drop-in replacement for execution-code-quality with the same output contract. Routes each changed file by extension — `.swift` → swiftlint (installed at /opt/homebrew/bin/swiftlint) + `swift build` compiler warnings + this repo's rules (functions ≲50 lines, single-responsibility); `.py` → ruff (only a residue of repo-level tests remains); `.c`/`.h` → compiler warnings. Analyzes changed files only, filters false positives and pre-existing issues. Examples: <example>Context: iteration changed app/Sources/SichCore/PTYSession.swift. assistant: 'Quality: swiftlint clean, swift build warning-free; PTYSession.read() is 38 lines, single-responsibility — pass.' <commentary>swiftlint runs first; the length/SRP review covers what the linter config doesn't.</commentary></example> <example>Context: a Swift function grew to 120 lines doing fork+exec+read+render. assistant: 'Quality: fail — spawnAndRead() is 120 lines with 4 responsibilities; split per the ≲50-line rule.' <commentary>It enforces this user's documented code-style rules on top of the linter.</commentary></example>
 tools: Bash, Read, Glob, Grep
 skills: complexity, ty, ruff
 model: sonnet
@@ -89,8 +89,8 @@ Get the file list from `files_changed` + `files_added`. If empty, use
 ```json
 {
   "quality_passed": true,
-  "files_analyzed": ["app/Sources/GhostlingCore/PTYSession.swift"],
-  "routing": {"swift": ["app/Sources/GhostlingCore/PTYSession.swift"], "python": []},
+  "files_analyzed": ["app/Sources/SichCore/PTYSession.swift"],
+  "routing": {"swift": ["app/Sources/SichCore/PTYSession.swift"], "python": []},
   "summary": "swiftlint clean; swift build warning-free; functions within length/SRP limits.",
   "auto_fixed": [],
   "issues": [],
@@ -104,11 +104,11 @@ Get the file list from `files_changed` + `files_added`. If empty, use
 ```json
 {
   "quality_passed": false,
-  "files_analyzed": ["app/Sources/GhostlingCore/TerminalView.swift"],
-  "routing": {"swift": ["app/Sources/GhostlingCore/TerminalView.swift"], "python": []},
+  "files_analyzed": ["app/Sources/SichCore/TerminalView.swift"],
+  "routing": {"swift": ["app/Sources/SichCore/TerminalView.swift"], "python": []},
   "summary": "1 blocking: oversized multi-responsibility function.",
   "issues": [
-    {"file": "app/Sources/GhostlingCore/TerminalView.swift", "line": 40, "tool": "repo-rule",
+    {"file": "app/Sources/SichCore/TerminalView.swift", "line": 40, "tool": "repo-rule",
      "code": "function-too-long", "message": "draw(_:) is 118 lines and mixes layout, glyph rendering and input handling",
      "severity": "error", "is_blocking": true}
   ],

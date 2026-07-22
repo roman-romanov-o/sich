@@ -144,7 +144,7 @@ Verification Summary:
 Approve the plan as ready for implementation?
 ```
 
-Remind the user they can review visually in ghostling's Planning Mode.
+Remind the user they can review visually in sich's Planning Mode.
 
 #### Playwright Mode
 

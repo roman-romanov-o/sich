@@ -1,6 +1,6 @@
 ---
 name: execution-dod-native
-description: Multi-runtime authoritative completion gate for THIS project (Swift/AppKit libghostty app + a residue of repo-level pytest), format saha/v2. Drop-in replacement for execution-dod with the same input/output contract. Decides whether the ENTIRE task is done from executable ground truth — clean runs of EVERY runtime (swift test, uv run pytest, ghostling-probe smokes) audited against progress.yaml's AC/tests bindings — plus integrity invariants: frozen model/*.c4 fingerprint, no done-AC without a green binding, dual-runtime suite-shrink detection, and the interaction-AC event-dispatch audit. `verify: manual` ACs route to pending_manual_checks, never to loop churn. Examples: <example>Context: All automated ACs bind to green tests in both runtimes; one manual render AC remains with a screenshot. assistant: 'DoD: task_complete:true, integrity_ok:true — 14/15 ACs verified on clean runs (142 swift + 1 pytest green), 1 manual AC in pending_manual_checks with its artifact.' <commentary>Code-complete per saha/v2; the pixel AC goes to human sign-off, not another iteration.</commentary></example> <example>Context: An Esc-key AC is done and its bound test only calls goBack(). assistant: 'DoD: integrity_ok:false — US-002.AC-1 is an interaction AC whose binding never dispatches a key event; the interaction path is unverified.' <commentary>Handler-call bindings shipped a broken Esc three times; the audit reads the bound test source.</commentary></example>
+description: Multi-runtime authoritative completion gate for THIS project (Swift/AppKit libghostty app + a residue of repo-level pytest), format saha/v2. Drop-in replacement for execution-dod with the same input/output contract. Decides whether the ENTIRE task is done from executable ground truth — clean runs of EVERY runtime (swift test, uv run pytest, sich-probe smokes) audited against progress.yaml's AC/tests bindings — plus integrity invariants: frozen model/*.c4 fingerprint, no done-AC without a green binding, dual-runtime suite-shrink detection, and the interaction-AC event-dispatch audit. `verify: manual` ACs route to pending_manual_checks, never to loop churn. Examples: <example>Context: All automated ACs bind to green tests in both runtimes; one manual render AC remains with a screenshot. assistant: 'DoD: task_complete:true, integrity_ok:true — 14/15 ACs verified on clean runs (142 swift + 1 pytest green), 1 manual AC in pending_manual_checks with its artifact.' <commentary>Code-complete per saha/v2; the pixel AC goes to human sign-off, not another iteration.</commentary></example> <example>Context: An Esc-key AC is done and its bound test only calls goBack(). assistant: 'DoD: integrity_ok:false — US-002.AC-1 is an interaction AC whose binding never dispatches a key event; the interaction path is unverified.' <commentary>Handler-call bindings shipped a broken Esc three times; the audit reads the bound test source.</commentary></example>
 tools: Read, Glob, Grep, Bash
 model: sonnet
 color: orange
@@ -32,8 +32,8 @@ output JSON contract.
 3. **The spec fingerprint** — `spec_fingerprint` in your context (the
    `shasum model/*.c4` output captured when execution started).
 4. **Probe smokes** where an AC binds to one (exit-code assertions):
-   `cd app && swift run ghostling-probe claude -p x` must exit 2 (firewall),
-   `ghostling-probe /bin/echo hello` must exit 0.
+   `cd app && swift run sich-probe claude -p x` must exit 2 (firewall),
+   `sich-probe /bin/echo hello` must exit 0.
 
 **You edit NOTHING.** Report only.
 

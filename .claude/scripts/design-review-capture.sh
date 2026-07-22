@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Capture step of the /design-review pipeline.
 #
-# Regenerates FAITHFUL screenshots of the current `ghostling` build by running the
+# Regenerates FAITHFUL screenshots of the current `sich` build by running the
 # E2E harness (which boots the real window — single native binary, no sidecar —
 # drives a drill-in + return, and captures each surface). screencapture is used
 # when Screen Recording is granted; otherwise the permission-free CALayer.render
@@ -17,7 +17,7 @@ ART="$ROOT/app/.artifacts/e2e"
 rm -f "$ART"/*.png "$ART"/result.json 2>/dev/null || true
 
 cd "$ROOT/app"
-GHOSTLING_E2E=1 swift run ghostling
+SICH_E2E=1 swift run sich
 
 echo "=== design-review screenshots ==="
 ls -1 "$ART"/*.png

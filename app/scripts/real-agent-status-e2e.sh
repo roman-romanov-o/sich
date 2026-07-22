@@ -6,5 +6,5 @@
 #     into a real board card PTY, asserted at board-column level.
 set -e
 cd "$(dirname "$0")/.."
-GHOSTLING_REAL_AGENT_E2E=1 swift test \
+SICH_REAL_AGENT_E2E=1 swift test \
     --filter 'RealAgentStatusE2ETests|CardStatusRealAgentE2ETests'

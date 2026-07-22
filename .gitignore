@@ -9,7 +9,7 @@ build/
 *.egg-info/
 .DS_Store
 
-# Swift / Ghostling app
+# Swift / Sich app
 .build/
 # Vendored libghostty-vt static archives are large (~32M) and rebuildable.
 # Headers + modulemap + Info.plist stay tracked (ABI of record); see

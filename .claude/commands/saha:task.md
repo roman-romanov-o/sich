@@ -7,7 +7,7 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, Task
 # Task Description
 
 Create the task description as a reviewable **LikeC4 context model** through
-interactive refinement. The human reviews this as a diagram in ghostling — not as
+interactive refinement. The human reviews this as a diagram in sich — not as
 prose — so the model, not a document, is the deliverable.
 
 ## Arguments
@@ -97,7 +97,7 @@ After generating, ask:
 - Is the scope clear?
 
 Iterate until the user approves. Remind them they can review visually in
-ghostling's Planning Mode (a static `likec4 build` of `{task_path}/model` — never `likec4 start`).
+sich's Planning Mode (a static `likec4 build` of `{task_path}/model` — never `likec4 start`).
 
 ### 7. Update progress.yaml
 

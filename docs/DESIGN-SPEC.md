@@ -281,7 +281,7 @@ This is the app's **own live terminal pane** (libghostty), not a screenshot, not
 > **Prototype note.** A real libghostty pane can't render in an HTML mockup. For the HTML prototype,
 > **fake** Altitude 2 with a static styled terminal (monospace scrollback + a fake prompt) to prove the
 > drill-in *interaction* and *layout*; the live PTY is wired only in the Swift build (the seam already
-> exists: `app/Sources/GhostlingCore/PTYSession.swift`).
+> exists: `app/Sources/SichCore/PTYSession.swift`).
 
 ---
 

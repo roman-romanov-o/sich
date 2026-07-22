@@ -103,10 +103,10 @@ phases:
     status: pending          # pending | in_progress | done
     steps:
       - name: "Create SessionRegistry model"
-        files: [app/Sources/GhostlingCore/SessionRegistry.swift]
+        files: [app/Sources/SichCore/SessionRegistry.swift]
         status: pending
       - name: "Wire registry into BoardShell lifecycle"
-        files: [app/Sources/GhostlingApp/BoardShell.swift]
+        files: [app/Sources/SichApp/BoardShell.swift]
         status: pending
 ```
 

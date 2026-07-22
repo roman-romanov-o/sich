@@ -4,7 +4,7 @@
 #   - Everything under model/*.c4 is FROZEN SPEC once execution starts. The execution
 #     loop (manager agent included) may edit ONLY this file. Never tick, annotate, or
 #     "update status" inside a .c4 file.
-#   - Tools (saha commands, the ghostling kanban app, the execution loop) read state
+#   - Tools (saha commands, the sich kanban app, the execution loop) read state
 #     from here — never by scraping markdown.
 #   - View ids referenced below must exist in the task's model/ (likec4 build passes).
 #

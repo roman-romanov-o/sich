@@ -1,6 +1,6 @@
 ---
 name: execution-qa-native
-description: Multi-runtime QA verification for THIS project (Swift/AppKit libghostty app + a residue of repo-level pytest), format saha/v2. Drop-in replacement for execution-qa with the same input/output contract. Per-iteration fast feedback that actually runs EVERY runtime the changed files touch — `cd app && swift build` + `swift test` for Swift, `uv run pytest` for the remaining Python tests, and `ghostling-probe` smokes — honors each AC's `verify:` method from progress.yaml, and captures a screenshot as evidence for any `manual` pixel-level AC. Examples: <example>Context: Iteration changed app/Sources/GhostlingCore/PTYSession.swift. assistant: 'QA: ran swift build (clean) + swift test (142 passed) + probe smoke (claude -p refused, exit 2). dod_achieved:true; bindings reported for the manager.' <commentary>It runs the Swift runtime because the change was Swift, and reports ac_bindings for progress.yaml.</commentary></example> <example>Context: An AC says "pressing Esc returns to the board", and the bound test calls goBack() directly. assistant: 'QA: dod_achieved:false — US-002.AC-1 is an interaction AC but its test never dispatches a key event; a handler call does not verify the interaction path.' <commentary>The three-times-shipped-broken Esc lesson: interaction ACs bind only to tests that dispatch real input events.</commentary></example>
+description: Multi-runtime QA verification for THIS project (Swift/AppKit libghostty app + a residue of repo-level pytest), format saha/v2. Drop-in replacement for execution-qa with the same input/output contract. Per-iteration fast feedback that actually runs EVERY runtime the changed files touch — `cd app && swift build` + `swift test` for Swift, `uv run pytest` for the remaining Python tests, and `sich-probe` smokes — honors each AC's `verify:` method from progress.yaml, and captures a screenshot as evidence for any `manual` pixel-level AC. Examples: <example>Context: Iteration changed app/Sources/SichCore/PTYSession.swift. assistant: 'QA: ran swift build (clean) + swift test (142 passed) + probe smoke (claude -p refused, exit 2). dod_achieved:true; bindings reported for the manager.' <commentary>It runs the Swift runtime because the change was Swift, and reports ac_bindings for progress.yaml.</commentary></example> <example>Context: An AC says "pressing Esc returns to the board", and the bound test calls goBack() directly. assistant: 'QA: dod_achieved:false — US-002.AC-1 is an interaction AC but its test never dispatches a key event; a handler call does not verify the interaction path.' <commentary>The three-times-shipped-broken Esc lesson: interaction ACs bind only to tests that dispatch real input events.</commentary></example>
 tools: Read, Bash, Glob, Grep
 skills: test-critique
 model: sonnet
@@ -39,7 +39,7 @@ Use the resolved `stack` object from the orchestrator; it comes from
 
 - build: `cd app && swift build`
 - test: `uv run pytest -q tests && cd app && swift test`
-- run: `cd app && swift run ghostling`
+- run: `cd app && swift run sich`
 
 ## Core principle
 
@@ -109,9 +109,9 @@ For ACs about the pool firewall or in-process PTY read, the probe's exit code
 is the assertion:
 
 ```bash
-( cd app && swift run ghostling-probe /bin/echo hello ); echo "exit=$?"   # expect 0
-( cd app && swift run ghostling-probe claude -p x );     echo "exit=$?"   # expect 2 (firewall refusal)
-( cd app && swift run ghostling-probe claude --print y ); echo "exit=$?"  # expect 2
+( cd app && swift run sich-probe /bin/echo hello ); echo "exit=$?"   # expect 0
+( cd app && swift run sich-probe claude -p x );     echo "exit=$?"   # expect 2 (firewall refusal)
+( cd app && swift run sich-probe claude --print y ); echo "exit=$?"  # expect 2
 ```
 
 Wrong exit code ⇒ blocking; report expected vs actual.
@@ -157,7 +157,7 @@ Same contract as the generic execution-qa agent:
   "test_results": {
     "pytest": {"total": 1, "passed": 1, "failed": 0, "skipped": 0},
     "swift_test": {"total": 142, "passed": 142, "failed": 0, "skipped": 0},
-    "probe_smokes": [{"cmd": "ghostling-probe claude -p x", "expected_exit": 2, "actual_exit": 2, "ok": true}]
+    "probe_smokes": [{"cmd": "sich-probe claude -p x", "expected_exit": 2, "actual_exit": 2, "ok": true}]
   }
 }
 ```
@@ -165,7 +165,7 @@ Same contract as the generic execution-qa agent:
 When `dod_achieved:false`, add `fix_info`: specific (file:line, test id,
 expected vs actual), actionable, prioritized (max 5), each item tied to its
 qualified AC id (`US-001.AC-3`) and runtime, with the exact `swift test` /
-`ghostling-probe` command to re-verify. For an unbound interaction AC, the fix
+`sich-probe` command to re-verify. For an unbound interaction AC, the fix
 is always "add a test that dispatches the real event, prove it red→green".
 
 ## Context variables

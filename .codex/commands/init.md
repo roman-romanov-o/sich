@@ -84,4 +84,4 @@ run:     { command: "swift run" }
 ```
 
 Rendering the model needs the LikeC4 CLI (`npm i -g likec4`); without it the plan
-is still reviewable as source, and ghostling degrades gracefully.
+is still reviewable as source, and sich degrades gracefully.

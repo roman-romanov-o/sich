@@ -1,6 +1,6 @@
 # /design-review
 
-Capture how the **shipping `ghostling` app looks right now** and get a structured
+Capture how the **shipping `sich` app looks right now** and get a structured
 design critique from the `designer` agent. Two steps: capture → critique.
 
 `$ARGUMENTS`, if given, is an extra focus for the critique (e.g. `terminal` or
@@ -38,7 +38,7 @@ Spawn the `designer` agent (Agent tool, `subagent_type: designer`). The brief MU
 >
 > Also give a **cmux-parity read** on the drill-in terminal (colour, real cursor, window
 > use). For every finding: **severity** (🔴/🟡/🟢), **what's wrong in the screenshot**, and
-> the **concrete AppKit fix** (the `app/Sources/GhostlingApp/*.swift` file/seam to change).
+> the **concrete AppKit fix** (the `app/Sources/SichApp/*.swift` file/seam to change).
 > Return the findings as a ranked list; a short written summary is enough — no JSON ceremony.
 
 Pass the three screenshot paths and any `$ARGUMENTS` focus into the prompt.
