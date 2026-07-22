@@ -51,6 +51,7 @@ public enum HookNormalizer {
     /// Map one hook line to a `SignalEvent`. `arrival` is injected (no inline clock
     /// read) so a missing timestamp stamps deterministically in tests. Returns `nil`
     /// when the line is not a JSON object.
+    // periphery:ignore - test-only entry (scan runs with exclude_tests)
     public static func normalize(_ line: Data, arrival: Date) -> SignalEvent? {
         guard let payload = jsonObject(from: line) else { return nil }
         return normalize(payload: payload, arrival: arrival)

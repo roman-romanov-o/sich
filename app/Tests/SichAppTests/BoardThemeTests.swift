@@ -26,7 +26,7 @@ struct BoardThemeTests {
     /// proof the palette follows the system theme rather than being a fixed dark hex.
     @Test("surface + text tokens differ between light and dark appearance", arguments: [
         "canvas", "cardFill", "documentSurface", "cardStroke", "hairline",
-        "needsYouColumn", "needsYouCard", "doneStroke",
+        "needsYouColumn", "needsYouCard",
         "textPrimary", "textMuted", "textFaint", "documentText", "textDim",
         "termBg", "termFg",
     ])
@@ -78,7 +78,7 @@ struct BoardThemeTests {
         "canvas": BoardTheme.canvas, "cardFill": BoardTheme.cardFill,
         "documentSurface": BoardTheme.documentSurface, "cardStroke": BoardTheme.cardStroke,
         "hairline": BoardTheme.hairline, "needsYouColumn": BoardTheme.needsYouColumn,
-        "needsYouCard": BoardTheme.needsYouCard, "doneStroke": BoardTheme.doneStroke,
+        "needsYouCard": BoardTheme.needsYouCard,
         "textPrimary": BoardTheme.textPrimary, "textMuted": BoardTheme.textMuted,
         "textFaint": BoardTheme.textFaint, "documentText": BoardTheme.documentText,
         "textDim": BoardTheme.textDim, "termBg": BoardTheme.termBg, "termFg": BoardTheme.termFg,

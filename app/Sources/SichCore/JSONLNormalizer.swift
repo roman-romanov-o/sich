@@ -21,6 +21,7 @@ public enum JSONLNormalizer {
 
     /// Map one transcript line to a `SignalEvent`; `nil` on non-JSON. `arrival`
     /// stamps a timestamp-less record (same rule as the hook normalizer).
+    // periphery:ignore - test-only entry (scan runs with exclude_tests)
     public static func normalize(_ line: Data, arrival: Date) -> SignalEvent? {
         guard let object = try? JSONSerialization.jsonObject(with: line),
               let record = object as? [String: Any] else { return nil }

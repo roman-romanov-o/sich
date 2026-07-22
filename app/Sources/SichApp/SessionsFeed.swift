@@ -39,6 +39,7 @@ enum SessionsFeed {
     /// have carried (US-002 / TC-INT-010). The reconciler's coalescing + no-flicker
     /// write dedups a Stop that arrives on BOTH streams by sessionID+timestamp, so it
     /// lands once.
+    // periphery:ignore - test-only entry (scan runs with exclude_tests)
     static func normalize(_ lines: [Data], arrival: Date) -> [SignalEvent] {
         parse(lines, arrival: arrival).events
     }
@@ -243,6 +244,7 @@ public final class SessionsPoller {
     /// went async (off-main parse), so a test that fires a trigger must await this
     /// before asserting on the sink — deterministically, no wall-clock sleeps. The
     /// loop re-checks because a trigger that landed mid-drain chains a follow-up.
+    // periphery:ignore - test-only entry (scan runs with exclude_tests)
     func drainForTesting() async {
         while inFlight, let task = currentDrain {
             await task.value

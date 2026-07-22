@@ -1731,6 +1731,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
 
     /// Swap the board chrome for the backlog page. Kept for backlog behavior tests
     /// and future re-exposure; no production control currently calls this entry.
+    // periphery:ignore - deliberate retention while the backlog UI is hidden (see doc above)
     func showBacklogPage() {
         backlogPage.render(backlogTasks)
         boardView.isHidden = true

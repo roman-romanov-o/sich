@@ -26,8 +26,6 @@ enum BoardTheme {
     /// A NEEDS YOU card's warm fill; stroke is `attention` (fresh) or `needsYouStroke` (aging).
     static let needsYouCard = dynamic(dark: hex(0x2B1908), light: hex(0xFFF1D9))
     static let needsYouStroke = hex(0xB35C1F)   // orange700 — shared accent
-    /// A done card's faint green-tinted stroke.
-    static let doneStroke = dynamic(dark: hex(0x1E2E0A), light: hex(0xB8CE86))
     /// The unfilled part of a quota gauge — the groove the fill runs in. Must read as
     /// *recessed* against the panel in both modes, so it darkens the dark canvas and
     /// darkens the light one too (a lighter-than-paper groove would vanish).

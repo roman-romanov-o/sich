@@ -239,10 +239,15 @@ final class BoardView: NSView {
         button.imagePosition = .imageOnly
         button.imageScaling = .scaleProportionallyDown
         button.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            button.widthAnchor.constraint(equalToConstant: 30),
-            button.heightAnchor.constraint(equalToConstant: 30),
-        ])
+        // Yield the fixed size to the window (see yieldWidthToWindow): a required
+        // 30pt here becomes the queue header's minimum, and the equal-width
+        // columns multiply it into a window-wide floor the operator can't drag
+        // below. At 490 the symbol scales down instead of pinning the window.
+        let width = button.widthAnchor.constraint(equalToConstant: 30)
+        let height = button.heightAnchor.constraint(equalToConstant: 30)
+        width.priority = .init(490)
+        height.priority = .init(490)
+        NSLayoutConstraint.activate([width, height])
         return button
     }
 

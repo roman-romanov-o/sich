@@ -138,6 +138,7 @@ public struct TurnDiff: Sendable, Equatable {
 }
 
 public enum TurnDiffNormalizer {
+    // periphery:ignore - test-only entry (scan runs with exclude_tests)
     public static func normalize(_ line: Data, arrival: Date) -> TurnDiff? {
         guard let value = try? JSONSerialization.jsonObject(with: line) as? [String: Any]
         else { return nil }

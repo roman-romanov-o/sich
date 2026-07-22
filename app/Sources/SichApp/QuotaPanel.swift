@@ -470,14 +470,6 @@ private final class QuotaPlaceholderCell: NSView, ThemeReapplying {
     }
 }
 
-private extension NSView {
-    static func fixed(width: CGFloat) -> NSView {
-        let view = NSView()
-        view.widthAnchor.constraint(equalToConstant: width).isActive = true
-        return view
-    }
-}
-
 private final class FlippedView: NSView {
     override var isFlipped: Bool { true }
 }
