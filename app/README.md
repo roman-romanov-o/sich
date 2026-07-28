@@ -43,6 +43,37 @@ swift run sich-app claude -p x              # refused by the firewall before any
 swift run sich-board                        # the mission-control board, seeded with fake-agent sessions (firewall-clean)
 ```
 
+## Ship a shareable build
+
+```bash
+cd app
+./make-app.sh --dmg        # build/Sich.app + build/Sich-<version>.dmg
+./make-app.sh --install    # also copy the bundle into /Applications
+./make-app.sh --native     # arm64-only; faster, for local use — never share it
+```
+
+The default build is **universal** (arm64 + x86_64): the vendored
+`libghostty-vt.a` carries both macOS slices, so an Intel Mac can run the same
+bundle. `--dmg` stages the app next to an `/Applications` symlink and a
+`FIRST LAUNCH — READ ME.txt`, then compresses it into a single file to hand over.
+
+Two things make a bundle shareable rather than merely local:
+
+- **Resources are copied into `Contents/Resources`.** SwiftPM's `Bundle.module`
+  accessor falls back to the *absolute* `.build` path of the machine that
+  compiled it, which is a `fatalError` on any other Mac. `BoardTheme.markURL`
+  prefers the main bundle so the packaged app never consults the module bundle.
+- **Gatekeeper.** There is no Apple Developer ID here, so the bundle is ad-hoc
+  signed and *not* notarized; the recipient's first launch is blocked until they
+  run `xattr -dr com.apple.quarantine /Applications/Sich.app` or click
+  "Open Anyway" in System Settings > Privacy & Security. That is the whole of
+  `FIRST-LAUNCH.txt`. Getting rid of that step requires a paid Developer ID plus
+  `notarytool` — nothing else in the packaging changes.
+
+Build output lands in `app/build/`, which is git-ignored: the artifact is
+rebuildable, so hand over the `.dmg` directly (or attach it to a GitHub release)
+rather than committing it.
+
 ## Dev hot reload
 
 Sich supports DEBUG-only hot code swapping through InjectionIII:

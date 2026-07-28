@@ -259,12 +259,21 @@ enum BoardTheme {
         case .codex: name = "codex"
         case .gemini: name = "gemini"
         }
-        guard let url = Bundle.module.url(
-            forResource: name, withExtension: "pdf", subdirectory: "Resources"),
-            let image = NSImage(contentsOf: url)
-        else { return nil }
+        guard let url = markURL(name), let image = NSImage(contentsOf: url) else { return nil }
         markCache[agent] = image
         return image
+    }
+
+    /// Resolve a vendored mark, preferring the app bundle's own `Contents/Resources`.
+    ///
+    /// `Bundle.module` is SwiftPM-generated and falls back to the ABSOLUTE `.build`
+    /// path of the machine that compiled it — fine under `swift run`, a hard
+    /// `fatalError` inside a `.app` copied to anyone else's Mac. `make-app.sh` copies
+    /// the marks into `Contents/Resources`, so the packaged app never reaches the
+    /// module bundle; dev runs (no such resource in the main bundle) still do.
+    private static func markURL(_ name: String) -> URL? {
+        if let url = Bundle.main.url(forResource: name, withExtension: "pdf") { return url }
+        return Bundle.module.url(forResource: name, withExtension: "pdf", subdirectory: "Resources")
     }
 
     private static var markCache: [CardAgent: NSImage] = [:]

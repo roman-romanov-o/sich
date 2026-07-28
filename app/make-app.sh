@@ -9,6 +9,11 @@
 #
 # Usage:  ./make-app.sh            # build + assemble into ./build/Sich.app
 #         ./make-app.sh --install  # …then copy to /Applications
+#         ./make-app.sh --dmg      # …and package build/Sich-<version>.dmg to hand out
+#         ./make-app.sh --native   # arm64-only (faster; local use, NOT for sharing)
+#
+# The default build is UNIVERSAL (arm64 + x86_64) because the artifact is meant to
+# be shared — an arm64-only bundle simply won't launch on an Intel Mac.
 #
 # Re-run after code changes to refresh the bundled binary.
 set -euo pipefail
@@ -21,10 +26,23 @@ CONTENTS="$APP/Contents"
 MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
 
-echo "▸ Building release binary (this is the slow part; the resulting .app launches instantly)…"
-swift build -c release --product sich
+make_dmg=false
+install=false
+arch_flags=(--arch arm64 --arch x86_64)
+arch_label="universal (arm64 + x86_64)"
+for arg in "$@"; do
+    case "$arg" in
+        --install) install=true ;;
+        --dmg) make_dmg=true ;;
+        --native) arch_flags=(); arch_label="native only — do not share this build" ;;
+        *) echo "unknown option: $arg" >&2; exit 2 ;;
+    esac
+done
 
-BIN="$(swift build -c release --product sich --show-bin-path)/sich"
+echo "▸ Building release binary — $arch_label (slow part; the resulting .app launches instantly)…"
+swift build -c release --product sich "${arch_flags[@]}"
+
+BIN="$(swift build -c release --product sich "${arch_flags[@]}" --show-bin-path)/sich"
 [ -x "$BIN" ] || { echo "release binary not found at $BIN" >&2; exit 1; }
 
 echo "▸ Assembling $APP …"
@@ -32,6 +50,12 @@ rm -rf "$APP"
 mkdir -p "$MACOS" "$RESOURCES"
 cp "$BIN" "$MACOS/sich"
 cp packaging/Info.plist "$CONTENTS/Info.plist"
+
+# The harness marks must live in the app's OWN Contents/Resources: SwiftPM's
+# `Bundle.module` accessor falls back to the absolute `.build` path of the machine
+# that compiled it, which is a fatalError on anyone else's Mac (see
+# BoardTheme.markURL). Copying them here keeps a shared bundle self-contained.
+cp Sources/SichApp/Resources/*.pdf "$RESOURCES/"
 
 echo "▸ Rendering icon …"
 ICONSET="$BUILD_DIR/$APP_NAME.iconset"
@@ -47,7 +71,28 @@ codesign --force --deep --sign - "$APP" 2>/dev/null || \
     echo "  (codesign skipped — bundle still runs locally, unsigned)"
 
 echo "✓ Built $APP"
-if [ "${1:-}" = "--install" ]; then
+
+if [ "$make_dmg" = true ]; then
+    VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$CONTENTS/Info.plist")"
+    DMG="$BUILD_DIR/$APP_NAME-$VERSION.dmg"
+    STAGE="$BUILD_DIR/dmg-stage"
+    echo "▸ Packaging $DMG …"
+    rm -rf "$STAGE" "$DMG"
+    mkdir -p "$STAGE"
+    cp -R "$APP" "$STAGE/$APP_NAME.app"
+    ln -s /Applications "$STAGE/Applications"
+    # Sich is ad-hoc signed, not notarized (no Apple Developer ID), so the first
+    # launch on another Mac is blocked by Gatekeeper. Ship the way out in the disk
+    # image itself — nobody reads a link.
+    cp packaging/FIRST-LAUNCH.txt "$STAGE/FIRST LAUNCH — READ ME.txt"
+    hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+    rm -rf "$STAGE"
+    echo "✓ Packaged $(cd "$BUILD_DIR" && pwd)/$APP_NAME-$VERSION.dmg ($(du -h "$DMG" | cut -f1))"
+    echo "  Share that file. Recipient: open it, drag Sich to Applications, then follow"
+    echo "  'FIRST LAUNCH — READ ME.txt' (the app is unsigned, so macOS blocks run #1)."
+fi
+
+if [ "$install" = true ]; then
     echo "▸ Installing to /Applications …"
     rm -rf "/Applications/$APP_NAME.app"
     cp -R "$APP" "/Applications/$APP_NAME.app"

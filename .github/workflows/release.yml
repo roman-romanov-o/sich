@@ -47,20 +47,31 @@ jobs:
 
       # Stamp the bundle with the tag version (Info.plist in git stays at its
       # placeholder; the tag is the single source of truth for releases).
+      #
+      # Editing Info.plist breaks the seal make-app.sh's codesign put on the
+      # bundle, and a bundle whose signature no longer matches its contents is
+      # rejected harder than an unsigned one ("damaged and can't be opened", with
+      # no Open Anyway escape). Re-sign after stamping, and verify the seal holds.
       - name: Stamp version
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           version="${GITHUB_REF_NAME#v}"
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" build/Sich.app/Contents/Info.plist
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GITHUB_RUN_NUMBER" build/Sich.app/Contents/Info.plist
+          codesign --force --deep --sign - build/Sich.app
+          codesign --verify --verbose=1 build/Sich.app
 
       # ditto preserves resource forks/permissions the way Archive Utility
       # expects; a plain `zip -r` produces bundles Gatekeeper mistrusts more.
       - name: Package
         run: |
           suffix="${GITHUB_REF_NAME:-dev}"
-          ditto -c -k --keepParent build/Sich.app "build/Sich-${suffix}-arm64.zip"
-          shasum -a 256 "build/Sich-${suffix}-arm64.zip"
+          # `universal`, not `arm64`: make-app.sh builds both macOS slices so the
+          # release runs on Intel too. Keep the name honest — it is the only thing
+          # a downloader can check before installing.
+          ditto -c -k --keepParent build/Sich.app "build/Sich-${suffix}-universal.zip"
+          shasum -a 256 "build/Sich-${suffix}-universal.zip"
+          lipo -archs build/Sich.app/Contents/MacOS/sich
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')

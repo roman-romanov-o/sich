@@ -1,0 +1,36 @@
+Sich — first launch on a new Mac
+================================
+
+1. Drag "Sich" onto the Applications folder in this window.
+
+2. macOS will refuse to open it the first time ("Apple could not verify Sich is
+   free of malware"). That is expected: this build is ad-hoc signed, not
+   notarized with an Apple Developer ID. Nothing is wrong with the app.
+
+   Easiest way through — open Terminal and run:
+
+       xattr -dr com.apple.quarantine /Applications/Sich.app
+
+   Then open Sich normally.
+
+   Or, without the Terminal: try to open Sich once, let it be blocked, then go to
+   System Settings > Privacy & Security, scroll to Security, and click
+   "Open Anyway" next to the message about Sich. Confirm on the next prompt.
+
+Requirements
+------------
+* macOS 14 (Sonoma) or newer. Apple Silicon and Intel are both supported.
+* The agent CLIs you intend to drive — e.g. Claude Code (`claude`) or Codex —
+  installed and already logged in. Sich watches and hosts your sessions; it does
+  not ship or authenticate them for you.
+
+What it changes on your machine
+-------------------------------
+Sich reads agent status from lifecycle hooks, so on launch it writes:
+
+* ~/.sich/            — a self-contained hook forwarder script and PATH shims
+* ~/.claude/settings.json — adds its forwarder to the hook events it watches
+                            (existing hooks of yours are preserved, not replaced)
+
+Sessions run under your own interactive login. Sich never launches `claude -p`,
+so it cannot spend your API credit behind your back.

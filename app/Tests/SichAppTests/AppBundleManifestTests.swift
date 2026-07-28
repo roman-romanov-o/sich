@@ -33,7 +33,28 @@ struct AppBundleManifestTests {
         #expect(plist["CFBundleIconFile"] as? String == "Sich")
         #expect((plist["CFBundleIdentifier"] as? String)?.isEmpty == false)
         #expect(plist["NSHighResolutionCapable"] as? Bool == true)
-        // Matches the package's deployment target so Gatekeeper won't refuse it.
-        #expect(plist["LSMinimumSystemVersion"] as? String == "13.0")
+        // Must match Package.swift's `.macOS(.v14)` deployment target (raised for
+        // NSView.displayLink). Claiming 13.0 here doesn't make the binary run on
+        // Ventura — it only lets a Ventura user install a bundle that then dies at
+        // launch, which is exactly the failure a shared build must not ship.
+        #expect(plist["LSMinimumSystemVersion"] as? String == "14.0")
+    }
+
+    /// The two things that separate a bundle someone else can run from one that only
+    /// works on the machine that built it. Both failures are invisible here — an
+    /// arm64-only bundle simply refuses to launch on Intel, and a missing mark is a
+    /// `fatalError` from SwiftPM's `Bundle.module` accessor (it falls back to the
+    /// builder's absolute `.build` path) the first time a card draws its badge.
+    /// Neither shows up in a local run, so pin them at the script level.
+    @Test("make-app.sh builds universal and vendors the harness marks into the bundle")
+    func packagingScriptKeepsTheBundlePortable() throws {
+        let here = URL(fileURLWithPath: #filePath)
+        let script = try String(contentsOf: here
+            .deletingLastPathComponent()   // SichAppTests
+            .deletingLastPathComponent()   // Tests
+            .deletingLastPathComponent()   // app
+            .appendingPathComponent("make-app.sh"), encoding: .utf8)
+        #expect(script.contains("--arch arm64 --arch x86_64"))
+        #expect(script.contains("cp Sources/SichApp/Resources/*.pdf \"$RESOURCES/\""))
     }
 }
