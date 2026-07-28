@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/sich-icon.png" width="120" alt="Sich icon">
+  <img src="assets/sich-icon-flat.png" width="120" alt="Sich icon">
 </p>
 
 <h1 align="center">Sich</h1>
@@ -36,7 +36,7 @@ state first-hand instead of scraping someone else's window.
 ## Install
 
 Download the latest `Sich.app` from
-[**Releases**](https://github.com/roman-romanov-o/agentic-coding-kanban/releases)
+[**Releases**](https://github.com/roman-romanov-o/sich/releases)
 — the app ships as a release artifact, never as a binary in this repository.
 
 The bundle is currently unsigned; on first launch either right-click →
@@ -46,7 +46,8 @@ The bundle is currently unsigned; on first launch either right-click →
 xattr -dr com.apple.quarantine /Applications/Sich.app
 ```
 
-Requires macOS 14 or later; the prebuilt app is Apple silicon.
+Requires macOS 14 or later. The prebuilt app is a universal binary — it runs on
+both Apple silicon and Intel Macs.
 
 ## Build from source
 
