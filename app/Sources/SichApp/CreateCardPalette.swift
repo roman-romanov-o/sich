@@ -125,7 +125,7 @@ final class PaletteRow: NSView {
     }
 }
 
-/// A Saha / Interactive radio-card (stage 3). Same click idiom as ``PaletteRow``.
+/// An Interactive terminal / Saha radio-card (stage 3). Same click idiom as ``PaletteRow``.
 final class FlowOptionCard: NSView {
     var onClick: (() -> Void)?
     var isSelected = false { didSet { restyle() } }
@@ -354,7 +354,7 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     /// don't share a checkout — but that's a deliberate choice, not a surprise.
     private(set) var inWorktree = false
     private(set) var worktreeToggle: WorktreeToggle?
-    private var flow: Flow = .saha
+    private var flow: Flow = .interactive
     private var folders: [TaskFolderSummary] = []
     private var selected = 0
 
@@ -593,16 +593,16 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     func controlTextDidEndEditing(_ obj: Notification) { styleNameBox(focused: false) }
 
     private func buildFlowGrid() {
+        let interactive = FlowOptionCard(title: "Interactive terminal",
+            desc: "Straight into a live terminal. No pipeline, no folder — you drive.")
         let saha = FlowOptionCard(title: "Saha",
             desc: "Structured pipeline. Binds a docs/tasks/ folder; you review each artifact.")
-        let interactive = FlowOptionCard(title: "Interactive",
-            desc: "Straight into a live terminal. No pipeline, no folder — you drive.")
-        saha.isSelected = flow == .saha
         interactive.isSelected = flow == .interactive
-        saha.onClick = { [weak self] in self?.pick(flow: .saha) }
+        saha.isSelected = flow == .saha
         interactive.onClick = { [weak self] in self?.pick(flow: .interactive) }
-        flowCards = [saha, interactive]
-        let grid = NSStackView(views: [saha, interactive])
+        saha.onClick = { [weak self] in self?.pick(flow: .saha) }
+        flowCards = [interactive, saha]
+        let grid = NSStackView(views: [interactive, saha])
         grid.distribution = .fillEqually
         grid.spacing = 8
         add(grid)

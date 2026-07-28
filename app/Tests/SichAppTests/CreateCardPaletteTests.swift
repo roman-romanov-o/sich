@@ -88,6 +88,8 @@ private let kReturn: UInt16 = 36
     pressKey(kReturn, chars: "\r", in: window)     // pick Claude Code → task stage
     #expect(palette.stage == .task)
 
+    let sahaCard = try #require(palette.flowCards.last) // Saha is the second choice
+    try clickRow(sahaCard, root: root, window: window)
     palette.nameField.stringValue = "Fix the login redirect"
     let createRow = try #require(palette.navRows.last)   // last nav row = "Create new"
     try clickRow(createRow, root: root, window: window)
@@ -113,18 +115,19 @@ private let kReturn: UInt16 = 36
     pressKey(kReturn, chars: "\r", in: window)     // harness → task
     #expect(palette.stage == .task)
 
+    let sahaCard = try #require(palette.flowCards.last) // Saha is the second choice
+    try clickRow(sahaCard, root: root, window: window)
     let existingRow = try #require(palette.navRows.first)   // first nav row = existing folder
     try clickRow(existingRow, root: root, window: window)
     #expect(boundFolder == folders[0].url)
 }
 
-/// Interactive path: on the task stage a real click on the "Interactive" flow card
-/// switches flow (hiding the saha bind-list), and a real Return in the name field fires
-/// `confirmInteractive` with the chosen harness + dir.
+/// Interactive terminal is the first/default path: the task stage starts without the
+/// Saha bind-list, and a real Return fires `confirmInteractive` with the chosen harness + dir.
 @MainActor
 @Test func interactivePathReachesConfirmViaRealEvents() throws {
     let proj = URL(fileURLWithPath: "/tmp/demo-project", isDirectory: true)
-    let (palette, root, window) = makePalette(
+    let (palette, _, window) = makePalette(
         recents: [PaletteProject(path: proj.path, activeCards: 0)], folders: [])
 
     var captured: (title: String, dir: String, harness: CreateCardPalette.Harness, inWorktree: Bool)?
@@ -136,10 +139,13 @@ private let kReturn: UInt16 = 36
     pressKey(kReturn, chars: "\r", in: window)     // harness (Claude Code) → task
     #expect(palette.stage == .task)
 
-    // Real click on the Interactive radio card → flow switches, bind-list disappears.
-    let interactiveCard = try #require(palette.flowCards.last)
-    try clickRow(interactiveCard, root: root, window: window)
-    #expect(palette.navRows.isEmpty, "interactive flow shows no saha bind-list")
+    let interactiveCard = try #require(palette.flowCards.first)
+    let sahaCard = try #require(palette.flowCards.last)
+    #expect(palette.flowCards.count == 2)
+    #expect(interactiveCard.isSelected, "interactive terminal is the selected first choice")
+    #expect(!sahaCard.isSelected, "Saha is the unselected second choice")
+    #expect(palette.navRows.isEmpty, "interactive terminal is selected by default")
+    #expect(palette.worktreeToggle != nil, "the first/default choice shows interactive options")
 
     palette.nameField.stringValue = "poke around"
     pressKey(kReturn, chars: "\r", in: window)     // Return in the field editor confirms
@@ -156,7 +162,7 @@ private let kReturn: UInt16 = 36
 @MainActor
 @Test func codexHarnessReachesInteractiveConfirmViaRealEvents() throws {
     let proj = URL(fileURLWithPath: "/tmp/demo-project", isDirectory: true)
-    let (palette, root, window) = makePalette(
+    let (palette, _, window) = makePalette(
         recents: [PaletteProject(path: proj.path, activeCards: 0)], folders: [])
 
     var captured: CreateCardPalette.Harness?
@@ -167,8 +173,7 @@ private let kReturn: UInt16 = 36
     pressKey(kReturn, chars: "\r", in: window)     // Codex → task
     #expect(palette.stage == .task)
 
-    let interactiveCard = try #require(palette.flowCards.last)
-    try clickRow(interactiveCard, root: root, window: window)
+    #expect(palette.navRows.isEmpty, "interactive terminal remains the default for Codex")
     palette.nameField.stringValue = "try codex"
     pressKey(kReturn, chars: "\r", in: window)
 
@@ -188,8 +193,6 @@ private let kReturn: UInt16 = 36
 
     pressKey(kReturn, chars: "\r", in: window)     // project
     pressKey(kReturn, chars: "\r", in: window)     // harness → task
-    let interactiveCard = try #require(palette.flowCards.last)
-    try clickRow(interactiveCard, root: root, window: window)
 
     let toggle = try #require(palette.worktreeToggle, "interactive stage shows the worktree toggle")
     #expect(!toggle.isOn, "the toggle starts off")
