@@ -1,4 +1,5 @@
 import Foundation
+import SichCore
 
 /// Installs Sich's observe-only agent hook plumbing. Current app startup uses
 /// scoped PATH shims (`~/.sich/bin/claude` and `codex`) for managed terminals;
@@ -18,6 +19,12 @@ enum HookInstaller {
         "PostToolUse", "Notification", "SubagentStart", "SubagentStop",
         "Stop", "SessionEnd",
     ]
+
+    /// The embedded forwarder's bytes. The remote install pushes exactly these over
+    /// ssh, and the staleness probe hashes them — so this is the single source of
+    /// truth for "the forwarder we ship".
+    // periphery:ignore - test-only entry (scan runs with exclude_tests)
+    static var forwarderBody: String { forwarderScript }
 
     /// Merge the forwarder into every board event. Returns true if the file was
     /// (re)written, false if it was already fully wired or the merge could not be
@@ -126,7 +133,15 @@ enum HookInstaller {
     }
 
     private static func install(settings path: URL, command: String) -> Bool {
-        var cfg = readConfig(path)
+        guard let patched = patched(readConfig(path), command: command) else { return false }
+        return writeConfig(patched, to: path)
+    }
+
+    /// Merge the forwarder into every board event. Returns `nil` when the config
+    /// is already fully wired — the idempotency answer both the local install and
+    /// the remote one need, which is why it is a value and not a file write.
+    static func patched(_ config: [String: Any], command: String) -> [String: Any]? {
+        var cfg = config
         var hooks = cfg["hooks"] as? [String: Any] ?? [:]
         var changed = false
         for event in events {
@@ -135,9 +150,9 @@ enum HookInstaller {
             hooks[event] = appendForward(into: groups, command: command)
             changed = true
         }
-        guard changed else { return false }
+        guard changed else { return nil }
         cfg["hooks"] = hooks
-        return writeConfig(cfg, to: path)
+        return cfg
     }
 
     /// True if any group in this event already runs the forwarder — the idempotency
@@ -166,21 +181,165 @@ enum HookInstaller {
     }
 
     private static func readConfig(_ path: URL) -> [String: Any] {
-        guard let data = try? Data(contentsOf: path),
-              let obj = try? JSONSerialization.jsonObject(with: data),
+        config(from: (try? Data(contentsOf: path)) ?? Data())
+    }
+
+    static func config(from data: Data) -> [String: Any] {
+        guard let obj = try? JSONSerialization.jsonObject(with: data),
               let json = obj as? [String: Any]
         else { return [:] }
         return json
     }
 
     private static func writeConfig(_ cfg: [String: Any], to path: URL) -> Bool {
-        guard JSONSerialization.isValidJSONObject(cfg),
-              let data = try? JSONSerialization.data(
-                  withJSONObject: cfg, options: [.prettyPrinted, .sortedKeys])
-        else { return false }
+        guard let data = configData(cfg) else { return false }
         try? FileManager.default.createDirectory(
             at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
         return (try? data.write(to: path)) != nil
+    }
+
+    private static func configData(_ cfg: [String: Any]) -> Data? {
+        guard JSONSerialization.isValidJSONObject(cfg) else { return nil }
+        return try? JSONSerialization.data(
+            withJSONObject: cfg, options: [.prettyPrinted, .sortedKeys])
+    }
+
+    // MARK: - Remote install (US-005)
+
+    /// What the remote `~/.claude/settings.json` calls. `$HOME` stays unexpanded
+    /// — it is the far side's home, resolved by the shell claude runs the hook
+    /// in, and the same string works on every host.
+    static let remoteForward = "bash \"$HOME\"/\(RemoteHookFile.forwarder.rawValue)"
+
+    /// Install the forwarder on a remote host, mirroring ``installGlobal`` for a
+    /// home directory we cannot see: push the same bytes, then patch the remote
+    /// settings — preserving whatever hooks the user already had there.
+    ///
+    /// Adds no remote binary and no new trust surface (AC-5): what lands is the
+    /// shell script the local install writes, over the ssh identity the operator
+    /// already uses for this host.
+    @discardableResult
+    static func installRemote(spec: RemoteTmuxSpec, runner: RemoteCommandRunner) -> Bool {
+        guard push(Data(forwarderScript.utf8), to: .forwarder, spec: spec, runner: runner)
+        else { return false }
+        guard case .bytes(let raw) = RemoteHookProbe.read(
+            .claudeSettings, on: spec, using: runner) else { return false }
+        guard let patched = patched(config(from: raw), command: remoteForward),
+              let data = configData(patched)
+        else { return true }   // already wired — the push above is the whole job
+        return push(data, to: .claudeSettings, spec: spec, runner: runner)
+    }
+
+    /// The honest answer to "are our hooks on this host", read fresh every time.
+    static func remoteInstallState(
+        spec: RemoteTmuxSpec, runner: RemoteCommandRunner
+    ) -> RemoteHookInstallState {
+        RemoteHookProbe.state(
+            forwarder: RemoteHookProbe.read(.forwarder, on: spec, using: runner),
+            matching: Data(forwarderScript.utf8),
+            settings: RemoteHookProbe.read(.claudeSettings, on: spec, using: runner),
+            referencesHook: { referencesForwarder(config(from: $0)) })
+    }
+
+    /// True when the remote settings actually call our forwarder for at least one
+    /// event — bytes on disk that nothing invokes are not an install.
+    private static func referencesForwarder(_ cfg: [String: Any]) -> Bool {
+        let hooks = cfg["hooks"] as? [String: Any] ?? [:]
+        return events.contains {
+            alreadyForwarding(hooks[$0] as? [[String: Any]] ?? [], command: remoteForward)
+        }
+    }
+
+    private static func push(
+        _ bytes: Data, to file: RemoteHookFile, spec: RemoteTmuxSpec, runner: RemoteCommandRunner
+    ) -> Bool {
+        guard let argv = try? RemoteTmuxCommand.installArgv(for: spec, file: file),
+              let result = runner.run(argv: argv, input: bytes)
+        else { return false }
+        return result.succeeded
+    }
+}
+
+/// Per-host install state for the board, keyed by ssh destination.
+///
+/// Never a "we installed once" cache: every entry is the result of a probe, and
+/// a host with no probe result yet reads ``RemoteHookInstallState/unknown`` — the
+/// state that says *we do not know*, which is exactly true.
+@MainActor
+public final class RemoteHookStatus {
+    public static let shared = RemoteHookStatus()
+
+    /// Positive opt-in, like the usage probe's: tests read and write state
+    /// directly and never reach a host. Set ONLY by the real executable.
+    public static var probingEnabled = false
+
+    /// The destination whose install is in flight, if any. Read to collapse a
+    /// double click: two installs racing on the same remote file could interleave
+    /// their write-then-rename. Cleared when the install's probe lands, so a
+    /// failed attempt can always be retried.
+    private(set) var lastRequestedInstall: String?
+
+    private var states: [String: RemoteHookInstallState] = [:]
+    private var specs: [String: RemoteTmuxSpec] = [:]
+    private let runner: RemoteCommandRunner
+
+    init(runner: RemoteCommandRunner = SSHCommandRunner()) {
+        self.runner = runner
+    }
+
+    /// Remember a remote card's spec and kick the first probe.
+    func register(_ spec: RemoteTmuxSpec) {
+        guard let destination = try? RemoteTmuxCommand.destination(for: spec) else { return }
+        specs[destination] = spec
+        refresh(destination)
+    }
+
+    func state(for destination: String) -> RemoteHookInstallState {
+        states[destination] ?? .unknown
+    }
+
+    func setState(_ state: RemoteHookInstallState, for destination: String) {
+        states[destination] = state
+    }
+
+    /// Install (or update) on demand — what an actionable chip click does.
+    func requestInstall(for destination: String) {
+        guard lastRequestedInstall != destination else { return }   // already in flight
+        lastRequestedInstall = destination
+        guard Self.probingEnabled, let spec = specs[destination] else { return }
+        offMainThread { runner in
+            HookInstaller.installRemote(spec: spec, runner: runner)
+            return HookInstaller.remoteInstallState(spec: spec, runner: runner)
+        } then: { [weak self] (state: RemoteHookInstallState) in
+            self?.setState(state, for: destination)
+            self?.finishInstall(destination)
+        }
+    }
+
+    private func finishInstall(_ destination: String) {
+        if lastRequestedInstall == destination { lastRequestedInstall = nil }
+    }
+
+    func refresh(_ destination: String) {
+        guard Self.probingEnabled, let spec = specs[destination] else { return }
+        offMainThread { runner in
+            HookInstaller.remoteInstallState(spec: spec, runner: runner)
+        } then: { [weak self] (state: RemoteHookInstallState) in
+            self?.setState(state, for: destination)
+        }
+    }
+
+    /// ssh blocks for as long as the network wants it to; none of that may happen
+    /// on the main thread or on a cooperative-pool thread.
+    private func offMainThread(
+        _ work: @escaping @Sendable (RemoteCommandRunner) -> RemoteHookInstallState,
+        then land: @escaping @MainActor (RemoteHookInstallState) -> Void
+    ) {
+        let runner = self.runner
+        DispatchQueue.global(qos: .utility).async {
+            let state = work(runner)
+            Task { @MainActor in land(state) }
+        }
     }
 }
 
@@ -222,9 +381,18 @@ if [ -n "$SICH_CARD_ID" ]; then
 fi
 printf '%s\n' "$line" >> "$file" 2>/dev/null
 
-event=$(printf '%s' "$line" | /usr/bin/plutil -extract hook_event_name raw -o - - 2>/dev/null)
-session=$(printf '%s' "$line" | /usr/bin/plutil -extract session_id raw -o - - 2>/dev/null)
-cwd=$(printf '%s' "$line" | /usr/bin/plutil -extract cwd raw -o - - 2>/dev/null)
+# Per-turn review data. The three fields are read with POSIX sed rather than
+# macOS' bundled property-list tool: this same script is installed on Linux
+# hosts (US-002), where that tool does not exist and every extraction failed
+# silently — gating the whole block below, so diffs were dropped while the raw
+# append still succeeded. For the same reason every tool here is resolved
+# through PATH, never by an absolute macOS path.
+json_field() {
+    printf '%s' "$line" | sed -n 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+}
+event=$(json_field hook_event_name)
+session=$(json_field session_id)
+cwd=$(json_field cwd)
 if [ -n "$session" ] && [ -n "$cwd" ] && git -C "$cwd" rev-parse --git-dir >/dev/null 2>&1; then
     safe_session=$(printf '%s' "$session" | tr -cd '[:alnum:]_.-')
     state_dir="${SICH_DIFF_STATE_DIR:-$HOME/.sich/turn-diffs}/$safe_session"
@@ -271,7 +439,9 @@ if [ -n "$session" ] && [ -n "$cwd" ] && git -C "$cwd" rev-parse --git-dir >/dev
                     "$max_diff_bytes" >> "$diff_path.trim"
                 mv "$diff_path.trim" "$diff_path"
             fi
-            diff_b64=$(/usr/bin/base64 < "$diff_path" | tr -d '\n')
+            # GNU base64 wraps at 76 columns where macOS' does not; `tr -d` folds
+            # either shape back into the single JSON string field.
+            diff_b64=$(base64 < "$diff_path" | tr -d '\n')
             session_b64=""
             if [ -s "$state_dir/session-checkpoint" ]; then
                 session_checkpoint=$(cat "$state_dir/session-checkpoint")
@@ -284,10 +454,10 @@ if [ -n "$session" ] && [ -n "$cwd" ] && git -C "$cwd" rev-parse --git-dir >/dev
                     head -c "$max_diff_bytes" "$session_path" > "$session_path.trim"
                     mv "$session_path.trim" "$session_path"
                 fi
-                session_b64=$(/usr/bin/base64 < "$session_path" | tr -d '\n')
+                session_b64=$(base64 < "$session_path" | tr -d '\n')
                 rm -f "$session_path"
             fi
-            cwd_b64=$(printf '%s' "$cwd" | /usr/bin/base64 | tr -d '\n')
+            cwd_b64=$(printf '%s' "$cwd" | base64 | tr -d '\n')
             card_field=""
             if [ -n "$SICH_CARD_ID" ]; then
                 card_field=",\"sich_card_id\":\"$SICH_CARD_ID\""

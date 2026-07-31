@@ -1,12 +1,77 @@
 import AppKit
 import SichCore
 
-/// One recent project the palette offers on stage 1.
-struct PaletteProject: Equatable {
-    let path: String
-    let activeCards: Int
+/// One recent folder the palette offers, HOST-QUALIFIED (US-009 AC-2): `host` is the
+/// ssh destination it lives on, and `nil` means THIS Mac. The same path on two boxes
+/// is two entries, and a remote path never shows up under local.
+///
+/// `activeCards` is live board state, so it is deliberately outside `CodingKeys`:
+/// what persists is *where a folder is*, never how busy it was last launch.
+struct PaletteProject: Equatable, Codable {
+    var host: String?
+    var path: String
+    var activeCards: Int = 0
+
+    private enum CodingKeys: String, CodingKey { case host, path }
+
     var leaf: String { (path as NSString).lastPathComponent }
-    var display: String { (path as NSString).abbreviatingWithTildeInPath }
+    var display: String {
+        host == nil ? (path as NSString).abbreviatingWithTildeInPath : path
+    }
+
+    /// Same folder on the same machine — the recents store's dedup key.
+    func isSameLocation(as other: PaletteProject) -> Bool {
+        host == other.host && path == other.path
+    }
+}
+
+/// The palette's recents MRU, persisted in `UserDefaults` (six entries per host need
+/// no file or db). Host-qualification is enforced here rather than at the call sites:
+/// every read and write carries the host, so no path can leak between machines.
+///
+/// Reads tolerate the pre-US-009 plain-`[String]` array — those entries predate remote
+/// cards, so each one is a LOCAL folder by definition.
+struct RecentFolderStore {
+    let defaults: UserDefaults
+    let key: String
+    /// Per host, NOT global: six local folders must never evict the one folder you
+    /// use on a remote box.
+    var perHostLimit = 6
+
+    func load() -> [PaletteProject] {
+        (defaults.array(forKey: key) ?? []).compactMap(Self.decode)
+    }
+
+    func remember(host: String?, path: String) {
+        // Only a local path has a local `~` to expand; a remote one is the far side's.
+        let folder = host == nil ? (path as NSString).expandingTildeInPath : path
+        guard !folder.isEmpty else { return }
+        let fresh = PaletteProject(host: host, path: folder)
+        var all = load().filter { !$0.isSameLocation(as: fresh) }
+        all.insert(fresh, at: 0)
+        defaults.set(capped(all).compactMap(Self.encode), forKey: key)
+    }
+
+    private func capped(_ all: [PaletteProject]) -> [PaletteProject] {
+        var seen: [String: Int] = [:]
+        return all.filter {
+            let count = (seen[$0.host ?? ""] ?? 0) + 1
+            seen[$0.host ?? ""] = count
+            return count <= perHostLimit
+        }
+    }
+
+    private static func decode(_ element: Any) -> PaletteProject? {
+        if let legacy = element as? String {
+            return legacy.isEmpty ? nil : PaletteProject(host: nil, path: legacy)
+        }
+        guard let data = element as? Data else { return nil }
+        return try? JSONDecoder().decode(PaletteProject.self, from: data)
+    }
+
+    private static func encode(_ project: PaletteProject) -> Data? {
+        try? JSONEncoder().encode(project)
+    }
 }
 
 /// A clickable palette row (layer-backed, owns its whole rect for hit-testing +
@@ -51,6 +116,10 @@ final class PaletteRow: NSView {
         bounds.contains(convert(point, from: superview)) ? self : nil
     }
     override func mouseDown(with event: NSEvent) { onClick?() }
+    /// What this row actually says on screen — read by tests so an assertion is about
+    /// the rendered row rather than the array that produced it.
+    // periphery:ignore - test-only entry (scan runs with exclude_tests)
+    var titleText: String { title.stringValue }
     // A plain NSView reports it can move the window, so the window steals the click
     // as a background-drag and never delivers mouseDown. This row IS the control.
     override var mouseDownCanMoveWindow: Bool { false }
@@ -264,6 +333,43 @@ final class WorktreeToggle: NSView {
     }
 }
 
+/// A palette text input: inset fill + stroke, amber while focused. The hand-entry
+/// affordance behind every "type it yourself" fallback (a new host, a folder the box
+/// has never been used for) — an unreachable host must never block creation, so the
+/// list is only ever a shortcut past this field.
+final class PaletteFieldBox: NSView {
+    let field: NSTextField
+
+    init(field: NSTextField, placeholder: String) {
+        self.field = field
+        super.init(frame: .zero)
+        field.placeholderString = placeholder
+        field.font = .systemFont(ofSize: 13)
+        field.textColor = BoardTheme.textPrimary
+        field.drawsBackground = false
+        field.isBordered = false
+        field.focusRingType = .none
+        wantsLayer = true
+        layer?.cornerRadius = 8
+        themedBackground = BoardTheme.canvas
+        layer?.borderWidth = 1
+        setFocused(false)
+        field.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(field)
+        NSLayoutConstraint.activate([
+            field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 11),
+            field.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -11),
+            field.topAnchor.constraint(equalTo: topAnchor, constant: 9),
+            field.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -9),
+        ])
+    }
+    required init?(coder: NSCoder) { nil }
+
+    func setFocused(_ focused: Bool) {
+        themedBorder = focused ? BoardTheme.attention : BoardTheme.cardStrokeStrong
+    }
+}
+
 // MARK: - shared makers
 
 @MainActor func makeMono(_ size: CGFloat) -> NSTextField {
@@ -295,7 +401,16 @@ final class WorktreeToggle: NSView {
 /// logic (which owns the pool firewall + binding invariants). Reaching the "create"
 /// action for a saha task hands off to the shell, which enters planning mode.
 final class CreateCardPalette: NSView, NSTextFieldDelegate {
-    enum Stage { case project, harness, task }
+    enum Stage { case destination, project, harness, task }
+    /// Where the card runs. Remote is a stage-1 choice beside "This Mac" (US-009 AC-1),
+    /// never a hidden keystroke; the payload is the raw `[user@]host[:port]` the
+    /// operator picked or typed, parsed into a spec by the shell.
+    enum Destination: Equatable {
+        case local
+        case remote(String)
+
+        var host: String? { if case let .remote(h) = self { return h }; return nil }
+    }
     enum Flow { case saha, interactive }
     enum Harness: CaseIterable {
         case claude
@@ -332,6 +447,9 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     var confirmInteractive: ((_ title: String, _ dir: String, _ harness: Harness, _ inWorktree: Bool) -> Void)?
     var confirmSahaNew: ((_ title: String, _ dir: String) -> String?)?
     var confirmSahaExisting: ((_ folder: URL, _ dir: String) -> String?)?
+    /// The remote path (US-009): destination + optional far-side dir + card name. Same
+    /// error contract as the saha confirms — nil means the shell created the card.
+    var confirmRemote: ((_ title: String, _ destination: String, _ dir: String) -> String?)?
     var browse: (() -> String?)?
     var onCancel: (() -> Void)?
     // Discover the task folders under a chosen project dir (shell injects
@@ -342,11 +460,16 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     private(set) var navRows: [PaletteRow] = []
     private(set) var flowCards: [FlowOptionCard] = []
     let nameField = NSTextField()
-    private let nameBox = NSView()
+    /// Hand entry for a host the recents have never seen, and for a folder on it.
+    let hostField = NSTextField()
+    let dirField = NSTextField()
+    private(set) var fieldBoxes: [PaletteFieldBox] = []
     let errorLabel = makeMono(11)
-    private(set) var stage: Stage = .project
+    private(set) var stage: Stage = .destination
+    private(set) var destination: Destination = .local
 
     private let recents: [PaletteProject]
+    private(set) var remoteDir = ""
     private var projectDir: String
     private var harness: Harness = .claude
     /// Off by default: a worktree is an explicit opt-IN. When on, the task gets its
@@ -365,7 +488,7 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
 
     init(recents: [PaletteProject]) {
         self.recents = recents
-        self.projectDir = recents.first?.path ?? ""
+        self.projectDir = recents.first { $0.host == nil }?.path ?? ""
         super.init(frame: .zero)
         buildChrome()
         renderStage()
@@ -373,6 +496,16 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     required init?(coder: NSCoder) { nil }
 
     override var acceptsFirstResponder: Bool { true }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        focusStage()
+    }
+
+    /// Give the current stage its own keyboard focus. The first stage is built before
+    /// there is a window, so without this the shell's mount would leave the hand-entry
+    /// field unfocused — and an unknown host would be unreachable by typing.
+    func focusStage() { window?.makeFirstResponder(focusTarget) }
 
     // MARK: chrome
 
@@ -471,13 +604,41 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         body.arrangedSubviews.forEach { $0.removeFromSuperview() }
         navRows = []
         flowCards = []
+        fieldBoxes = []
         switch stage {
+        case .destination: renderDestination()
         case .project: renderProject()
         case .harness: renderHarness()
         case .task: renderTask()
         }
         highlight()
-        window?.makeFirstResponder(stage == .task ? nameField : self)
+        window?.makeFirstResponder(focusTarget)
+    }
+
+    /// The stage's typing target, if it has one: hand entry is always live, so a host
+    /// or folder the recents don't know is one keystroke away rather than a dead end.
+    private var focusTarget: NSResponder {
+        switch stage {
+        case .destination: return hostField
+        case .project: return destination == .local ? self : dirField
+        case .harness: return self
+        case .task: return nameField
+        }
+    }
+
+    /// `n/total` for the stage chip — a remote card skips the harness stage (the human
+    /// runs whatever they like inside the far-side tmux), so the count differs.
+    private func stageChip(_ name: String) -> String {
+        let steps: [Stage] = destination == .local
+            ? [.destination, .project, .harness, .task]
+            : [.destination, .project, .task]
+        return "\((steps.firstIndex(of: stage) ?? 0) + 1)/\(steps.count) \(name)"
+    }
+
+    private func addField(_ box: PaletteFieldBox) {
+        box.field.delegate = self
+        fieldBoxes.append(box)
+        add(box)
     }
 
     private func addHeader(_ chipText: String, completed: [String]) {
@@ -508,12 +669,69 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         add(row)
     }
 
-    // MARK: stage 1 — project
+    // MARK: stage 1 — where does this run?
+
+    /// US-009 AC-1: the first thing the palette asks. "This Mac" is the default, and a
+    /// host you have already used sits directly beside it — same row, same keystroke,
+    /// no hidden alternate path.
+    private func renderDestination() {
+        addHeader(stageChip("where"), completed: [])
+        add(sectionLabel("WHERE DOES THIS RUN?"))
+        addNav(PaletteRow(glyph: "", title: "This Mac",
+                          subtitle: "local login shell · your own checkout"))
+        for host in knownHosts {
+            addNav(PaletteRow(glyph: "@", title: host,
+                              subtitle: "ssh · tmux session on the far side"))
+        }
+        add(sectionLabel("ANOTHER HOST"))
+        addField(PaletteFieldBox(field: hostField, placeholder: "user@host  or  host:2222"))
+        setFooter(["↵ next: folder", "↑↓ navigate", "esc cancel"])
+    }
+
+    /// Hosts the recents already know, most-recent first, deduped. Rendered from LOCAL
+    /// state only — nothing here probes the far side, so an unreachable host is still
+    /// offered and still creatable.
+    private var knownHosts: [String] {
+        var seen = Set<String>()
+        return recents.compactMap(\.host).filter { seen.insert($0).inserted }
+    }
+
+    private var localRecents: [PaletteProject] { recents.filter { $0.host == nil } }
+
+    private func recents(on host: String) -> [PaletteProject] {
+        recents.filter { $0.host == host }
+    }
+
+    // MARK: stage 2 — folder
 
     private func renderProject() {
-        addHeader("1/3 project", completed: [])
+        switch destination {
+        case .local: renderLocalProject()
+        case let .remote(host): renderRemoteProject(host: host)
+        }
+    }
+
+    /// US-009 AC-2 + the no-recents edge case: this host's OWN folders (never another
+    /// box's, never a local path), plus hand entry — which is the whole stage on a box
+    /// used for the first time. An empty list is a prompt, not a dead end.
+    private func renderRemoteProject(host: String) {
+        addHeader(stageChip("folder"), completed: [host])
+        let folders = recents(on: host)
+        add(sectionLabel(folders.isEmpty
+            ? "NO FOLDERS USED ON THIS HOST YET — TYPE ONE"
+            : "RECENT FOLDERS ON THIS HOST"))
+        for folder in folders {
+            addNav(PaletteRow(glyph: "", title: folder.leaf, subtitle: folder.path))
+        }
+        addField(PaletteFieldBox(field: dirField,
+                                 placeholder: "/home/you/project   (blank = the host's default)"))
+        setFooter(["↵ next: name", "↑↓ folder", "← back", "esc cancel"])
+    }
+
+    private func renderLocalProject() {
+        addHeader(stageChip("project"), completed: ["This Mac"])
         add(sectionLabel("RECENT PROJECTS"))
-        for p in recents {
+        for p in localRecents {
             // Fixed two-part template every row, incl. the zero case, so the scanned
             // list has even info density (a bare path next to a "· N active" one snags the eye).
             let tail = p.activeCards == 0
@@ -532,10 +750,10 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         setFooter(["↵ next: harness", "↑↓ navigate", "esc cancel"])
     }
 
-    // MARK: stage 2 — harness
+    // MARK: stage 3 — harness (local only)
 
     private func renderHarness() {
-        addHeader("2/3 harness", completed: [projLeaf])
+        addHeader(stageChip("harness"), completed: [projLeaf])
         add(sectionLabel("HARNESS — RUNS THE SESSION"))
         for option in Harness.allCases {
             let glyph = option.cardAgent.map { BoardTheme.agentGlyph($0) } ?? ""
@@ -544,10 +762,17 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         setFooter(["↵ next: task", "↑↓ navigate", "← back", "esc cancel"])
     }
 
-    // MARK: stage 3 — task
+    // MARK: last stage — task
 
     private func renderTask() {
-        addHeader("3/3 task", completed: [projLeaf, harness.title])
+        switch destination {
+        case .local: renderLocalTask()
+        case let .remote(host): renderRemoteTask(host: host)
+        }
+    }
+
+    private func renderLocalTask() {
+        addHeader(stageChip("task"), completed: [projLeaf, harness.title])
         buildNameField()
         buildFlowGrid()
         if flow == .saha { buildFolderList() } else { buildWorktreeToggle() }
@@ -558,39 +783,29 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
             : ["↵ create", "↔ flow", "← back", "esc cancel"])
     }
 
+    /// A remote card is a named tmux session on the far side: no saha pipeline and no
+    /// worktree (there is no local checkout to branch), so the name IS the stage — and
+    /// that name is also the session the card re-attaches to after a restart.
+    private func renderRemoteTask(host: String) {
+        addHeader(stageChip("task"),
+                  completed: [host, remoteDir.isEmpty ? "default folder" : remoteDir])
+        add(sectionLabel("NAME THIS TASK — ALSO THE TMUX SESSION NAME"))
+        buildNameField()
+        setFooter(["↵ create", "← back", "esc cancel"])
+    }
+
     private func buildNameField() {
-        nameField.placeholderString = "Name this task — e.g. Fix the login redirect"
-        nameField.font = .systemFont(ofSize: 13)
-        nameField.textColor = BoardTheme.textPrimary
-        nameField.drawsBackground = false
-        nameField.isBordered = false
-        nameField.focusRingType = .none
-        nameField.delegate = self
-        // A real input box (inset fill + stroke, amber on focus) — a bare underline read
-        // as a section label, so first-timers couldn't tell the most important field apart.
-        nameBox.wantsLayer = true
-        nameBox.layer?.cornerRadius = 8
-        nameBox.themedBackground = BoardTheme.canvas
-        nameBox.layer?.borderWidth = 1
-        styleNameBox(focused: false)
-        nameField.translatesAutoresizingMaskIntoConstraints = false
-        nameBox.addSubview(nameField)
-        NSLayoutConstraint.activate([
-            nameField.leadingAnchor.constraint(equalTo: nameBox.leadingAnchor, constant: 11),
-            nameField.trailingAnchor.constraint(equalTo: nameBox.trailingAnchor, constant: -11),
-            nameField.topAnchor.constraint(equalTo: nameBox.topAnchor, constant: 9),
-            nameField.bottomAnchor.constraint(equalTo: nameBox.bottomAnchor, constant: -9),
-        ])
-        add(nameBox)
+        addField(PaletteFieldBox(field: nameField,
+                                 placeholder: "Name this task — e.g. Fix the login redirect"))
     }
 
-    private func styleNameBox(focused: Bool) {
-        nameBox.themedBorder =
-            focused ? BoardTheme.attention : BoardTheme.cardStrokeStrong
-    }
+    func controlTextDidBeginEditing(_ obj: Notification) { setFieldFocus(obj, true) }
+    func controlTextDidEndEditing(_ obj: Notification) { setFieldFocus(obj, false) }
 
-    func controlTextDidBeginEditing(_ obj: Notification) { styleNameBox(focused: true) }
-    func controlTextDidEndEditing(_ obj: Notification) { styleNameBox(focused: false) }
+    private func setFieldFocus(_ note: Notification, _ focused: Bool) {
+        guard let field = note.object as? NSTextField else { return }
+        fieldBoxes.first { $0.field === field }?.setFocused(focused)
+    }
 
     private func buildFlowGrid() {
         let interactive = FlowOptionCard(title: "Interactive terminal",
@@ -648,10 +863,10 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         selected = idx
         highlight()
         switch stage {
+        case .destination:
+            pickDestinationRow(idx)
         case .project:
-            if idx == navRows.count - 1 { doBrowse(); return }   // last = Browse…
-            projectDir = recents[idx].path
-            stage = .harness; renderStage()
+            activateProjectRow(idx)
         case .harness:
             harness = Harness.allCases[idx]
             folders = discoverFolders?(projectDir) ?? []
@@ -661,8 +876,65 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         }
     }
 
+    /// Row 0 is this Mac; every later row is a host the recents already know.
+    private func pickDestinationRow(_ idx: Int) {
+        destination = idx == 0 ? .local : .remote(knownHosts[idx - 1])
+        enterFolderStage()
+    }
+
+    private func enterFolderStage() {
+        remoteDir = ""
+        dirField.stringValue = ""
+        stage = .project
+        renderStage()
+    }
+
+    /// Return in the host field: a typed host wins, an empty field falls through to the
+    /// highlighted row — so a box the recents have never seen is one keystroke away.
+    private func commitDestination() {
+        let typed = hostField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard typed.isEmpty else {
+            destination = .remote(typed)
+            enterFolderStage()
+            return
+        }
+        pickDestinationRow(min(selected, knownHosts.count))
+    }
+
+    private func activateProjectRow(_ idx: Int) {
+        if case let .remote(host) = destination {
+            let list = recents(on: host)
+            guard idx < list.count else { return }
+            remoteDir = list[idx].path
+            stage = .task; renderStage()
+            return
+        }
+        if idx == navRows.count - 1 { doBrowse(); return }   // last = Browse…
+        projectDir = localRecents[idx].path
+        stage = .harness; renderStage()
+    }
+
+    /// Return in the far-side folder field. A blank field is legitimate — with no
+    /// recents on this host there is nothing to fall back to, and tmux then opens the
+    /// login directory — so an unused host still creates a card.
+    private func commitRemoteFolder() {
+        let typed = dirField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let list = recents(on: destination.host ?? "")
+        if !typed.isEmpty {
+            remoteDir = typed
+        } else {
+            remoteDir = selected < list.count ? list[selected].path : ""
+        }
+        stage = .task
+        renderStage()
+    }
+
     private func confirmTask(folderIndex: Int?) {
         let title = nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if case let .remote(host) = destination {
+            if let err = confirmRemote?(title, host, remoteDir) { showError(err) }
+            return
+        }
         if flow == .interactive {
             confirmInteractive?(title, projectDir, harness, inWorktree)
             return
@@ -698,9 +970,10 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
 
     private func back() {
         switch stage {
-        case .project: onCancel?()
+        case .destination: onCancel?()
+        case .project: stage = .destination; renderStage()
         case .harness: stage = .project; renderStage()
-        case .task: stage = .harness; renderStage()
+        case .task: stage = destination == .local ? .harness : .project; renderStage()
         }
     }
 
@@ -717,21 +990,29 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         }
     }
 
-    /// Task-stage key routing while the name field holds focus.
+    /// Key routing while one of the palette's fields holds focus — every stage that can
+    /// be typed into routes through here, so the keyboard path is the same everywhere.
     func control(_ control: NSControl, textView: NSTextView,
                  doCommandBy selector: Selector) -> Bool {
         switch selector {
-        case #selector(NSResponder.insertNewline(_:)): confirmTask(folderIndex: nil); return true
+        case #selector(NSResponder.insertNewline(_:)): commit(from: control); return true
         case #selector(NSResponder.cancelOperation(_:)): onCancel?(); return true
         case #selector(NSResponder.insertTab(_:)):
+            guard control === nameField, destination == .local else { return false }
             pick(flow: flow == .saha ? .interactive : .saha); return true
         case #selector(NSResponder.moveDown(_:)): move(1); return true
         case #selector(NSResponder.moveUp(_:)): move(-1); return true
         case #selector(NSResponder.deleteBackward(_:)):
-            guard nameField.stringValue.isEmpty else { return false }
+            guard (control as? NSTextField)?.stringValue.isEmpty == true else { return false }
             back(); return true                       // ⌫ on an empty field steps back
         default: return false
         }
+    }
+
+    private func commit(from control: NSControl) {
+        if control === hostField { commitDestination() }
+        else if control === dirField { commitRemoteFolder() }
+        else { confirmTask(folderIndex: nil) }
     }
 
     // MARK: derived text
@@ -766,6 +1047,7 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     /// Capture seam: jump to the harness stage for a known project.
     func presentHarnessStage(projectDir: String) {
         self.projectDir = projectDir
+        self.destination = .local
         self.stage = .harness
         renderStage()
     }
@@ -775,6 +1057,7 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     func presentSahaTaskStage(projectDir: String, folders: [TaskFolderSummary]) {
         self.projectDir = projectDir
         self.folders = folders
+        self.destination = .local
         self.harness = .claude
         self.flow = .saha
         self.stage = .task

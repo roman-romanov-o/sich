@@ -115,16 +115,20 @@ extension BoardSeed {
         spec: RemoteTmuxSpec, sessionID: String? = nil, title: String? = nil,
         cardID: String? = nil, agent: CardAgent = .claude
     ) throws -> BoardSeed {
-        let argv = try RemoteTmuxCommand.argv(for: spec)
-        let session = RemoteTmuxCommand.sanitizeSessionName(spec.sessionName)
+        // One id: the card's, the pane's, and the one every relayed hook line carries
+        // back. Minting it here and dropping it from the argv would leave the far side
+        // exporting nothing to join on (US-004 AC-1).
+        let id = cardID ?? UUID().uuidString
+        let argv = try RemoteTmuxCommand.argv(for: spec, cardID: id)
+        let key = try RemoteSessionKey.make(for: spec)
         return BoardSeed(
-            sessionID: sessionID ?? "remote/\(spec.host)/\(session)",
-            title: title ?? "\(spec.target) · \(session)",
+            sessionID: sessionID ?? key.sessionID,
+            title: title ?? "\(spec.target) · \(key.session)",
             // `projectDir` is a display/label field for a remote card (no local path);
             // show the ssh destination so drill-in and the card subtitle read sensibly.
             projectDir: spec.target,
             agent: agent, flow: .b, state: .idle, scrollback: "",
-            commandOverride: argv, cardID: cardID ?? UUID().uuidString
+            commandOverride: argv, cardID: id
         )
     }
 }

@@ -21,15 +21,25 @@ final class SessionCard: NSView, NSDraggingSource {
 
     private let stack = NSStackView()
     private let now: () -> Date
+    /// Where the host chip's install state comes from. Production reads the probe
+    /// store; tests inject each of the four states directly.
+    private let hostState: (String) -> RemoteHookInstallState
     private weak var durationLabel: NSTextField?
     private let durationTicker = DurationTicker()
     /// Distinguishes a click (drill-in) from a drag (column move): a drag sets
     /// this, so `mouseUp` does not also fire `onSelect`.
     private var didDrag = false
 
-    init(card: BoardCard, now: @escaping () -> Date = Date.init) {
+    init(
+        card: BoardCard,
+        now: @escaping () -> Date = Date.init,
+        hostState: @escaping (String) -> RemoteHookInstallState = {
+            RemoteHookStatus.shared.state(for: $0)
+        }
+    ) {
         self.card = card
         self.now = now
+        self.hostState = hostState
         super.init(frame: .zero)
         wantsLayer = true
         configureLayer()
@@ -62,6 +72,13 @@ final class SessionCard: NSView, NSDraggingSource {
         case .blocked:
             themedBackground = BoardTheme.needsYouCard
             themedBorder = BoardTheme.alert
+            layer?.borderWidth = 1
+        case .unreachable:
+            // The calm fill of a card that is NOT asking for you, edged in alert red
+            // so a dead link still reads at a glance. Deliberately not the warm
+            // `needsYouCard` fill: that ink belongs to the attention signal (US-007 AC-4).
+            themedBackground = BoardTheme.cardFill
+            themedBorder = BoardTheme.stateColor(.unreachable)
             layer?.borderWidth = 1
         case .done, .idle, .running, .runningTests, .unknown:
             themedBackground = BoardTheme.cardFill
@@ -271,6 +288,8 @@ final class SessionCard: NSView, NSDraggingSource {
         row.spacing = 6
         row.alignment = .centerY
         row.addArrangedSubview(repoChip())
+        if card.state == .unreachable { row.addArrangedSubview(LinkChip()) }
+        if let status = hostChipStatus() { row.addArrangedSubview(hostChip(status)) }
         row.addArrangedSubview(NSView())   // flexible spacer
         if card.flow == .a {
             row.addArrangedSubview(label("auto", font: BoardTheme.sansTiny, color: BoardTheme.textDim))
@@ -314,6 +333,35 @@ final class SessionCard: NSView, NSDraggingSource {
     private func repoChip() -> NSTextField {
         label(BoardTheme.projectLabel(card.projectDir),
               font: BoardTheme.chip, color: BoardTheme.repoColor(card.projectDir))
+    }
+
+    // MARK: - Host chip (US-005 AC-4, AC-7)
+
+    /// What this card can say about where it runs. `nil` for an ordinary local
+    /// card that is being observed normally — there is nothing to report.
+    func hostChipStatus() -> HostChipStatus? {
+        if let destination = Self.remoteDestination(of: card) {
+            return .remote(destination: destination, state: hostState(destination))
+        }
+        // A card nothing has ever reported on. Saying only "unknown" would leave
+        // the operator guessing whether the hooks are broken; they are not — this
+        // session simply did not start here (AC-7).
+        return card.state == .unknown ? .notStartedBySich : nil
+    }
+
+    /// A remote card carries its ssh destination as the project label, tagged by a
+    /// `remote/<host>/<session>` session id.
+    static func remoteDestination(of card: BoardCard) -> String? {
+        card.sessionID.hasPrefix("remote/") ? card.projectDir : nil
+    }
+
+    /// Built the same way ``ChipLabel`` is — the label IS the chip and paints its
+    /// own fill. A stock control on this hand-painted surface was the invisible-pill
+    /// defect, and it cannot be captured faithfully in a test either.
+    private func hostChip(_ status: HostChipStatus) -> HostChip {
+        HostChip(status: status) { destination in
+            RemoteHookStatus.shared.requestInstall(for: destination)
+        }
     }
 
     // MARK: - Drill-in (click) + drag (move) + rename (right-click)
@@ -395,5 +443,107 @@ class ChipLabel: NSTextField {
         size.width += 12
         size.height += 3
         return size
+    }
+}
+
+/// "The machine this work runs on has stopped answering" (US-007 AC-4), said in
+/// words on the card face.
+///
+/// A ``ChipLabel``, so it goes through the same self-painting layer-backed render
+/// path as the host chip beside it — a stock control on this hand-painted surface
+/// is the invisible-pill defect, and a bitmap of one is not evidence either. It is
+/// inert: unlike the host chip there is no click that would fix a dead network.
+@MainActor
+final class LinkChip: ChipLabel {
+    /// The word itself, so a test asserts the sentence the operator reads and not a
+    /// coincidence of formatting.
+    static let text = "unreachable"
+
+    init() {
+        super.init(text: Self.text)
+        identifier = NSUserInterfaceItemIdentifier("link-chip")
+        font = BoardTheme.chip
+        textColor = BoardTheme.stateColor(.unreachable)
+        toolTip = "This host stopped answering — its status is no longer live"
+        setAccessibilityLabel(Self.text)
+        wantsLayer = true
+        themedBackground = BoardTheme.stateColor(.unreachable).withAlphaComponent(0.16)
+        layer?.cornerRadius = 3
+    }
+
+    required init?(coder _: NSCoder) { nil }
+}
+
+/// What a card says about the machine its work runs on (US-005 AC-4, AC-7).
+///
+/// The two cases are deliberately different sentences. "Hooks are not installed
+/// on that host" is something the operator can fix in one click; "this session
+/// did not start here" is not a fault at all. Collapsing them into a bare
+/// "not observed" is what made the board read as broken when it was merely quiet.
+enum HostChipStatus: Equatable {
+    case remote(destination: String, state: RemoteHookInstallState)
+    case notStartedBySich
+
+    var text: String {
+        switch self {
+        case .remote(let destination, let state):
+            guard let detail = state.chipDetail else { return destination }
+            return "\(destination) — \(detail)"
+        case .notStartedBySich:
+            return "not started by Sich"
+        }
+    }
+
+    /// Clickable only where a click helps. `unknown` is inert: we could not read
+    /// the host, so installing over it would be a guess.
+    var isActionable: Bool {
+        guard case .remote(_, let state) = self else { return false }
+        return state.isActionable
+    }
+
+    var destination: String? {
+        guard case .remote(let destination, _) = self else { return nil }
+        return destination
+    }
+}
+
+/// The host chip: a ``ChipLabel`` that, when it is actionable, is also the click
+/// target. Same custom-drawn layer-backed render path as the rest of the card —
+/// a stock `NSButton` here was the invisible-pill defect, and `performClick` on
+/// one is not evidence that a real gesture reaches anything.
+@MainActor
+final class HostChip: ChipLabel {
+    let status: HostChipStatus
+    private let onInstall: (String) -> Void
+
+    init(status: HostChipStatus, onInstall: @escaping (String) -> Void) {
+        self.status = status
+        self.onInstall = onInstall
+        super.init(text: status.text)
+        identifier = NSUserInterfaceItemIdentifier("host-chip")
+        font = BoardTheme.chip
+        textColor = status.isActionable ? BoardTheme.attention : BoardTheme.textDim
+        toolTip = status.isActionable ? "Install Sich's hooks on this host" : nil
+        setAccessibilityLabel(status.text)
+        // Fill only where a click does something: a healthy or unreadable host
+        // stays as quiet as the repo chip beside it.
+        guard status.isActionable else { return }
+        wantsLayer = true
+        themedBackground = BoardTheme.attention.withAlphaComponent(0.16)
+        layer?.cornerRadius = 3
+    }
+
+    required init?(coder _: NSCoder) { nil }
+
+    /// An inert chip stays transparent to the mouse so the click still drills into
+    /// the card; an actionable one claims the hit the way ``PlanningStepButton`` does.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard status.isActionable else { return nil }
+        return bounds.contains(convert(point, from: superview)) ? self : nil
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let destination = status.destination, status.isActionable else { return }
+        onInstall(destination)
     }
 }

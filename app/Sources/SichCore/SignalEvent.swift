@@ -49,6 +49,11 @@ public struct SignalEvent: Sendable, Equatable {
     /// the pty environment. Binds an observed session to its owned card even when
     /// several owned cards share one project dir (the dir join is ambiguous there).
     public let cardID: String?
+    /// The machine this signal was observed on (`sich_host`), stamped by the relay
+    /// at ingestion — `nil` for a local session. A hook payload carries no hostname
+    /// field, so this is the ONLY thing separating two machines that happen to run
+    /// the same session id in the same cwd (US-004 AC-3).
+    public let host: String?
 
     public init(
         kind: SignalKind,
@@ -57,7 +62,8 @@ public struct SignalEvent: Sendable, Equatable {
         sessionID: String,
         timestamp: Date,
         cwd: String? = nil,
-        cardID: String? = nil
+        cardID: String? = nil,
+        host: String? = nil
     ) {
         self.kind = kind
         self.source = source
@@ -66,6 +72,7 @@ public struct SignalEvent: Sendable, Equatable {
         self.timestamp = timestamp
         self.cwd = cwd
         self.cardID = cardID
+        self.host = host
     }
 }
 

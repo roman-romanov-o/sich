@@ -36,7 +36,9 @@ final class BoardView: NSView {
             switch state {
             case .waitingForInput, .blocked: return .needsYou
             case .running, .runningTests: return .working
-            case .idle, .unknown: return .queue
+            // `unreachable` is explicitly NOT `.working`: the whole point is that a
+            // link we cannot read must stop looking like progress (US-007 AC-3).
+            case .idle, .unknown, .unreachable: return .queue
             case .done: return .done
             }
         }

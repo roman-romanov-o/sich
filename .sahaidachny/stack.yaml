@@ -14,4 +14,4 @@ quality:
   commands: ["cd app && swiftlint lint --quiet", "ruff check"]
   changed_files_only: true
 run:
-  command: "cd app && swift run ghostling"
+  command: "cd app && swift run sich"

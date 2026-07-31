@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// A single classified line in a rendered diff. `metadata` covers hunk headers
@@ -114,6 +115,10 @@ public struct TurnDiff: Sendable, Equatable {
     public let timestamp: Date
     public let unifiedDiff: String
     public let sessionDiff: String?
+    /// The machine the turn ran on (`sich_host`), `nil` for local. Two hosts running
+    /// one repo produce the same session id AND the same iteration number, so the
+    /// review sidebar keys turns by host as well (US-004 AC-3).
+    public let host: String?
 
     public var files: [DiffFile] { UnifiedDiffParser.parse(unifiedDiff) }
     public var additions: Int {
@@ -125,7 +130,8 @@ public struct TurnDiff: Sendable, Equatable {
 
     public init(
         sessionID: String, cardID: String? = nil, cwd: String? = nil,
-        iteration: Int, timestamp: Date, unifiedDiff: String, sessionDiff: String? = nil
+        iteration: Int, timestamp: Date, unifiedDiff: String, sessionDiff: String? = nil,
+        host: String? = nil
     ) {
         self.sessionID = sessionID
         self.cardID = cardID
@@ -134,6 +140,50 @@ public struct TurnDiff: Sendable, Equatable {
         self.timestamp = timestamp
         self.unifiedDiff = unifiedDiff
         self.sessionDiff = sessionDiff
+        self.host = host
+    }
+}
+
+/// The identity of one delivered turn diff: `(host, session_id, iteration, sha256(diff))`.
+///
+/// A reconnect re-runs `tail -n 200 -F`, so turn-diff lines already folded into the
+/// review pane come back. Keying them is what keeps drill-in free of duplicates
+/// (US-008 AC-2).
+///
+/// The digest is LOAD-BEARING, not defensive. `iteration` increments only on
+/// `UserPromptSubmit`, while `turn_diff` emits on every `Stop` — reading the counter
+/// without incrementing it, against a checkpoint that is never cleared. So two Stops
+/// inside one turn ship two DIFFERENT diffs under ONE iteration number, and a key
+/// built from the triple alone would silently eat the second.
+///
+/// `timestamp` and `cwd` are deliberately absent (TC-UNIT-010): the forwarder stamps
+/// whole seconds and a missing stamp falls back to arrival time, so the same bytes
+/// replayed later carry a different date — a key including it admits every replay.
+public struct TurnDiffKey: Hashable, Sendable {
+    public let host: String?
+    public let sessionID: String
+    public let iteration: Int
+    public let digest: Data
+
+    public init(_ diff: TurnDiff) {
+        host = diff.host
+        sessionID = diff.sessionID
+        iteration = diff.iteration
+        digest = Data(SHA256.hash(data: Data(diff.unifiedDiff.utf8)))
+    }
+
+    // Spelled out rather than synthesized: every part is load-bearing identity, and
+    // the dead-code scanner cannot see through a compiler-generated conformance.
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.host == rhs.host && lhs.sessionID == rhs.sessionID
+            && lhs.iteration == rhs.iteration && lhs.digest == rhs.digest
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(host)
+        hasher.combine(sessionID)
+        hasher.combine(iteration)
+        hasher.combine(digest)
     }
 }
 
@@ -161,7 +211,8 @@ public enum TurnDiffNormalizer {
             iteration: value["iteration"] as? Int ?? 0,
             timestamp: SignalTimestamp.parse(value["timestamp"], arrival: arrival),
             unifiedDiff: diff,
-            sessionDiff: decodeData(value["session_diff_base64"])
+            sessionDiff: decodeData(value["session_diff_base64"]),
+            host: value[RemoteEventLine.hostKey] as? String
         )
     }
 

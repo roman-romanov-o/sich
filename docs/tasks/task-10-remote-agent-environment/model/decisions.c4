@@ -1,0 +1,192 @@
+// decisions.c4 — task-10 design decisions (DD-001..DD-004).
+// Full prose survives in ../design-decisions/*.md; this is the reviewable shape.
+
+model {
+  dd-001 = decision 'DD-001: In-memory ssh tail relay, host stamped at ingestion' {
+    description '''
+      **Context:** hook telemetry only ever reaches the app through the local
+      `~/.sich/events.jsonl` tail. A remote host writes its own sink and the payload
+      carries **no hostname field**, so provenance exists for exactly one instant.
+
+      **Decision:** a per-host `ssh ... tail -n 200 -F` child, read in memory, stamped
+      with `sich_host` at ingestion and fed straight to the normalizer. Remote lines
+      are never appended to the local sink.
+    '''
+    metadata {
+      status 'accepted'
+      rationale '''
+        Host provenance is capturable only at ingestion, and merging into the local
+        file is lossy and irreversible. Rotation ownership DISSOLVES under this option
+        instead of needing a new owner: the local file keeps one writer and one rotator.
+        The durability argument for appending locally is not real — the app IS the
+        tailer, so lines that "survive locally" are lines that were never received.
+        The durable store is the remote sink, which the remote forwarder rotates.
+      '''
+      alternatives '''
+        Option 1 append into the local events.jsonl — rejected (discards host, creates
+        a rotation-ownership problem that does not otherwise exist);
+        Option 3 reverse tunnel + local listener — rejected (reintroduces the listener
+        task-03 deliberately removed);
+        Option 4 sshfs / network mount — rejected (discards host, new mount dependency)
+      '''
+      consequences '''
+        positive: no listener, no port, no new remote binary; the ssh child liveness IS
+        the transport liveness, so US-007 gets a real trigger for free;
+        negative: nothing is buffered on the laptop if the app is down — history lives
+        on the remote and is recovered by the bounded `-n 200` replay;
+        decided parameters: down trigger = ssh child exit OR keepalive failure
+        (ServerAliveInterval=15 x ServerAliveCountMax=3, ~45s worst case; immediate on
+        exit); N (line-silence threshold) RETIRED, deliberately not used; X = card
+        reflects it within 5s (one board poll); down state = distinct `unreachable`,
+        never running/waiting; replay window = tail -n 200 -F; dedup = content-based,
+        never a byte cursor
+      '''
+      stories 'US-003; US-007; US-008'
+    }
+  }
+
+  dd-002 = decision 'DD-002: Carry SICH_CARD_ID on the pane, and set the tmux session env' {
+    description '''
+      **Context:** a relayed line must land on the card it belongs to. A launch command
+      sets one shell process env, not the tmux session env, so a pane the operator opens
+      later would be unbound while the terminal works fine.
+
+      **Decision:** carry `SICH_CARD_ID` in the pane launch command exactly as the local
+      path does, AND write it to the tmux session environment with `set-environment` at
+      create, so later panes inherit it — plus make `(host, sanitized session name)`
+      unique per card with a card-derived default name.
+    '''
+    metadata {
+      status 'accepted'
+      rationale '''
+        Reuses the proven local mechanism: the whole read side (forwarder splice,
+        boundCardID, the applySessions predicate) is untouched, so remote stops being a
+        special case. The research finding that made env look disqualified was
+        mis-scoped — inheritance is stale ONLY under name reuse, and name reuse was an
+        unrelated card-modeling bug that needed fixing anyway. Fixing the modeling bug
+        and fixing identity are the same act. `set-environment` needs no tmux version
+        floor, which is decisive given a "both/varies" remote OS.
+      '''
+      alternatives '''
+        Option 1 derive identity from the tmux session name at hook time — rejected
+        ($TMUX-in-hook is unverified external behaviour needing a spike, and it would
+        force the read-side rewrite this option avoids);
+        Option 3 `new-session -e VAR=` — rejected (requires tmux >= 3.2);
+        Option 5 ssh SendEnv/AcceptEnv — rejected (fails silently, which is the enemy);
+        Option 4 card-unique names — ADOPTED as a companion, not an alternative
+      '''
+      consequences '''
+        positive: zero read-side change; remote and local identity are one concept;
+        negative: `-A` attaching a session Sich did not create still ignores the command
+        argument, so `set-environment` never runs — probe for it and surface the
+        collision rather than binding to nothing
+      '''
+      stories 'US-004'
+    }
+  }
+
+  dd-003 = decision 'DD-003: Persist the remote spec (not the argv), no version bump' {
+    description '''
+      **Context:** a restored remote card comes back as a local shell, because the seed
+      persists `user@host` as the card directory and the directory-exists check falls
+      back to $HOME.
+
+      **Decision:** option 2b — persist `RemoteSpecSnapshot {host, user?, sessionName,
+      port?, identityFile?, remoteDir?}` on the existing PaneSnapshot as an optional
+      field (no version bump), rebuild the argv through the same constructor, and
+      host-qualify the recents store. The full SessionLocation enum is deferred.
+    '''
+    metadata {
+      status 'accepted'
+      rationale '''
+        The invariant this codebase relies on is a property of the FILE FORMAT, not of
+        the restore function: a format that cannot name a command cannot smuggle one.
+        Storing an argv would relocate that guarantee into a code path DD-004 has to
+        defend forever. When a structural guarantee and a coding guarantee cost nearly
+        the same, take the structural one. The scope answer (a recents list against 2-5
+        hosts, not a tree browser) removed the need the enum was sized for, and the risk
+        budget belongs on DD-001.
+      '''
+      alternatives '''
+        Option 1 full SessionLocation enum threaded through BoardCard/BoardSeed/
+        SessionRegistry/PaneSnapshot/PaletteProject/recents — deferred, NOT discounted;
+        Option 2a persist the raw argv — rejected in review (moves a structural
+        guarantee into code);
+        Option 3 treat remote cards as ephemeral — rejected (this is the story)
+      '''
+      consequences '''
+        positive: small struct, existing decode path, no pane-discarding version bump
+        (a version mismatch is IGNORED, not migrated);
+        negative, stated plainly: resolveCwd keeps its local-path assumption as a silent
+        $HOME fallback rather than a compile error — which is exactly how the shipped bug
+        happened. Bought down with a regression test rather than types, and this task
+        ADDS call sites written against `projectDir: String`, so promoting later is
+        strictly MORE expensive, not less. A deferral, not a discount.
+      '''
+      stories 'US-006; US-009'
+    }
+  }
+
+  dd-004 = decision 'DD-004: Structural ssh constraint, with a labelled best-effort scan' {
+    description '''
+      **Context:** "make `claude -p` impossible on a remote host" is not achievable — it
+      is a string parsed by a shell we do not control. The achievable goal is that the
+      app never GENERATES headless work.
+
+      **Decision:** option 3 as the guarantee — ssh argvs may only be generated from
+      constrained specs, never supplied, with the input constraints treated as part of
+      the decision — plus option 1 scan underneath, documented in source as
+      **best-effort and deliberately not sound**.
+    '''
+    metadata {
+      status 'accepted'
+      rationale '''
+        Make the bad state unrepresentable rather than detected — the same means the
+        codebase already uses at the PoolFirewall chokepoint and in the persisted
+        snapshot shape. Precisely: the remote-command POSITION is not caller data
+        (quoting closes it); the DESTINATION position IS caller data, and this DD
+        constrains it. An earlier draft said the remote command is never caller data
+        "so there is nothing to sanitize" — the exact sentence a future reader would
+        cite to skip the destination guard. Option 2 (refuse any ssh) is right about
+        direction and wrong about granularity: option 3 is option 2 with a closed
+        allowlist instead of a closed door.
+      '''
+      alternatives '''
+        Option 1 scan the ssh remote command for headless flags — RETAINED underneath,
+        never instead of, and labelled in-code as not sound;
+        Option 2 refuse any ssh argv on a spawn path — rejected (kills the feature)
+      '''
+      consequences '''
+        positive: three new ssh-emitting call sites (relay, install/probe, restore) are
+        constrained by construction, including the one that runs at launch with no human
+        present;
+        negative: the scan can never be sound, and the real failure mode is a future
+        reader ASSUMING it is — hence the mandatory in-source label;
+        implementation mandates: validate the composed destination POST-TRIM on the exact
+        token appended; accept bracketed IPv6; reject a leading `-`; add
+        Invalid.invalidDestination; delete the dead `var target = spec.target` store;
+        parse() keeps its Optional return; match on tokenized argument boundaries, never
+        a substring search for "claude"; record -p / -i emission order as a constraint
+      '''
+      stories 'US-001; US-003; US-005; US-006'
+    }
+  }
+
+  dd-001 -> sys.relay 'shapes'
+  dd-001 -> sys.host_state 'gives the down trigger'
+  dd-002 -> sys.ssh_cmd 'adds set-environment + card-unique names'
+  dd-002 -> sys.sessions 'leaves the read side untouched'
+  dd-003 -> sys.registry 'persists the spec'
+  dd-003 -> sys.palette 'host-qualifies recents'
+  dd-004 -> sys.firewall 'adds the labelled ssh scan'
+  dd-004 -> sys.ssh_cmd 'constrains the destination'
+}
+
+views {
+  view decisions {
+    title 'task-10: design decisions'
+    include dd-001, dd-002, dd-003, dd-004
+    include sys.relay, sys.host_state, sys.ssh_cmd, sys.firewall, sys.registry,
+      sys.palette, sys.sessions
+  }
+}

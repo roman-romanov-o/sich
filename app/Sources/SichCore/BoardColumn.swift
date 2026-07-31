@@ -27,7 +27,10 @@ public enum BoardColumn: String, Sendable, Equatable, CaseIterable {
         case .runningTests: self = .runningTests
         case .blocked: self = .blocked
         case .done: self = .done
-        case .unknown: self = .unknown
+        // A card whose host is gone is not positively determined either, so it
+        // lands in the same column — never in WORKING (US-007 AC-3). The card face
+        // keeps the two apart; the column is the coarser grouping.
+        case .unknown, .unreachable: self = .unknown
         }
     }
 

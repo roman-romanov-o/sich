@@ -17,7 +17,8 @@ public struct AgentTaskTally: Sendable, Equatable {
 
     /// Bucket each card under its agent: `running`/`runningTests` count as
     /// working, `waitingForInput`/`blocked` as waiting on you. At-rest states
-    /// (idle, done, unknown) are not in progress and are not counted.
+    /// (idle, done, unknown) are not in progress and are not counted — and
+    /// neither is `unreachable`, whose work we can no longer see (US-007).
     public static func tally(_ cards: [BoardCard]) -> [CardAgent: AgentTaskTally] {
         var result: [CardAgent: AgentTaskTally] = [:]
         for card in cards {
@@ -26,7 +27,7 @@ public struct AgentTaskTally: Sendable, Equatable {
                 result[card.agent, default: AgentTaskTally()].working += 1
             case .waitingForInput, .blocked:
                 result[card.agent, default: AgentTaskTally()].waiting += 1
-            case .idle, .done, .unknown:
+            case .idle, .done, .unknown, .unreachable:
                 break
             }
         }

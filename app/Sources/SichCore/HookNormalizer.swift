@@ -67,7 +67,10 @@ public enum HookNormalizer {
             sessionID: payload["session_id"] as? String ?? "",
             timestamp: SignalTimestamp.parse(payload["timestamp"], arrival: arrival),
             cwd: payload["cwd"] as? String,
-            cardID: payload["sich_card_id"] as? String
+            cardID: payload["sich_card_id"] as? String,
+            // Present only on a relayed line: the channel stamped it at ingestion
+            // (US-003 AC-2) and it is what keeps two machines apart (US-004 AC-3).
+            host: payload[RemoteEventLine.hostKey] as? String
         )
     }
 

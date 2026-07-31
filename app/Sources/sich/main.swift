@@ -32,6 +32,13 @@ if !isE2E { DevHotReload.enable() }
 // The real app launch is the ONLY place the hidden `/usage` probe may spawn
 // claude — tests and the E2E capture never set this, so they never start a process.
 ClaudeUsageProbe.spawningEnabled = !isE2E
+// Same discipline for the remote hook channel: only the real launch may run `ssh`,
+// so `swift test` and the capture can never reach the network (US-005).
+SSHCommandRunner.spawningEnabled = !isE2E
+RemoteHookStatus.probingEnabled = !isE2E
+// …and for the per-host event relay (`ssh … tail -F`), which is the only thing that
+// makes a remote agent observable at all (US-003).
+SSHLineTransport.spawningEnabled = !isE2E
 let delegate = isE2E
     ? BoardShell(seeds: [BoardSeed.liveTerminal(projectDir: root)] + BoardSeed.demo,
                  sources: QuotaSeed.demo)

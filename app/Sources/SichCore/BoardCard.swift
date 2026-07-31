@@ -16,10 +16,25 @@ public enum CardState: String, Codable, Sendable, Equatable, CaseIterable {
     case blocked
     case done
     case unknown
+    /// The machine this card's work runs on can no longer be reached (US-007).
+    ///
+    /// A CASE and not a parallel flag: every consumer on the board — columns, the
+    /// drill-in pill, the switcher, the attention count — reads `state`, so a flag
+    /// would leave all of them still reading the frozen `running` this state exists
+    /// to replace. It is DERIVED, never observed: the board overlays it from the
+    /// relay's link health at render time, so the last observed state survives
+    /// underneath and comes straight back when the link does. Nothing persists it —
+    /// both durable writers (`persistedRestartState`) collapse a live state to
+    /// `idle`/`done`, so an older build can never meet an `unreachable` on disk.
+    case unreachable
 
     /// True for the states that route the operator's attention (US-005):
     /// `waitingForInput` and `blocked`. The single predicate both the attention
     /// derivation and the card view read, so "needs you" is defined once.
+    ///
+    /// `unreachable` is deliberately NOT here: a dead host is not an agent asking
+    /// for you, and lighting attention for it would dilute the one signal the
+    /// product exists to protect (US-007 AC-4).
     public var needsAttention: Bool {
         self == .waitingForInput || self == .blocked
     }
@@ -108,6 +123,11 @@ public struct BoardCard: Identifiable, Sendable, Equatable {
     /// even when several owned cards share one project dir. `nil` for owned cards
     /// and for sessions started outside the app.
     public let boundCardID: String?
+    /// The machine this card's session runs on (`sich_host`, stamped by the relay),
+    /// `nil` for local. Part of the card's identity: two hosts can report the same
+    /// session id in the same project dir, and only this keeps them apart
+    /// (US-004 AC-3).
+    public let host: String?
     /// Authoritative task artifact folder for saha-flow cards. This is captured at
     /// creation time; it is never recomputed from the project's shared current-task.
     public let taskFolder: String?
@@ -124,6 +144,7 @@ public struct BoardCard: Identifiable, Sendable, Equatable {
         accumulatedWorkingTime: TimeInterval = 0,
         updatedAt: Date = .distantPast,
         boundCardID: String? = nil,
+        host: String? = nil,
         taskFolder: String? = nil
     ) {
         self.id = id
@@ -137,6 +158,7 @@ public struct BoardCard: Identifiable, Sendable, Equatable {
         self.accumulatedWorkingTime = max(0, accumulatedWorkingTime)
         self.updatedAt = updatedAt
         self.boundCardID = boundCardID
+        self.host = host
         self.taskFolder = taskFolder.map {
             ($0 as NSString).standardizingPath
         }
@@ -161,7 +183,7 @@ public struct BoardCard: Identifiable, Sendable, Equatable {
             id: id, sessionID: sessionID, title: title, projectDir: projectDir,
             agent: agent, flow: flow, state: newState, workingSince: nextWorkingSince,
             accumulatedWorkingTime: nextAccumulated, updatedAt: updatedAt,
-            boundCardID: boundCardID, taskFolder: taskFolder
+            boundCardID: boundCardID, host: host, taskFolder: taskFolder
         )
     }
 
@@ -183,7 +205,7 @@ public struct BoardCard: Identifiable, Sendable, Equatable {
             id: id, sessionID: sessionID, title: title, projectDir: projectDir,
             agent: agent, flow: flow, state: state, workingSince: workingSince,
             accumulatedWorkingTime: duration, updatedAt: updatedAt,
-            boundCardID: boundCardID, taskFolder: taskFolder
+            boundCardID: boundCardID, host: host, taskFolder: taskFolder
         )
     }
 
@@ -198,7 +220,7 @@ public struct BoardCard: Identifiable, Sendable, Equatable {
             projectDir: projectDir, agent: agent, flow: flow, state: state,
             workingSince: workingSince, accumulatedWorkingTime: accumulatedWorkingTime,
             updatedAt: updatedAt,
-            boundCardID: boundCardID, taskFolder: taskFolder
+            boundCardID: boundCardID, host: host, taskFolder: taskFolder
         )
     }
 }

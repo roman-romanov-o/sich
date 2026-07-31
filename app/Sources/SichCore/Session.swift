@@ -52,6 +52,11 @@ public final class Session: Identifiable {
     /// with `claude --resume <uuid>` — and it survives across restarts unchanged (a
     /// restored session keeps the ORIGINAL id, not its own new ``id``).
     public private(set) var claudeSessionID: UUID?
+    /// The remote session this pane is attached to (US-006), or nil for a local one.
+    /// Held as the SPEC the argv was built from — never the argv — so a snapshot
+    /// persists coordinates a restore feeds back through the shared constructor,
+    /// rather than a command a launch could replay.
+    public private(set) var remoteSpec: RemoteTmuxSpec?
 
     public init(
         id: UUID = UUID(),
@@ -84,5 +89,11 @@ public final class Session: Identifiable {
     /// persist it and a restart can `claude --resume` it.
     public func recordClaudeSession(_ id: UUID) {
         claudeSessionID = id
+    }
+
+    /// Bind the remote session this pane attached to, so a snapshot can persist the
+    /// spec and the next launch can rebuild the same ssh/tmux attach.
+    public func recordRemoteSpec(_ spec: RemoteTmuxSpec) {
+        remoteSpec = spec
     }
 }

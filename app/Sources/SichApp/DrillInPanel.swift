@@ -354,7 +354,9 @@ final class DrillInPanel: NSView {
         banner.isHidden = state != .waitingForInput
     }
 
-    private static func statusLabel(_ state: CardState) -> String {
+    /// The word in the drill-in pill. Internal (not private) so US-007 can assert the
+    /// dead-link reading is its own sentence here too, not a borrowed one.
+    static func statusLabel(_ state: CardState) -> String {
         switch state {
         case .idle: return "idle"
         case .running: return "working"
@@ -363,6 +365,7 @@ final class DrillInPanel: NSView {
         case .blocked: return "blocked"
         case .done: return "done"
         case .unknown: return "unknown"
+        case .unreachable: return "unreachable"
         }
     }
 
@@ -374,10 +377,15 @@ final class DrillInPanel: NSView {
     private func renderAvailableDiffs() {
         guard let card = focusedCard else { return }
         let path = (card.projectDir as NSString).standardizingPath
+        // The card-id match is host-independent (a UUID we minted); the session-id and
+        // cwd matches are NOT — both are only unique within one machine, so a remote
+        // twin of this repo path must not spill its turns into a local card's review
+        // (US-004 AC-3).
         let turns = availableDiffs.filter {
             $0.cardID == card.id.uuidString
-                || $0.sessionID == card.sessionID
-                || $0.cwd.map { ($0 as NSString).standardizingPath == path } == true
+                || ($0.host == card.host
+                    && ($0.sessionID == card.sessionID
+                        || $0.cwd.map { ($0 as NSString).standardizingPath == path } == true))
         }
         sidebar.render(turns: turns)
     }

@@ -40,9 +40,11 @@ for arg in "$@"; do
 done
 
 echo "▸ Building release binary — $arch_label (slow part; the resulting .app launches instantly)…"
-swift build -c release --product sich "${arch_flags[@]}"
+# `${a[@]+"${a[@]}"}` — macOS ships bash 3.2, where an EMPTY array counts as
+# unbound under `set -u`, so a plain "${arch_flags[@]}" aborts the --native build.
+swift build -c release --product sich ${arch_flags[@]+"${arch_flags[@]}"}
 
-BIN="$(swift build -c release --product sich "${arch_flags[@]}" --show-bin-path)/sich"
+BIN="$(swift build -c release --product sich ${arch_flags[@]+"${arch_flags[@]}"} --show-bin-path)/sich"
 [ -x "$BIN" ] || { echo "release binary not found at $BIN" >&2; exit 1; }
 
 echo "▸ Assembling $APP …"

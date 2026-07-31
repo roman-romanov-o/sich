@@ -1,0 +1,428 @@
+// test-specs.c4 — task-10 test scenarios.
+// The legacy plan wrote 50 individual cases (TC-UNIT-001..011, TC-INT-001..018,
+// TC-E2E-001..021) in ../test-specs/**. They are consolidated here into 12 themed
+// scenarios; every view description enumerates the TC ids it carries, so nothing
+// is dropped and the AC `specs:` lists in ../progress.yaml stay short.
+//
+// NEW TOOL DEPENDENCY: `brew install tmux` on the dev machine (ts-int-04).
+// Those tests must SKIP LOUDLY when tmux is absent — never silently pass.
+
+views {
+
+  // ---------------------------------------------------------------- unit ----
+
+  dynamic view ts-unit-01 {
+    title 'ts-unit-01: the ssh destination grammar and the firewall scan'
+    description '''
+      Carries **TC-UNIT-001..007** (US-001 AC-1..AC-6 plus the -p / -i edge case).
+
+      **Proves:** US-001.AC-1, US-001.AC-2, US-001.AC-3, US-001.AC-4,
+      US-001.AC-5, US-001.AC-6
+
+      **Real:** `RemoteTmuxCommand`, `PoolFirewall`, `remoteQuoted` — pure
+      functions over argv arrays, no process is spawned.
+      **Mocked:** nothing.
+
+      **TC-UNIT-001 and TC-UNIT-002 are written RED FIRST** — both describe holes
+      that are reachable in shipped code today.
+    '''
+
+    sys.palette -> sys.ssh_cmd 'argv(for: spec) with an option-shaped destination' {
+      notes '''
+        **TC-UNIT-002 / AC-2** — `-oProxyCommand=sh -c ...` throws
+        `Invalid.invalidDestination`, and the associated value is the rejected
+        token verbatim.
+        **TC-UNIT-003 / AC-3** — the same payload in the USER position is refused,
+        because the guard is on the composed destination.
+        **TC-UNIT-004 / AC-4** — a spec built DIRECTLY with a leading space is
+        refused: validate post-trim, on the exact string appended, never on
+        `target` (which composes the untrimmed host).
+        **TC-UNIT-005 / AC-5** — legitimate destinations still pass, including
+        bracketed IPv6.
+      '''
+    }
+    sys.ssh_cmd -> sys.firewall 'classify(argv)' {
+      notes '''
+        **TC-UNIT-001 / AC-1** — `classify(["/usr/bin/ssh", "host", "claude -p x"])`
+        throws. Today it returns `.interactive` uninspected.
+        Tokenized: a session named `claude-work` must PASS.
+      '''
+    }
+    sys.ssh_cmd -> openssh 'the emitted argv, asserted token by token' {
+      notes '''
+        **TC-UNIT-006 / AC-6** — quote and semicolon neutralisation asserted
+        against `remoteQuoted`, the function that provides it (NOT
+        `sanitizeSessionName`, which never touches a quote).
+        **TC-UNIT-007 / edge case** — `-p` and `-i` are emitted immediately after
+        their flag; the port and identity are safe by emission ORDER, so the
+        ordering itself is the assertion.
+      '''
+    }
+  }
+
+  dynamic view ts-unit-02 {
+    title 'ts-unit-02: dedup keys for both line kinds'
+    description '''
+      Carries **TC-UNIT-008..011**.
+
+      **Proves:** US-008.AC-2, US-008.AC-3
+      **Real:** the dedup key functions over literal hook lines.
+      **Mocked:** nothing.
+    '''
+
+    remote_log -> sys.relay.event_channel 'two line kinds, replayed' {
+      notes '''
+        **TC-UNIT-008** — a state hook keys on the raw line bytes.
+        **TC-UNIT-009** — a turn diff keys on four parts, because `iteration`
+        increments per UserPromptSubmit and is therefore NOT unique per diff.
+        **TC-UNIT-010** — the diff key ignores `timestamp` (second granularity)
+        and `cwd_base64`.
+        **TC-UNIT-011** — `turn_diff.session_id` is sanitized while a state hook
+        carries the raw one: any join crosses that boundary.
+      '''
+    }
+    sys.relay.event_channel -> sys.normalizer 'each distinct line exactly once' {
+      notes 'Content-based throughout — never a byte cursor, which a rotation resets.'
+    }
+  }
+
+  // --------------------------------------------------------- integration ----
+
+  dynamic view ts-int-01 {
+    title 'ts-int-01: the forwarder parses under GNU userland'
+    description '''
+      Carries **TC-INT-017**.
+
+      **Proves:** US-002.AC-1
+      **Real:** the forwarder script, executed by a real POSIX shell with the
+      GNU-userland assumptions (no `plutil`).
+      **Mocked:** the hook payloads (fixture lines on stdin).
+
+      US-002.AC-2 — that diffs actually arrive from a real Linux box — is
+      **manual** and lives in ts-e2e-06. It is not auto-passable and must never
+      be ticked by a test.
+    '''
+
+    sys.installer -> remote_host 'run the forwarder under sh, GNU tools only' {
+      notes '''
+        **TC-INT-017** — the whole turn-diff block is currently gated on `plutil`,
+        which does not exist under GNU userland, so the block never runs. The
+        portable replacement must parse the same payloads.
+      '''
+    }
+    remote_host -> remote_log 'a turn_diff line is appended' {
+      notes 'Shape asserted field by field, not merely "a line was written".'
+    }
+  }
+
+  dynamic view ts-int-02 {
+    title 'ts-int-02: hook install and probe over a byte-exact channel'
+    description '''
+      Carries **TC-INT-012..016, TC-INT-018**.
+
+      **Proves:** US-005.AC-1, US-005.AC-2, US-005.AC-3, US-005.AC-6,
+      US-003.AC-5
+      **Real:** the install and probe argv builders, the SHA-256 comparand, the
+      four-state mapping, `PoolFirewall`.
+      **Mocked:** the far side of ssh (a local fixture directory stands in for
+      the remote filesystem) — the transport is the only external.
+    '''
+
+    sys.installer -> sys.ssh_cmd.argv_api 'installArgv / probeArgv' {
+      notes '''
+        **TC-INT-012 / AC-1** — the installed bytes are IDENTICAL to ours. No PTY
+        (a PTY rewrites LF to CRLF and every host then reads outdated forever),
+        and the bytes ride stdin, never a remote shell word (`$HOME`,
+        `$SICH_CARD_ID`, `$file`, `$@` would expand on the far side).
+        **TC-INT-018 / AC-6** — both argvs pass `PoolFirewall`.
+      '''
+    }
+    sys.installer -> sys.host_state.install_state 'probe result' {
+      notes '''
+        **TC-INT-013 / AC-2** — a freshly installed host reads `installed`.
+        **TC-INT-014 / AC-2** — the state is PROBE-DERIVED, never cached: mutate
+        the remote file and the next read changes without any local invalidation.
+        **TC-INT-015 / AC-3** — all four states are reachable and `unknown` (the
+        probe itself failed) is never collapsed into `notInstalled`.
+        **TC-INT-016** — the comparand is a hash computed on the laptop.
+      '''
+    }
+  }
+
+  dynamic view ts-int-03 {
+    title 'ts-int-03: relay transport — rotation, replay, keepalive, no listener'
+    description '''
+      Carries **TC-INT-001..006**.
+
+      **Proves:** US-003.AC-4, US-007.AC-2, US-008 (memory bound), plus the three
+      US-003 edge cases.
+      **Real:** the relay supervisor and its line intake, driven against a real
+      file that is appended to, rotated and truncated.
+      **Mocked:** the ssh child (a local `tail -F` stands in) — the transport is
+      the external.
+    '''
+
+    sys.relay -> remote_log 'tail -n 200 -F' {
+      notes '''
+        **TC-INT-001** — rotation is followed (`-F`), and the reader does not
+        resume at a stale offset.
+        **TC-INT-002** — an ABSENT remote file does not read as `unreachable`:
+        no telemetry is not a dead link.
+        **TC-INT-003** — history is bounded on connect at 200 lines.
+      '''
+    }
+    sys.relay -> sys.host_state.install_state 'transport liveness' {
+      notes '''
+        **TC-INT-004 / US-007.AC-2** — a keepalive timeout
+        (ServerAliveInterval=15 x ServerAliveCountMax=3, ~45s worst case) reaches
+        `unreachable`; a child exit reaches it immediately.
+      '''
+    }
+    sys.relay -> sys.normalizer 'deduped, host-stamped lines' {
+      notes '''
+        **TC-INT-005** — the dedup memory bound holds under a long replay.
+        **TC-INT-006 / US-003.AC-4** — no listener and no bound port exist at any
+        point: the observe-only sink survives.
+      '''
+    }
+  }
+
+  dynamic view ts-int-04 {
+    title 'ts-int-04: tmux env binding on a real tmux'
+    description '''
+      Carries **TC-INT-007..011**.
+
+      **Proves:** US-004.AC-2, US-004.AC-4, plus edge cases 1 and 4.
+      **Real:** a REAL local tmux server (`brew install tmux` — a new dev-tool
+      dependency; these tests SKIP LOUDLY when tmux is absent, never silently
+      pass) driven by the actual generated command.
+      **Mocked:** ssh — the command runs against local tmux instead of a remote
+      one, which is the same tmux behaviour being asserted.
+    '''
+
+    sys.ssh_cmd -> remote_tmux 'new-session -A -s <name> with set-environment' {
+      notes '''
+        **TC-INT-008 / DD-002** — `set-environment` works with no version floor,
+        unlike `new-session -e` (tmux >= 3.2; Ubuntu 20.04 ships 3.0a).
+        **TC-INT-011 / AC-4** — `(host, sanitized name)` is unique across cards.
+      '''
+    }
+    remote_tmux -> sys.sessions 'a later pane carries the card id' {
+      notes '''
+        **TC-INT-007 / AC-2 — the load-bearing half.** A pane opened by hand with
+        `Ctrl-b c` inherits `SICH_CARD_ID` from the SESSION env. Without
+        set-environment the terminal still works and the binding is silently
+        absent, which is the failure this case exists to catch.
+        **TC-INT-009 / edge case 1** — `-A` inherits stale env ONLY under name
+        reuse (a card-modeling bug, not an identity one).
+        **TC-INT-010 / edge case 4** — a pre-existing hand-made session is NOT
+        bound silently; the collision is surfaced.
+      '''
+    }
+  }
+
+  // ------------------------------------------------------------------ e2e ----
+
+  dynamic view ts-e2e-01 {
+    title 'ts-e2e-01: a remote hook line moves its card'
+    description '''
+      Carries **TC-E2E-001..004**. The happy path for US-003 and US-004.
+
+      **Proves:** US-003.AC-1, US-003.AC-2, US-003.AC-3, US-004.AC-1,
+      US-004.AC-3
+      **Real:** relay intake, host stamping, normalizer, session store, board
+      merge, card state — the whole read path in one process.
+      **Mocked:** ssh and the remote host only (a local file plays the remote
+      sink). The system under test is never faked.
+    '''
+
+    remote_log -> sys.relay 'a hook line appears on the far side' {
+      notes '**TC-E2E-001** — a real forwarder-shaped line, not a synthetic event.'
+    }
+    sys.relay -> sys.normalizer 'stamped with sich_host at ingestion' {
+      notes '''
+        **TC-E2E-002 / AC-2** — `sich_host` is present, and it is added by US,
+        because the payload carries no hostname field.
+        **TC-E2E-004 / AC-3** — the local `~/.sich/events.jsonl` is byte-unchanged
+        afterwards: relayed lines NEVER touch the local sink.
+      '''
+    }
+    sys.normalizer -> sys.board 'SignalEvent folded onto a card' {
+      notes '''
+        **TC-E2E-001 / US-004.AC-1** — the card moves running -> waiting.
+        **TC-E2E-003 / US-004.AC-3** — two hosts whose `cwd` strings are
+        byte-identical are never conflated onto one card.
+      '''
+    }
+    sys.board -> sys.card 'the card renders the new state' {
+      notes 'Asserted on real card state, never via cacheDisplay or CALayer.render.'
+    }
+  }
+
+  dynamic view ts-e2e-02 {
+    title 'ts-e2e-02: a remote card survives a restart'
+    description '''
+      Carries **TC-E2E-007..011**. The happy path for US-006.
+
+      **Proves:** US-006.AC-1, US-006.AC-2, US-006.AC-3, US-006.AC-4,
+      US-006.AC-5
+      **Real:** snapshot encode/decode, the restore path, argv rebuild,
+      `PoolFirewall`.
+      **Mocked:** the ssh spawn (the argv is asserted, not executed).
+
+      **TC-E2E-007 is written RED FIRST** — a restored remote card comes back as
+      a LOCAL shell in shipped code today.
+    '''
+
+    sys.board -> sys.registry.spec_snapshot 'persist on quit' {
+      notes '''
+        **TC-E2E-008 / AC-2** — the snapshot holds the SPEC, not an argv: a format
+        that cannot name a command cannot smuggle one.
+        **TC-E2E-009 / AC-3** — no `PaneSnapshot` version bump, because a version
+        mismatch is IGNORED rather than migrated and would discard every pane.
+      '''
+    }
+    sys.registry.spec_snapshot -> sys.ssh_cmd.argv_api 'rebuild on launch' {
+      notes '''
+        **TC-E2E-007 / AC-1** — the restored card is REMOTE. Today `resolveCwd`
+        falls back to $HOME and it silently becomes a local shell.
+        **TC-E2E-011 / AC-5** — the rebuilt argv routes through the same
+        `PoolFirewall` chokepoint. This path runs at launch with NO HUMAN PRESENT.
+      '''
+    }
+    sys.board -> sys.card 'the restored card resumes telemetry' {
+      notes '**TC-E2E-010 / AC-4** — a hook line after restart lands on the same card.'
+    }
+  }
+
+  dynamic view ts-e2e-03 {
+    title 'ts-e2e-03: creating a remote card from the palette'
+    description '''
+      Carries **TC-E2E-012..015**. The happy path for US-009.
+
+      **Proves:** US-009.AC-1, US-009.AC-2, US-009.AC-3, US-009.AC-5
+      **Real:** the palette, host-qualified recents, card creation, the generated
+      argv.
+      **Mocked:** the ssh spawn.
+
+      Interaction steps dispatch REAL NSEvents. Calling the handler proves
+      nothing about the interaction path — that mistake shipped three times.
+    '''
+
+    operator -> sys.palette 'choose remote, pick a host and folder' {
+      notes '''
+        **TC-E2E-012 / AC-1** — remote is a first-class choice, not a hidden
+        keystroke.
+        **TC-E2E-014 / AC-2** — recents are HOST-QUALIFIED, so the same path on
+        two boxes is two entries.
+      '''
+    }
+    sys.palette -> sys.ssh_cmd 'the same constrained spec the keystroke built' {
+      notes '''
+        **TC-E2E-013 / AC-3** — a palette-created card is indistinguishable from a
+        Cmd-Shift-R one: same spec, same argv, same snapshot.
+        **TC-E2E-015 / AC-5** — Cmd-Shift-R is retired LAST, only once the palette
+        path is proven.
+      '''
+    }
+  }
+
+  dynamic view ts-e2e-04 {
+    title 'ts-e2e-04: a dead link reads unreachable, and attention survives it'
+    description '''
+      Carries **TC-E2E-005, TC-E2E-006, TC-E2E-020**. The happy path for US-007
+      and US-008.
+
+      **Proves:** US-007.AC-1, US-007.AC-3, US-007.AC-4, US-008.AC-1
+      **Real:** relay liveness, card state transitions, the card surface.
+      **Mocked:** ssh (the child is killed to simulate the partition).
+    '''
+
+    sys.relay -> sys.host_state.install_state 'the ssh child dies' {
+      notes '''
+        **TC-E2E-005 / AC-1, AC-3** — the card reads `unreachable`, NOT a frozen
+        `running`, and it says so within one board poll (~5s).
+      '''
+    }
+    sys.host_state.install_state -> sys.card 'unreachable is rendered' {
+      notes '''
+        **TC-E2E-020 / AC-4** — `unreachable` is visible and DISTINCT from both
+        `done` and "not observed". Asserted on real state on the layer-backed
+        custom-drawn surface, never via cacheDisplay.
+        `needsAttention` stays FALSE: a dead host is not an agent asking for you.
+      '''
+    }
+    sys.relay -> sys.normalizer 'reconnect replays the last 200 lines' {
+      notes '''
+        **TC-E2E-006 / US-008.AC-1** — a replay must not EXTINGUISH a live
+        attention signal. The harm dedup prevents is state regression, not
+        duplication.
+      '''
+    }
+  }
+
+  dynamic view ts-e2e-05 {
+    title 'ts-e2e-05: the host chip renders each install state distinctly'
+    description '''
+      Carries **TC-E2E-016**.
+
+      **Proves:** US-005.AC-4, US-005.AC-7
+      **Real:** the four-state mapping and the custom-drawn chip on `SessionCard`.
+      **Mocked:** the probe (each of the four states is injected).
+
+      The chip must be built the same custom-drawn, layer-backed way the rest of
+      `SessionCard` is — a stock control cannot be captured faithfully, and would
+      route this AC to human eyes instead of a test.
+    '''
+
+    sys.host_state.install_state -> sys.card 'installed / notInstalled / staleVersion / unknown' {
+      notes '''
+        **TC-E2E-016 / AC-4** — four distinct renderings:
+        installed = `roman@host` dim and inert; notInstalled = `hooks not
+        installed`, actionable; staleVersion = `hooks outdated`, actionable;
+        unknown = `hook status unknown`, inert and NOT the same as installed.
+      '''
+    }
+    operator -> sys.card 'click the actionable chip' {
+      notes '''
+        **AC-7** — the click installs or updates. Dispatched as a REAL mouse
+        event, never by calling the action method.
+      '''
+    }
+  }
+
+  dynamic view ts-e2e-06 {
+    title 'ts-e2e-06: real Linux host sign-off (human)'
+    description '''
+      Carries **TC-E2E-017, TC-E2E-018, TC-E2E-019, TC-E2E-021** — the four cases
+      the plan marks `needs_human_signoff`, because they require a real remote
+      box, a real tmux and a real network partition.
+
+      **Proves:** US-002.AC-2 (the only `verify: manual` AC in this task). The
+      other three re-run automated ACs against reality and add confidence, not
+      coverage.
+      **Real:** everything — a real Linux host over ssh, its own tmux, its own
+      forwarder.
+      **Mocked:** nothing.
+
+      The loop never ticks these. A task whose only remaining ACs are manual ends
+      as `completed_pending_manual`.
+    '''
+
+    sys.installer -> remote_host 'install the forwarder on a real box' {
+      notes '''
+        **TC-E2E-019** — the probe reads `installed` over a real PTY-free channel,
+        which is where a CRLF rewrite would show up as permanent staleness.
+      '''
+    }
+    remote_host -> sys.card 'work a real session, watch the card' {
+      notes '''
+        **TC-E2E-017 / US-002.AC-2** — turn diffs arrive from a Linux host and
+        render.
+        **TC-E2E-018** — a second pane created by hand on real tmux is bound.
+        **TC-E2E-021** — a real network partition reaches `unreachable` via
+        keepalive, within the expected worst case.
+      '''
+    }
+  }
+}

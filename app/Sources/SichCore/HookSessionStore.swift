@@ -25,10 +25,12 @@ public final class HookSessionStore {
         /// Identity binding carried from the hook line (`sich_card_id`), if the
         /// session was spawned inside one of our own cards' ptys.
         public let cardID: String?
+        /// The machine this session runs on (`sich_host`), `nil` for local.
+        public let host: String?
 
         public init(
             sessionID: String, agent: CardAgent = .claude, state: CardState, updatedAt: Date,
-            projectDir: String?, cardID: String? = nil
+            projectDir: String?, cardID: String? = nil, host: String? = nil
         ) {
             self.sessionID = sessionID
             self.agent = agent
@@ -36,7 +38,17 @@ public final class HookSessionStore {
             self.updatedAt = updatedAt
             self.projectDir = projectDir
             self.cardID = cardID
+            self.host = host
         }
+    }
+
+    /// A session's IDENTITY: the machine plus the agent session id. The id alone is
+    /// not unique — two hosts hand out ids from independent counters, and a fleet
+    /// running one repo produces byte-identical payloads (US-004 AC-3). Provenance
+    /// is part of identity, so every per-session map is keyed by this.
+    private struct SessionKey: Hashable {
+        let host: String?
+        let id: String
     }
 
     /// Source precedence (port of `_SOURCE_RANK`): hooks > JSONL > PTY.
@@ -52,17 +64,20 @@ public final class HookSessionStore {
     private let coalesceWindow: TimeInterval
     private let stallThreshold: TimeInterval
 
-    private var bySession: [String: Entry] = [:]
-    private var projectDir: [String: String] = [:]
-    private var agentBySession: [String: CardAgent] = [:]
+    private var bySession: [SessionKey: Entry] = [:]
+    private var projectDir: [SessionKey: String] = [:]
+    private var agentBySession: [SessionKey: CardAgent] = [:]
     // Carry-forward like projectDir: a later card-id-less signal (e.g. stale sweep)
     // must not erase an identity binding an earlier hook established.
-    private var cardID: [String: String] = [:]
-    private var lastEventAt: [String: Date] = [:]
+    private var cardID: [SessionKey: String] = [:]
+    private var lastEventAt: [SessionKey: Date] = [:]
+    // Sessions whose turn ended at a `Stop` and that are therefore waiting on the
+    // OPERATOR — the one attention state no agent signal may clear (US-008 AC-1).
+    private var awaitingPrompt: Set<SessionKey> = []
     // Emitted state path per session (a transition is recorded only on a real state
     // change), mirroring the Python `StateReconciler.transitions_for` — the parity
     // diff (TC-INT-324) asserts on this, not just the final state.
-    private var transitionsBySession: [String: [CardState]] = [:]
+    private var transitionsBySession: [SessionKey: [CardState]] = [:]
 
     /// - Parameters:
     ///   - coalesceWindow: sub-second burst window (default 1s, matching
@@ -79,24 +94,35 @@ public final class HookSessionStore {
     /// Every tracked session's current entry.
     public var entries: [Entry] { Array(bySession.values) }
 
-    /// One session's current entry, or `nil` if untracked.
-    public func entry(for sessionID: String) -> Entry? { bySession[sessionID] }
+    /// One session's current entry on `host` (`nil` = this laptop), or `nil` if
+    /// untracked. The host defaults to local so every existing local caller reads
+    /// unchanged.
+    // periphery:ignore - test-only entry (scan runs with exclude_tests)
+    public func entry(for sessionID: String, host: String? = nil) -> Entry? {
+        bySession[SessionKey(host: host, id: sessionID)]
+    }
 
     /// The emitted state path for a session, in order (one entry per real change) —
     /// the parity surface equivalent to `StateReconciler.transitions_for`.
-    public func transitions(for sessionID: String) -> [CardState] {
-        transitionsBySession[sessionID] ?? []
+    // periphery:ignore - test-only entry (scan runs with exclude_tests)
+    public func transitions(for sessionID: String, host: String? = nil) -> [CardState] {
+        transitionsBySession[SessionKey(host: host, id: sessionID)] ?? []
     }
 
     /// Fold a batch of normalized events into reconciled per-session state. Events
-    /// are grouped by session, then each session's stream is coalesced + applied —
-    /// matching the Python `StateReconciler.ingest` per-session contract.
+    /// are grouped by session IDENTITY (machine + id), then each stream is coalesced
+    /// + applied — matching the Python `StateReconciler.ingest` per-session contract,
+    /// widened so one id observed on two machines stays two sessions.
     public func ingest(_ events: [SignalEvent]) {
-        for (sessionID, stream) in Dictionary(grouping: events, by: \.sessionID) {
+        for (key, stream) in Dictionary(grouping: events, by: Self.key(of:)) {
             for burst in coalesce(stream) {
-                applyBurst(sessionID: sessionID, burst: burst)
+                applyBurst(key: key, burst: burst)
             }
         }
+    }
+
+    private static func key(of event: SignalEvent) -> SessionKey {
+        SessionKey(host: event.host, id: event.sessionID)
     }
 
     /// The stall guard (CARD-STATUS.md rule 2.1), applied to all sessions on the
@@ -106,8 +132,8 @@ public final class HookSessionStore {
     /// are left untouched, and any new observed event puts the session back to
     /// WORKING through the normal classifier (which also resets the timer).
     public func sweepStale(now: Date) {
-        for sessionID in bySession.keys {
-            tick(sessionID: sessionID, now: now)
+        for key in bySession.keys {
+            tick(key: key, now: now)
         }
     }
 
@@ -140,30 +166,45 @@ public final class HookSessionStore {
 
     /// Classify a coalesced burst by its dominant event and write once (port of
     /// `_apply_burst`).
-    private func applyBurst(sessionID: String, burst: [SignalEvent]) {
+    private func applyBurst(key: SessionKey, burst: [SignalEvent]) {
         let decisive = dominant(burst)
-        lastEventAt[sessionID] = burst.map(\.timestamp).max()!
-        let next = classify(prior: currentState(sessionID), event: decisive)
+        lastEventAt[key] = burst.map(\.timestamp).max()!
+        let next = classify(
+            prior: currentState(key), event: decisive,
+            awaitingPrompt: awaitingPrompt.contains(key))
+        noteTurnBoundary(key: key, kind: decisive.kind, next: next)
         write(
-            sessionID: sessionID, state: next, at: decisive.timestamp,
+            key: key, state: next, at: decisive.timestamp,
             projectDir: decisive.cwd, cardID: decisive.cardID, agent: decisive.agent
         )
     }
 
-    private func tick(sessionID: String, now: Date) {
-        guard let entry = bySession[sessionID], let last = lastEventAt[sessionID],
+    /// Track the sessions whose TURN ended — the attention state only the operator's
+    /// next prompt clears. Set by a `Stop` (CARD-STATUS.md rule 3), cleared the moment
+    /// the card is anywhere else, including the permission wait, which a tool call
+    /// legitimately resolves.
+    private func noteTurnBoundary(key: SessionKey, kind: SignalKind, next: CardState) {
+        if next == .waitingForInput, kind == .stop {
+            awaitingPrompt.insert(key)
+        } else if next != .waitingForInput || kind == .permissionRequest {
+            awaitingPrompt.remove(key)
+        }
+    }
+
+    private func tick(key: SessionKey, now: Date) {
+        guard let entry = bySession[key], let last = lastEventAt[key],
               !Self.restingStates.contains(entry.state) else { return }
         if now.timeIntervalSince(last) > stallThreshold {
             write(
-                sessionID: sessionID,
+                key: key,
                 state: Self.settled(prior: entry.state, next: .waitingForInput),
                 at: now, projectDir: nil, cardID: nil, agent: nil
             )
         }
     }
 
-    private func currentState(_ sessionID: String) -> CardState {
-        bySession[sessionID]?.state ?? .idle
+    private func currentState(_ key: SessionKey) -> CardState {
+        bySession[key]?.state ?? .idle
     }
 
     /// Record `state` as the session's current state; a later state-only signal must
@@ -171,19 +212,19 @@ public final class HookSessionStore {
     /// `_project_dir` carry-forward). A transition is logged only when the state
     /// actually changes (port of `_emit`'s no-flicker rule).
     private func write(
-        sessionID: String, state: CardState, at: Date, projectDir dir: String?,
+        key: SessionKey, state: CardState, at: Date, projectDir dir: String?,
         cardID id: String?, agent: CardAgent?
     ) {
-        if let dir, !dir.isEmpty { projectDir[sessionID] = dir }
-        if let id, !id.isEmpty { cardID[sessionID] = id }
-        if let agent { agentBySession[sessionID] = agent }
-        let changed = state != currentState(sessionID)
-        bySession[sessionID] = Entry(
-            sessionID: sessionID, agent: agentBySession[sessionID] ?? .claude,
+        if let dir, !dir.isEmpty { projectDir[key] = dir }
+        if let id, !id.isEmpty { cardID[key] = id }
+        if let agent { agentBySession[key] = agent }
+        let changed = state != currentState(key)
+        bySession[key] = Entry(
+            sessionID: key.id, agent: agentBySession[key] ?? .claude,
             state: state, updatedAt: at,
-            projectDir: projectDir[sessionID], cardID: cardID[sessionID]
+            projectDir: projectDir[key], cardID: cardID[key], host: key.host
         )
-        if changed { transitionsBySession[sessionID, default: []].append(state) }
+        if changed { transitionsBySession[key, default: []].append(state) }
     }
 
     // MARK: - Classification (port of classifier.py)
@@ -207,7 +248,7 @@ public final class HookSessionStore {
     /// Next state for `prior` given a single signal (port of `classify`). `userInput`
     /// resumes a waiting session to `running`; on any non-waiting prior it leaves the
     /// state untouched rather than guessing.
-    private func classify(prior: CardState, event: SignalEvent) -> CardState {
+    private func classify(prior: CardState, event: SignalEvent, awaitingPrompt: Bool) -> CardState {
         switch event.kind {
         case .sessionStart:
             // NEUTRAL: launching an agent is not starting work (CARD-STATUS.md
@@ -232,6 +273,14 @@ public final class HookSessionStore {
             // A submitted prompt puts an at-rest session (fresh at its first prompt,
             // or awaiting your reply) to work; other priors are left untouched.
             return prior == .waitingForInput || prior == .idle ? .running : prior
+        case .toolUse, .subagentStart:
+            // A work signal cannot re-open a turn that ENDED (US-008 AC-1): the agent
+            // cannot be running a tool it was never prompted for, so a tool call landing
+            // on a Stop-ended card is a replay — a reconnect re-runs `tail -n 200`, and
+            // the harm that does is state REGRESSION, not duplication. Only the
+            // operator's own prompt resumes such a card. A card waiting on a PERMISSION
+            // grant is deliberately excluded: there, the tool call IS the grant landing.
+            return awaitingPrompt ? prior : Self.settled(prior: prior, next: .running)
         default:
             return Self.settled(prior: prior, next: Self.absolute[event.kind] ?? .unknown)
         }

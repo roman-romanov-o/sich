@@ -229,6 +229,10 @@ enum BoardTheme {
         case .blocked: return hex(0xE84C3D)   // solarized red
         case .done: return hex(0x99CC00)      // solarized green
         case .unknown: return hex(0x728797)   // base00 — clears WCAG AA on the canvas
+        // A dead link reads in the alert red — the same "something is wrong" ink as
+        // `blocked`, and deliberately nowhere near `done`'s green or `unknown`'s
+        // grey, which are the two readings it must never be mistaken for (US-007 AC-4).
+        case .unreachable: return alert
         }
     }
 

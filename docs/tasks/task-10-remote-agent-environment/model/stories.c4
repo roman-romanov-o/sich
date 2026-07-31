@@ -1,0 +1,607 @@
+// stories.c4 — task-10 user stories as dynamic views.
+// AC text and status authority live in ../progress.yaml; the **AC-N** notes below
+// show the reviewer WHERE each criterion is proven in the flow.
+
+model {
+  us-001 = story 'US-001: ssh commands cannot smuggle headless work' {
+    #must
+    description '''
+      As an operator, I want to be sure Sich can never spawn headless agent work on
+      my behalf, on any machine, even when the command it runs is `ssh`, so that my
+      interactive subscription is never silently billed against the API-credit pool.
+    '''
+    metadata {
+      priority 'must'
+      depends_on ''
+      decisions 'DD-004'
+      edge_cases '''
+        a session name containing the substring "claude" (tmux new-session -A -s claude-work)
+        must pass — the scan is tokenized, never a substring search;
+        port / identityFile with a dash-leading value are harmless only because a
+        preceding -p / -i consumes them positionally — a constraint on EMISSION ORDER;
+        a human typing `claude -p` in their own remote pane is not ours to prevent
+      '''
+    }
+  }
+  us-001 -> sys.firewall 'hardens'
+  us-001 -> sys.ssh_cmd 'constrains'
+
+  us-002 = story 'US-002: Turn diffs survive GNU userland' {
+    #must
+    description '''
+      As an operator, I want per-turn diffs in drill-in for a session running on a
+      Linux box exactly as for a local macOS one, so that I can review what the agent
+      changed without leaving the board.
+    '''
+    metadata {
+      priority 'must'
+      depends_on ''
+      decisions ''
+      edge_cases '''
+        GNU base64 wraps at 76 columns (survives today by LUCK via tr -d, not design);
+        any other coreutils divergence (sed/date/stat/readlink/mktemp) — the audit is
+        the work, not the plutil removal; the forwarder degrades silently rather than
+        failing loudly, which is the shipped bug shape under test
+      '''
+    }
+  }
+  us-002 -> sys.installer 'makes portable'
+
+  us-003 = story 'US-003: Remote hook events reach the laptop' {
+    #must
+    description '''
+      As an operator, I want hook telemetry from a remote host to arrive on my laptop
+      over the ssh connection I already have, so that a remote session can be watched
+      at all — today it is a terminal and nothing more.
+    '''
+    metadata {
+      priority 'must'
+      depends_on 'US-001; US-005'
+      decisions 'DD-001'
+      edge_cases '''
+        the remote log rotates (mv + recreate) — tail -F follows by name;
+        the relay starts against a host with existing history — -n 200 bounds replay;
+        the remote file does not exist yet — --retry waits, and the card must NOT read
+        unreachable merely because the file is absent
+      '''
+    }
+  }
+  us-003 -> sys.relay 'delivered by'
+
+  us-004 = story 'US-004: Remote state lands on the right card' {
+    #must
+    description '''
+      As an operator, I want my remote session transitions to move the card I started
+      it from and only that card, even with sessions on two hosts, so that the board
+      tells me the truth about which agent needs me.
+    '''
+    metadata {
+      priority 'must'
+      depends_on 'US-003'
+      decisions 'DD-002'
+      edge_cases '''
+        tmux -A attaches and inherits the ORIGINAL session env — correct, because the
+        original session belongs to this same card (stale only under name reuse, which
+        AC-4 forbids); a deleted card whose name is reused inherits the old card id;
+        a hand-started session with no SICH_CARD_ID must never bind to an unrelated card;
+        a hand-made session already holding the card name: -A attaches and IGNORES the
+        command argument, so set-environment never runs and the card reads "not observed"
+        while the terminal works — probe and either set-environment post-attach or surface it
+      '''
+    }
+  }
+  us-004 -> sys.sessions 'binds state to cards'
+
+  us-005 = story 'US-005: Hooks install on a remote host' {
+    #must
+    description '''
+      As an operator adding a new remote box, I want to install the hook forwarder on
+      that host from the app and see truthfully whether it is installed there, so that
+      I know why a card is not moving instead of staring at a silent board.
+    '''
+    metadata {
+      priority 'must'
+      depends_on 'US-001; US-002'
+      decisions ''
+      edge_cases '''
+        a hand-edited remote settings.json — patch, never clobber;
+        forwarder present but bytes differ — stale-version, distinct from installed
+        (the hash cannot tell an app update from a hand edit, and the action is the same);
+        the probe cannot connect — unknown (probe failed), never not-installed;
+        a macOS remote is not a special case — the portable forwarder covers both userlands
+      '''
+    }
+  }
+  us-005 -> sys.installer 'delivered by'
+  us-005 -> sys.host_state 'surfaces'
+
+  us-006 = story 'US-006: A remote card survives restart' {
+    #must
+    description '''
+      As an operator, I want to quit and reopen the app and find my remote card
+      reconnected to the tmux session still running on that host, so that restarting
+      the board does not cost me the work in flight.
+    '''
+    metadata {
+      priority 'must'
+      depends_on 'US-001; US-004'
+      decisions 'DD-003'
+      edge_cases '''
+        the remote session died while the app was closed — -A creates a fresh one, and
+        it must not look like the old work survived;
+        the host is unreachable at restore — restore as a REMOTE card in unreachable,
+        never as a local shell (that fallback is the shipped bug);
+        a hand-edited snapshot can name an odd host but cannot smuggle `claude -p` —
+        the constructor carries that guarantee, not the format
+      '''
+    }
+  }
+  us-006 -> sys.registry 'delivered by'
+
+  us-007 = story 'US-007: A dead connection looks dead' {
+    #must
+    description '''
+      As an operator, I want the board to tell me when it has lost contact with a host,
+      so that I am never shown a card that looks alive when nothing is being watched —
+      a stale card is worse than no card, because I act on it.
+    '''
+    metadata {
+      priority 'must'
+      depends_on 'US-003'
+      decisions 'DD-001'
+      edge_cases '''
+        a healthy agent thinking for two minutes stays running — line silence is the
+        wrong signal IN KIND, which is why N is retired rather than assigned;
+        the connection recovers — leave unreachable without duplicating (US-008);
+        the host is up but the tmux session is gone — not unreachable; the transport is fine
+      '''
+    }
+  }
+  us-007 -> sys.host_state 'delivered by'
+
+  us-008 = story 'US-008: A reconnect does not duplicate history' {
+    #must
+    description '''
+      As an operator, I want a reconnect after a dropped connection to pick up where it
+      left off rather than replay what I have already seen, so that my card does not
+      jump backwards and drill-in does not show me the same diff twice.
+    '''
+    metadata {
+      priority 'must'
+      depends_on 'US-003'
+      decisions 'DD-001'
+      edge_cases '''
+        two genuinely identical events — eating one is harmless for state hooks
+        (the fold is idempotent) and possible for diffs; the contract for both is
+        PREFER EATING A TRUE DUPLICATE OVER ADMITTING A STALE REPLAY;
+        reconnect after a long outage — partial overlap is the normal case;
+        the remote file rotated during the outage — the key must not assume continuity
+      '''
+    }
+  }
+  us-008 -> sys.relay 'dedups at ingestion'
+
+  us-009 = story 'US-009: Choose a remote host and folder at card creation' {
+    #must
+    description '''
+      As an operator, I want to pick where a new card runs — this laptop or one of my
+      remote boxes — and pick the folder on that box from ones I have used before, so
+      that starting remote work costs one dialog instead of hand-typing a host and path.
+    '''
+    metadata {
+      priority 'must'
+      depends_on 'US-006'
+      decisions 'DD-003'
+      edge_cases '''
+        a host with no recents yet — hand entry stays available, and that is where the
+        US-001 destination guard meets a real human typing;
+        a recent folder no longer exists remotely — not silently swallowed;
+        the host is unreachable while the palette is open — recents still render from
+        local state; creation is never blocked by an unreachable host
+      '''
+    }
+  }
+  us-009 -> sys.palette 'delivered by'
+}
+
+views {
+  dynamic view us-001-flow {
+    title 'US-001: ssh commands cannot smuggle headless work'
+    description '''
+      Two guards, deliberately unequal. The **structural** one is that ssh argvs may
+      only be GENERATED from constrained specs, never supplied. The **best-effort** one
+      is a tokenized scan behind `ssh` — labelled honestly, because quote-splitting,
+      aliases and wrappers defeat any scan. A scan that looks sound is a liability.
+    '''
+
+    operator -> sys.palette 'types a destination' {
+      notes '''
+        Caller data. Today a destination that is really an ssh OPTION
+        (`-oProxyCommand=sh -c 'claude -p x'`) has no `@` and no trailing `:<int>`,
+        so it survives `parse()` whole.
+      '''
+    }
+    sys.palette -> sys.ssh_cmd 'argv(for: spec)' {
+      notes '''
+        **AC-2** — the composed destination is validated and `Invalid.invalidDestination`
+        is thrown. Written red first.
+
+        **AC-3** — the guard is on the COMPOSED destination, so the same payload in the
+        user position (`-oProxyCommand=...@host`) is refused too.
+
+        **AC-4** — validate **post-trim, on the exact string appended**. The `target`
+        property composes the UNTRIMMED host while the appended token is rebuilt from
+        the trimmed one, so a guard on `spec.target` passes `host: " -oProxy..."` and
+        ssh receives the trimmed option anyway. This AC is what distinguishes the
+        correct guard from the plausible wrong one.
+
+        `parse()` keeps its Optional return and does not become throwing — a spec built
+        directly never passes through it, which is exactly what AC-4 proves.
+      '''
+    }
+    sys.ssh_cmd -> sys.firewall 'classify(argv)' {
+      notes '''
+        **AC-1** — `classify(["/usr/bin/ssh", "host", "claude -p 'x'"])` throws. Today
+        it returns `.interactive` uninspected because the headless check is gated behind
+        `argv.first == "claude"`. Written red first.
+
+        The scan is **tokenized on argument boundaries**, never a substring search:
+        `tmux new-session -A -s claude-work` contains "claude" and must pass.
+      '''
+    }
+    sys.ssh_cmd <- sys.firewall 'Pool.interactive, or throws' {
+      notes '''
+        **AC-5** — the argvs this task legitimately emits pass: the DD-001 relay
+        (`ssh ... tail -F`), the DD-002 tmux command in its FINAL shape (which prepends
+        `tmux set-environment`), and the install/probe channels.
+
+        **AC-6** — quoting is asserted against the function that actually provides it:
+        `remoteQuoted` neutralises `'` and `;`. `sanitizeSessionName` folds only
+        `. : space tab` and never touches a quote, so asserting against it proves nothing.
+      '''
+    }
+    sys.ssh_cmd -> openssh 'spawn, only if classify returned' {
+      notes '''
+        Every generated argv routes through the one chokepoint — including the restore
+        path, which runs at launch from data on disk with **no human present**.
+      '''
+    }
+  }
+
+  dynamic view us-002-flow {
+    title 'US-002: Turn diffs survive GNU userland'
+    description '''
+      The shipped forwarder gates its entire diff block on three `plutil -extract`
+      calls. Under Linux they fail, `$session` and `$cwd` come back empty, and diffs
+      are **silently skipped** while the raw append still succeeds — a missing diff
+      that is indistinguishable from "no changes this turn".
+    '''
+
+    remote_host -> remote_log 'forwarder runs on a Stop hook' {
+      notes '''
+        **AC-1** — an automated fixture runs the forwarder under GNU coreutils semantics
+        (no `plutil`; `base64` wrapping at 76 columns) and the emitted line carries a
+        well-formed session, cwd and diff payload. Written red first.
+
+        A fixture that stubs only `plutil` catches none of the base64 wrapping and does
+        NOT satisfy AC-1.
+      '''
+    }
+    sys.relay -> remote_log 'reads the emitted line'
+    operator <- sys.card 'sees the diff in drill-in' {
+      notes '''
+        **AC-2** — human sign-off against a real Linux host: drill in, take a turn, see
+        the diff render. Recorded with the date. **Never auto-passable**; the loop must
+        not tick it.
+      '''
+    }
+  }
+
+  dynamic view us-003-flow {
+    title 'US-003: Remote hook events reach the laptop'
+    description '''
+      DD-001: an in-memory `ssh ... tail -F` relay, host stamped at ingestion. No
+      listener, no port, no new remote binary, and no remote line ever lands in the
+      local sink.
+    '''
+
+    sys.relay -> sys.firewall 'classify(relay argv)' {
+      notes '''
+        **AC-5** — the relay argv passes PoolFirewall and is generated from a constrained
+        spec, never composed from free text.
+      '''
+    }
+    sys.relay -> remote_log 'ssh ... tail -n 200 -F ~/.sich/events.jsonl' {
+      notes '''
+        **AC-4** — no inbound listener is added and no new remote binary is distributed.
+        Assert **structurally**: the only NWListener in the app remains the LikeC4 pane
+        static file server, and the remote side is `ssh` + `tail` and nothing else.
+
+        Edge: `-F` (--follow=name --retry) is a designed match for mv-based rotation,
+        and waits for a file that does not exist yet rather than exiting.
+      '''
+    }
+    sys.relay -> sys.normalizer 'line + sich_host, in memory' {
+      notes '''
+        **AC-2** — every relayed line is stamped with `sich_host` **at ingestion**,
+        before normalisation. The hook payload has NO hostname field, so provenance
+        exists for exactly one instant — the channel opened to a known host.
+
+        **AC-3** — relayed lines are never written into the local `~/.sich/events.jsonl`.
+        Assert the local file byte length is unchanged across a relay session.
+      '''
+    }
+    sys.normalizer -> sys.sessions 'SignalEvent'
+    sys.sessions -> sys.board 'session state' {
+      notes '''
+        **AC-1** — a hook event appended on the remote reaches the board session state.
+        Written red first: nothing today reads any file but the local one.
+      '''
+    }
+  }
+
+  dynamic view us-004-flow {
+    title 'US-004: Remote state lands on the right card'
+    description '''
+      DD-002: carry `SICH_CARD_ID` in the pane launch command exactly as the local path
+      does, AND write it into the tmux session environment so later panes inherit it.
+      Zero read-side change — the existing boundCardID predicate is untouched.
+    '''
+
+    sys.ssh_cmd -> remote_tmux 'set-environment SICH_CARD_ID + new-session -A' {
+      notes '''
+        A launch command sets one shell process env, not the tmux SESSION env.
+        `set-environment` is the half that makes later panes work, and it needs no
+        tmux version floor (unlike `-e`, which requires >= 3.2).
+      '''
+    }
+    operator -> remote_tmux 'opens a second pane with Ctrl-b c' {
+      notes '''
+        **AC-2** — the load-bearing half. Test the SECOND pane: binding only the launch
+        command leaves it unbound, the card silently reads "not observed", and the
+        terminal works fine. Testing the launch argv alone ships this green and broken.
+      '''
+    }
+    remote_tmux -> remote_log 'hook lines carry the card id'
+    sys.relay -> sys.sessions 'host-stamped, card-bound line' {
+      notes '''
+        **AC-3** — two hosts are never conflated: sessions and diffs from host A, host B
+        and local stay distinct even when their `cwd` strings are byte-identical. Uses
+        `sich_host` from US-003 AC-2.
+      '''
+    }
+    sys.board -> sys.card 'moves running -> waiting -> done' {
+      notes '''
+        **AC-1** — the join is by `SICH_CARD_ID` matched against `card.id.uuidString`
+        in the existing `applySessions` predicate.
+
+        **AC-4** — `(host, sanitized session name)` is unique across cards. Today the
+        name is free text, sanitize is lossy and blank defaults to a constant — so two
+        cards with the default name on one host genuinely ARE one session, because `-A`
+        attaches.
+      '''
+    }
+  }
+
+  dynamic view us-005-flow {
+    title 'US-005: Hooks install on a remote host'
+    description '''
+      Install is the source end of the pipe US-003 carries. The install STATE must be
+      probe-derived on every read — a cached "I ran installRemote once" flag is the
+      silent-assumption failure this story exists to prevent.
+    '''
+
+    operator -> sys.card 'clicks the host chip' {
+      notes '''
+        **AC-4** — the chip is built the same custom-drawn, layer-backed way as the repo
+        chip, NOT a stock NSButton (the lone outlier behind the invisible-pill defect).
+        When the state is not-installed or stale-version it is actionable, proven by
+        **dispatching a real NSEvent** at the chip, red -> green. A handler call is an
+        unverified interaction path; this repo shipped that bug three times.
+      '''
+    }
+    sys.installer -> sys.firewall 'classify(install/probe argv)' {
+      notes '''
+        **AC-6** — the installRemote argv passes PoolFirewall and comes from a
+        constrained spec.
+      '''
+    }
+    sys.installer -> remote_host 'push forwarder + patch ~/.claude/settings.json' {
+      notes '''
+        **AC-1** — mirrors what the local global install does, for a remote home.
+
+        **AC-5** — no new remote binary and no new trust surface: it reuses the existing
+        ssh identity, and what lands is the same shell forwarder the local install writes.
+
+        Edge: patch, never clobber a hand-edited remote settings.json.
+      '''
+    }
+    sys.installer <- remote_host 'read the bytes back' {
+      notes '''
+        **AC-2** — state comes from an ACTUAL probe: sha256(remote bytes) compared
+        against sha256(our embedded forwarder), never from a local flag. Assert it by
+        making the probe fail after a successful install and requiring the state to change.
+      '''
+    }
+    sys.installer -> sys.host_state 'installed | not-installed | stale-version | unknown' {
+      notes '''
+        **AC-3** — `unknown (probe failed)` is distinct and visible, NEVER collapsed into
+        installed. Assert the negative.
+      '''
+    }
+    sys.host_state -> sys.card 'host chip text' {
+      notes '''
+        **AC-7** — "not observed" is never shown bare: the chip distinguishes
+        "hooks not installed on <host>" (actionable) from "not started by Sich"
+        (not actionable). Moved here from US-004 because it is install-state messaging.
+      '''
+    }
+  }
+
+  dynamic view us-006-flow {
+    title 'US-006: A remote card survives restart'
+    description '''
+      DD-003 option 2b: persist the **spec**, not the argv, with no PaneSnapshot version
+      bump. The invariant this codebase relies on is a property of the FILE FORMAT — a
+      format that cannot name a command cannot smuggle one.
+    '''
+
+    sys.registry -> sys.registry 'decode PaneSnapshot at launch' {
+      notes '''
+        **AC-3** — **no version bump.** A version mismatch is IGNORED rather than
+        migrated, so a bump is not a migration — it discards every pane the user has.
+        Optional fields decode nil (the claudeSessionID precedent). Assert an old
+        snapshot still restores; the test targets SessionRegistry, not the doc comment.
+      '''
+    }
+    sys.registry -> sys.ssh_cmd 'argv(for: decoded spec)' {
+      notes '''
+        **AC-2** — what is persisted is `{host, user?, sessionName, port?, identityFile?,
+        remoteDir?}` and restore rebuilds through the SAME constructor the create path
+        uses. Assert the persisted format **cannot name a command** — no field holds one.
+      '''
+    }
+    sys.ssh_cmd -> sys.firewall 'classify(rebuilt argv)' {
+      notes '''
+        **AC-5** — the sharpest of the three call sites: it runs at launch, from data on
+        disk, with no human present. `reopenShell` already routes through classify, so
+        this is a TIGHTENING of an existing gate — the contract is that the new remote
+        branch routes through that same chokepoint rather than composing an argv beside it.
+      '''
+    }
+    sys.ssh_cmd -> remote_tmux 'reattach the running session' {
+      notes '''
+        **AC-1** — proven red before green. Today the seed persists `cwd = "user@host"`,
+        the directory-exists check fails, and restore launches a LOCAL $SHELL in $HOME
+        still titled `user@host`.
+
+        Edge: if the host is unreachable at restore the card comes back REMOTE in the
+        unreachable state — never as a local shell.
+      '''
+    }
+    sys.sessions -> sys.card 'telemetry rebinds' {
+      notes '''
+        **AC-4** — a restored remote card rebinds to its telemetry (US-004) rather than
+        restoring as an unobserved terminal.
+      '''
+    }
+  }
+
+  dynamic view us-007-flow {
+    title 'US-007: A dead connection looks dead'
+    description '''
+      The trigger is the **transport**, not line silence: the ssh child exiting, or
+      keepalives failing. `N` (a silence threshold) is retired, not assigned — no N is
+      both fast enough to be useful and safe enough to never mislabel a thinking agent.
+    '''
+
+    sys.relay -> openssh 'ServerAliveInterval=15 x ServerAliveCountMax=3' {
+      notes '''
+        **AC-2** — a silent partition trips the same transition in ~45s worst case.
+        Detection latency and X are distinct quantities and are asserted separately.
+      '''
+    }
+    openssh -> sys.relay 'child exits, or keepalives fail' {
+      notes '''
+        **AC-1** — on child exit there is no keepalive delay at all; affected cards read
+        unreachable within X = 5s, one board poll cycle **of detection**.
+      '''
+    }
+    sys.relay -> sys.host_state 'transport down for this host' {
+      notes '''
+        **AC-3** — the load-bearing half, stated as a NEGATIVE: a card whose host is
+        unreachable must not read running or waiting. Assert the negative, not merely
+        that some flag flipped.
+      '''
+    }
+    sys.host_state -> sys.card 'renders unreachable' {
+      notes '''
+        **AC-4** — visible on the card and distinguishable from `done` and from
+        "not observed". `unreachable` does not exist in the app today: the state must be
+        BUILT, not merely asserted, and it renders on a layer-backed custom-drawn
+        surface (cacheDisplay / CALayer.render are non-evidence here).
+      '''
+    }
+  }
+
+  dynamic view us-008-flow {
+    title 'US-008: A reconnect does not duplicate history'
+    description '''
+      `tail -n 200 -F` reopens with no memory of the previous offset, and the remote file
+      may have rotated in between — so dedup is **content-based**, and hashed **before**
+      normalisation.
+    '''
+
+    sys.relay -> remote_log 'reconnect replays up to 200 lines' {
+      notes '''
+        Partial overlap is the normal case, not an edge one: the seen prefix is
+        suppressed, the unseen suffix is ingested.
+      '''
+    }
+    sys.relay -> sys.relay 'dedup at ingestion' {
+      notes '''
+        **AC-3** — state hooks key on `(host, sha256(raw line bytes))`. Two plausible
+        implementations are wrong and are excluded by test: a **byte cursor** (offsets do
+        not survive the rotation this AC is about) and the **normalized SignalEvent**
+        (timestamp parsing falls back to ARRIVAL time, so one byte-identical line
+        replayed later is a non-equal value). Hash before normalization.
+
+        **AC-2** — turn diffs key on `(host, session_id, iteration, sha256(diff_base64))`.
+        The sha256 tiebreak is load-bearing, not defensive: `iteration` increments only on
+        UserPromptSubmit while turn_diff emits on Stop without incrementing, so two Stops
+        in one turn emit two different diffs under one iteration. Keyed on the triple
+        alone the second diff is silently eaten.
+      '''
+    }
+    sys.relay -> sys.sessions 'only unseen lines' {
+      notes '''
+        **AC-1** — a replay must never move the card backwards; the state sequence matches
+        a connection that never dropped. The test replays a stale SessionStart/PostToolUse
+        against a `.waitingForInput` prior: that must not resolve to `.running` — a replay
+        must not extinguish the attention signal. (The obvious example — a stale
+        UserPromptSubmit reopening a `done` session — is FALSE and cannot be made red,
+        because `done` is deliberately sticky.)
+      '''
+    }
+  }
+
+  dynamic view us-009-flow {
+    title 'US-009: Choose a remote host and folder at card creation'
+    description '''
+      The door, deliberately built last: Cmd-Shift-R is the demo path this task uses
+      through phases 03-05, so it survives until this stage replaces it.
+    '''
+
+    operator -> sys.palette 'where does this run?' {
+      notes '''
+        **AC-1** — remote is a **first-class** choice in the create palette, not a hidden
+        alternate path.
+
+        **AC-4** — verified by dispatching real input events (NSEvent / keyDown) against
+        the real surface, never by calling handlers.
+      '''
+    }
+    sys.palette -> sys.palette 'per-host recents' {
+      notes '''
+        **AC-2** — recents are host-qualified (`{host: String?, path: String}`): a path
+        from host A never appears under host B, and never under local.
+
+        Edge: a host with no recents keeps hand entry — which is where the US-001
+        destination guard meets a real human typing. An unreachable host must not block
+        creation; the list renders from local state.
+      '''
+    }
+    sys.palette -> sys.ssh_cmd 'the same constrained spec' {
+      notes '''
+        **AC-3** — a card created through the palette is indistinguishable downstream from
+        one created via Cmd-Shift-R: same spec, same identity binding, same restore.
+      '''
+    }
+    operator <- sys.card 'a remote card, created in one dialog' {
+      notes '''
+        **AC-5** — the Cmd-Shift-R NSAlert is retired only after this stage is proven, and
+        is removed **last**.
+      '''
+    }
+  }
+}

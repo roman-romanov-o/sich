@@ -97,7 +97,8 @@ public final class SessionRegistry {
                 claudeSessionID: session.claudeSessionID,
                 // No PID to probe → assume alive, matching the restore side's long-standing
                 // "unknown liveness is not a reason to drop a card" default.
-                wasAlive: pid.map(isAlive) ?? true
+                wasAlive: pid.map(isAlive) ?? true,
+                remote: session.remoteSpec.map(RemoteSpecSnapshot.init(spec:))
             )
         }
         return panes.isEmpty ? [] : [WindowSnapshot(panes: panes)]
@@ -223,18 +224,36 @@ public final class SessionRestorer {
     /// Restore every pane, preserving window/pane order (the pre-quit layout).
     public func restore(_ snapshot: SessionSnapshot) -> [RestoredPane] {
         snapshot.windows.flatMap { window in
-            window.panes.map { self.restore(pane: $0) }
+            window.panes.compactMap { self.restore(pane: $0) }
         }
     }
 
-    private func restore(pane: PaneSnapshot) -> RestoredPane {
-        let (cwd, fellBack) = resolveCwd(pane.cwd)
+    /// One pane, or `nil` when it cannot be re-established at all — a remote pane whose
+    /// persisted destination no longer forms a legal one. Dropping it is the point:
+    /// restoring it as a LOCAL shell would silently hand the operator their own machine
+    /// where a remote session was promised.
+    private func restore(pane: PaneSnapshot) -> RestoredPane? {
+        let (cwd, fellBack) = resolveCwd(for: pane)
+        guard let command = launchCommand(for: pane, cwd: cwd) else { return nil }
         let restored = RestoredPane(
             snapshot: pane, cwd: cwd, cwdFellBackToHome: fellBack,
             liveness: wasAliveAtQuit(pane) ? .reopened : .dead
         )
-        if restored.liveness == .reopened { reopenShell(for: restored) }
+        if restored.liveness == .reopened { reopenShell(for: restored, command: command) }
         return restored
+    }
+
+    /// The argv this pane comes back on, rebuilt from what was persisted — never read
+    /// from it. A remote pane goes back through ``RemoteTmuxCommand/argv(for:cardID:)``,
+    /// the same constructor the create path uses, so the destination grammar and the
+    /// tmux shape are re-applied now rather than trusted from disk; `nil` means the
+    /// persisted spec no longer yields a legal command.
+    private func launchCommand(for pane: PaneSnapshot, cwd: String) -> [String]? {
+        guard let remote = pane.remote else {
+            return Self.shellCommand(shell: shellPath, cwd: cwd, cardID: pane.cardID)
+        }
+        return try? RemoteTmuxCommand.argv(
+            for: remote.spec, cardID: pane.cardID?.uuidString)
     }
 
     /// Prefer the liveness recorded at snapshot time; fall back to probing the recorded
@@ -244,13 +263,12 @@ public final class SessionRestorer {
         pane.wasAlive ?? (pane.childPID.map(isAlive) ?? true)
     }
 
-    /// Re-open a plain interactive shell at the pane's cwd, carrying the card binding.
-    /// The agent command is intentionally absent and the command is routed through the
-    /// pool firewall, so restore can never resurrect a headless agent.
-    private func reopenShell(for pane: RestoredPane) {
-        let command = Self.shellCommand(
-            shell: shellPath, cwd: pane.cwd, cardID: pane.snapshot.cardID
-        )
+    /// Re-open the pane — a plain interactive shell at its cwd, or the ssh/tmux attach a
+    /// remote pane's spec rebuilds into. The agent command is intentionally absent in
+    /// both cases, and every argv (including the remote one, which runs at launch with
+    /// no human present) is routed through the pool firewall, so restore can never
+    /// resurrect a headless agent.
+    private func reopenShell(for pane: RestoredPane, command: [String]) {
         guard (try? PoolFirewall.classify(command)) != nil else { return }
         reopen(pane, command)
     }
@@ -274,8 +292,12 @@ public final class SessionRestorer {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
-    private func resolveCwd(_ cwd: String) -> (path: String, fellBack: Bool) {
-        directoryExists(cwd) ? (cwd, false) : (homeDirectory, true)
+    /// A remote pane's `cwd` is a LABEL (`user@host`), not a local path: probing the
+    /// filesystem for it always fails, and the home fallback is what used to turn a
+    /// restored remote card into a local shell. Only a local pane is resolved.
+    private func resolveCwd(for pane: PaneSnapshot) -> (path: String, fellBack: Bool) {
+        guard pane.remote == nil else { return (pane.cwd, false) }
+        return directoryExists(pane.cwd) ? (pane.cwd, false) : (homeDirectory, true)
     }
 
     /// Default cwd-existence probe: the path is a real, existing directory.

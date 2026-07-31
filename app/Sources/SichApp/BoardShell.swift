@@ -41,7 +41,10 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     // arrive by tailing the observe-only event file (no `/sessions`, no port).
     // Started only on the real launch path (not in tests).
     private var quotaPoller: NativeQuotaPoller?
-    private var sessionsPoller: SessionsPoller?
+    /// Also the board's link-health source (US-007): the relays it supervises are the
+    /// only thing that knows whether a host still answers. Internal so a test can
+    /// drive the real relay path through a stand-in transport, never a real ssh.
+    var sessionsPoller: SessionsPoller?
     private var turnDiffs: [TurnDiff] = []
     // The always-on pty drain (the fix for "work stops when I leave the task"): one
     // main-run-loop timer that reads EVERY owned session's pty each tick — not just
@@ -111,6 +114,11 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     private let repoRoot = RepoLocator.repoRoot()
     // Monotonic suffix so each add-task card gets a unique sessionID.
     private var sessionCounter = 0
+    /// Asks a remote host what holds a tmux session name (US-004 AC-4) — injectable so
+    /// tests answer without ssh. The default refuses to spawn under `swift test`.
+    var remoteSessionRunner: any RemoteCommandRunner = SSHCommandRunner()
+    /// Why the last remote-card attempt was refused, for the operator-facing alert.
+    private(set) var lastRemoteSessionIssue: RemoteSessionIssue?
     private var terminalFontSize: CGFloat = 20
 
     /// - Parameters:
@@ -648,7 +656,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         // freezing this card in place for the rest of the app's life.
         let card = BoardCard(
             id: pane.snapshot.cardID ?? UUID(),
-            sessionID: pane.snapshot.sessionID.uuidString,
+            sessionID: Self.restoredSessionID(for: pane.snapshot),
             title: pane.snapshot.title, projectDir: pane.cwd,
             agent: Self.cardAgent(for: pane.snapshot.agentType),
             flow: Self.cardFlow(for: pane.snapshot.flowTag),
@@ -660,6 +668,28 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             manuallyDoneCardIDs.insert(card.id)
         }
         ptyByCard[card.id] = session.pty
+        if let spec = pane.snapshot.remote?.spec { adoptRestoredRemote(spec, on: session) }
+    }
+
+    /// Put a restored remote card back on the same footing a freshly created one has
+    /// (US-006 AC-4): the session carries its spec again — so the NEXT quit persists it
+    /// and the card survives an unbounded chain of restarts, not just one — the host's
+    /// hook state is re-learned, and its event log is followed again. Without the relay
+    /// the card comes back as an unobserved terminal: attached, but never moving.
+    private func adoptRestoredRemote(_ spec: RemoteTmuxSpec, on session: Session) {
+        session.recordRemoteSpec(spec)
+        RemoteHookStatus.shared.register(spec)
+        sessionsPoller?.attachRemoteHost(spec)
+    }
+
+    /// A remote card's session id is its `(host, session)` key, not the pane's UUID:
+    /// that is the string the duplicate guard reads, so a restored card must carry it
+    /// or a second card could claim the very session this one is attached to.
+    private static func restoredSessionID(for pane: PaneSnapshot) -> String {
+        guard let spec = pane.remote?.spec,
+              let key = try? RemoteSessionKey.make(for: spec)
+        else { return pane.sessionID.uuidString }
+        return key.sessionID
     }
 
     /// The keystrokes that start a NEW Claude conversation pinned to `sessionID`, so we
@@ -686,6 +716,10 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     static func restoredAgentCommand(for pane: PaneSnapshot) -> String? {
+        // A remote pane comes back by ATTACHING: tmux kept the far side exactly as the
+        // operator left it, so there is nothing to resume — and typing a resume command
+        // into it would talk over whatever is already running in that session.
+        if pane.remote != nil { return nil }
         if let claudeID = claudeResumeID(for: pane) {
             return resumeClaudeCommand(sessionID: claudeID)
         }
@@ -830,10 +864,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "New Task", action: #selector(newTaskMenuAction),
                         keyEquivalent: "n").target = self
-        let remote = appMenu.addItem(withTitle: "New Remote tmux Session…",
-                                     action: #selector(newRemoteTmuxMenuAction), keyEquivalent: "r")
-        remote.keyEquivalentModifierMask = [.command, .shift]
-        remote.target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Increase Board Font",
                         action: #selector(increaseBoardFontMenuAction),
@@ -865,6 +895,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         appItem.submenu = appMenu
         let main = NSMenu()
         main.addItem(appItem)
+        main.addItem(EditMenu.item())   // without it ⌘V is dead in every text field
         NSApp.mainMenu = main
     }
 
@@ -874,69 +905,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     @objc private func decreaseBoardFontMenuAction() { changeBoardFont(by: -0.1) }
     @objc private func increaseTerminalFontMenuAction() { changeTerminalFont(by: 1) }
     @objc private func decreaseTerminalFontMenuAction() { changeTerminalFont(by: -1) }
-
-    /// Prompt for a remote destination + tmux session, then open the card. Kept thin:
-    /// destination parsing lives in `RemoteTmuxSpec.parse` and card creation in
-    /// `createRemoteTmuxSession`, both unit-tested; this only collects the strings.
-    @objc private func newRemoteTmuxMenuAction() {
-        guard let (destination, session, dir) = promptRemoteTmux() else { return }
-        guard let spec = RemoteTmuxSpec.parse(
-            destination: destination, sessionName: session, remoteDir: dir) else { return }
-        _ = createRemoteTmuxSession(spec: spec)
-    }
-
-    /// A 3-field sheet (destination `[user@]host[:port]`, tmux session, optional start
-    /// dir). Returns nil on cancel or a blank destination.
-    private func promptRemoteTmux() -> (destination: String, session: String, dir: String)? {
-        let alert = NSAlert()
-        alert.messageText = "New remote tmux session"
-        alert.informativeText = "Attach to (or create) a tmux session over SSH."
-        alert.addButton(withTitle: "Open")
-        alert.addButton(withTitle: "Cancel")
-        let (view, fields) = remoteTmuxAccessory()
-        alert.accessoryView = view
-        alert.window.initialFirstResponder = fields.destination
-        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
-        let destination = fields.destination.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !destination.isEmpty else { return nil }
-        let session = fields.session.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (destination, session.isEmpty ? "sich" : session,
-                fields.dir.stringValue.trimmingCharacters(in: .whitespacesAndNewlines))
-    }
-
-    private func remoteTmuxAccessory()
-        -> (NSView, (destination: NSTextField, session: NSTextField, dir: NSTextField)) {
-        let destination = remoteField(placeholder: "user@host  or  host:2222")
-        let session = remoteField(placeholder: "sich")
-        let dir = remoteField(placeholder: "start dir (optional)")
-        let rows = [labeledRow("Destination", destination),
-                    labeledRow("tmux session", session),
-                    labeledRow("Start dir", dir)]
-        let stack = NSStackView(views: rows)
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 8
-        stack.frame = NSRect(x: 0, y: 0, width: 320, height: 96)
-        return (stack, (destination, session, dir))
-    }
-
-    private func remoteField(placeholder: String) -> NSTextField {
-        let f = NSTextField()
-        f.placeholderString = placeholder
-        f.widthAnchor.constraint(equalToConstant: 220).isActive = true
-        return f
-    }
-
-    private func labeledRow(_ label: String, _ field: NSTextField) -> NSView {
-        let l = NSTextField(labelWithString: label)
-        l.font = .systemFont(ofSize: 11)
-        l.widthAnchor.constraint(equalToConstant: 92).isActive = true
-        let row = NSStackView(views: [l, field])
-        row.orientation = .horizontal
-        row.alignment = .firstBaseline
-        row.spacing = 8
-        return row
-    }
 
     /// Disk-writing installs + the notification prompt, run one tick after launch so
     /// they never block the window's first paint. All are idempotent and degrade
@@ -1282,11 +1250,14 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         palette.confirmSahaExisting = { [weak self] folder, dir in
             self?.completeSahaExisting(folder: folder, dir: dir)
         }
+        palette.confirmRemote = { [weak self] title, destination, dir in
+            self?.completeRemoteCard(title: title, destination: destination, dir: dir)
+        }
         createPalette?.removeFromSuperview()
         createPalette = palette
         guard let root = boardView.superview else { return }
         layoutFullWindow(palette, in: root)
-        window?.makeFirstResponder(palette)
+        palette.focusStage()
     }
 
     /// saha "Create new" from the palette: scaffold + bind + enter planning. Returns an
@@ -1320,6 +1291,24 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         return nil
     }
 
+    /// The palette's remote path (US-009 AC-3). It parses the SAME spec and calls the
+    /// SAME ``createRemoteTmuxSession(spec:)`` the ⌘⇧R alert used, so a palette card and
+    /// an alert card are one construction — identical argv, identity binding and restore
+    /// snapshot. Returns an error string for the palette to show, nil once the card exists.
+    private func completeRemoteCard(title: String, destination: String, dir: String) -> String? {
+        let folder = dir.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let spec = RemoteTmuxSpec.parse(destination: destination, sessionName: title,
+                                              remoteDir: folder.isEmpty ? nil : folder) else {
+            return "Enter a host — e.g. you@box or box:2222."
+        }
+        guard createRemoteTmuxSession(spec: spec) != nil else {
+            return lastRemoteSessionIssue?.description ?? "Could not open the remote session."
+        }
+        if !folder.isEmpty { recentFolders.remember(host: destination, path: folder) }
+        dismissCreatePalette()
+        return nil
+    }
+
     func dismissCreatePalette() {
         createPalette?.removeFromSuperview()
         createPalette = nil
@@ -1328,14 +1317,18 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
 
     /// Recent project dirs as palette rows, each tagged with how many owned (live-pty)
     /// cards currently run in it — the "N active cards" the design shows.
+    /// Local rows carry their active-card count; remote rows deliberately don't — a
+    /// far-side folder can hold sessions this board doesn't own, so any number would
+    /// be a guess. Host-qualification comes straight from the store (US-009 AC-2).
     private func paletteRecents() -> [PaletteProject] {
         var active: [String: Int] = [:]
         for card in cards where ptyByCard[card.id] != nil {
             active[Self.normDir(card.projectDir), default: 0] += 1
         }
-        return recentProjectDirs().map {
-            PaletteProject(path: $0, activeCards: active[Self.normDir($0)] ?? 0)
+        let local = recentProjectDirs().map {
+            PaletteProject(host: nil, path: $0, activeCards: active[Self.normDir($0)] ?? 0)
         }
+        return local + recentFolders.load().filter { $0.host != nil }
     }
 
     /// Fixture folders so a capture of the task stage shows the full bind-list (progress
@@ -1373,23 +1366,28 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// present as a fallback. Persisted in UserDefaults so the list survives relaunch.
     private func recentProjectDirs() -> [String] {
         let root = RepoLocator.launchProjectDir(repoRoot: repoRoot)
-        var dirs = UserDefaults.standard.stringArray(forKey: Self.recentDirsKey) ?? []
+        var dirs = recentFolders.load().filter { $0.host == nil }.map(\.path)
         if !dirs.contains(root) { dirs.append(root) }
         return dirs
     }
 
-    /// Push a dir to the front of the MRU list (deduped, capped at 6). ponytail:
-    /// UserDefaults is the stdlib MRU store — no file/db for six strings.
+    /// Push a dir to the front of the MRU list. The store owns dedup, the per-host cap
+    /// and the legacy plain-`[String]` migration; this just says "local".
     private func rememberProjectDir(_ dir: String) {
-        let expanded = (dir as NSString).expandingTildeInPath
-        guard !expanded.isEmpty else { return }
-        var dirs = UserDefaults.standard.stringArray(forKey: Self.recentDirsKey) ?? []
-        dirs.removeAll { $0 == expanded }
-        dirs.insert(expanded, at: 0)
-        UserDefaults.standard.set(Array(dirs.prefix(6)), forKey: Self.recentDirsKey)
+        recentFolders.remember(host: nil, path: dir)
     }
 
-    private static let recentDirsKey = "sich.recentProjectDirs"
+    /// The one host-qualified recents store the palette reads and both create paths
+    /// write (US-009 AC-2). ponytail: UserDefaults is the stdlib MRU store.
+    private var recentFolders: RecentFolderStore {
+        RecentFolderStore(defaults: recentFoldersDefaults, key: Self.recentDirsKey)
+    }
+
+    /// Which defaults that store reads and writes. Production is `.standard`; a test
+    /// points it at a scratch suite so a run never touches the operator's real MRU.
+    var recentFoldersDefaults: UserDefaults = .standard
+
+    static let recentDirsKey = "sich.recentProjectDirs"
 
     /// US-003: launch a fresh REAL interactive terminal card (your login shell in the
     /// chosen folder; drill in and run `claude`) under the given task title and drop
@@ -1467,8 +1465,15 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// binary is `ssh`). The model mutation is split from any prompt so tests can drive it.
     @discardableResult
     func createRemoteTmuxSession(spec: RemoteTmuxSpec) -> BoardCard? {
-        sessionCounter += 1
         let cardID = UUID()
+        let spec = named(spec, forCard: cardID)
+        lastRemoteSessionIssue = nil
+        guard let key = try? RemoteSessionKey.make(for: spec) else { return nil }
+        if let issue = remoteSessionConflict(for: key, cardID: cardID.uuidString, spec: spec) {
+            lastRemoteSessionIssue = issue
+            return nil
+        }
+        sessionCounter += 1
         guard let seed = try? BoardSeed.remoteTmux(spec: spec, cardID: cardID.uuidString),
               let session = launch(seed) else { return nil }
         let card = BoardCard(
@@ -1478,9 +1483,45 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         )
         cards.append(card)
         ptyByCard[card.id] = session.pty
+        // The spec, not the argv: this is what a quit persists and the next launch
+        // rebuilds the same attach from (US-006).
+        session.recordRemoteSpec(spec)
+        // Learn this host's hook state so the card's chip can say something true
+        // about it (US-005). Inert unless the real executable enabled probing.
+        RemoteHookStatus.shared.register(spec)
+        // Follow that host's event log from now on, so hooks fired on the far side
+        // reach this board (US-003). Idempotent per host; inert unless the real
+        // executable enabled spawning.
+        sessionsPoller?.attachRemoteHost(spec)
         refresh()
         persistTasks()
         return card
+    }
+
+    /// An unnamed card gets a name derived from its own id (US-004 AC-4): with one
+    /// shared default, `-A` attached every unnamed card to the SAME remote session.
+    private func named(_ spec: RemoteTmuxSpec, forCard cardID: UUID) -> RemoteTmuxSpec {
+        guard RemoteTmuxCommand.sanitizeSessionName(spec.sessionName).isEmpty else { return spec }
+        var named = spec
+        named.sessionName = RemoteTmuxCommand.defaultSessionName(for: cardID)
+        return named
+    }
+
+    /// Whether `(host, sanitized name)` is already taken — on this board, or on the
+    /// far side by a session Sich did not create. Both cases would make `-A` attach
+    /// rather than create, so the pane's binding would be somebody else's (or none).
+    ///
+    /// Silence from the far side is `unknown`, never a refusal: an unreachable host
+    /// must not make remote cards unopenable.
+    private func remoteSessionConflict(
+        for key: RemoteSessionKey, cardID: String, spec: RemoteTmuxSpec
+    ) -> RemoteSessionIssue? {
+        if cards.contains(where: { RemoteSessionKey.parse(sessionID: $0.sessionID) == key }) {
+            return .duplicateCard(key)
+        }
+        let presence = RemoteSessionProbe.presence(
+            of: key, cardID: cardID, spec: spec, runner: remoteSessionRunner)
+        return presence == .foreign ? .foreignSession(key) : nil
     }
 
     @discardableResult
@@ -1934,7 +1975,9 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             let count = switcherSnapshot.count
             switcherIndex = (switcherIndex + (reverse ? -1 : 1) + count) % count
         } else {
-            let drillable = cards.filter { ptyByCard[$0.id] != nil }
+            // Display cards, not the model: the switcher is a second place the board
+            // "reads" a state, and it must not offer a frozen `working` either (US-007).
+            let drillable = displayCards().filter { ptyByCard[$0.id] != nil }
             let ordered = TaskSwitcherOverlay.ordered(cards: drillable, mru: mruOrder)
             let current = drilledInCardID ?? planningModeCardID
             guard ordered.contains(where: { $0.id != current }) else { return }
@@ -1994,7 +2037,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         if selection.attentionFilterActive {
             selection.clearAttentionFilter()
         } else {
-            selection.activateAttention(cards)
+            selection.activateAttention(displayCards())
         }
         refresh()
     }
@@ -2002,19 +2045,73 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// Re-derive the view from the current model — the single render path, so a
     /// live state change just re-runs this (US-003 AC#3 / US-005 live update).
     private func refresh(includeQuota: Bool = true) {
-        let count = Attention.count(cards)
+        let shown = displayCards()
+        let count = Attention.count(shown)
         attention.update(count: count)
         alertIfAttentionRose(to: count)
         notifyNewlyDone()
-        boardView.render(cards: selection.visibleCards(from: cards))
+        boardView.render(cards: selection.visibleCards(from: shown))
         if !backlogPage.isHidden { backlogPage.render(backlogTasks) }
         if includeQuota {
-            quota.render(gauges: QuotaProjection.gauges(from: quotaSources), cards: cards)
+            quota.render(gauges: QuotaProjection.gauges(from: quotaSources), cards: shown)
         }
         // Keep the drill-in's status pill / waiting banner tracking the live state.
-        if let id = drilledInCardID, let card = cards.first(where: { $0.id == id }) {
+        if let id = drilledInCardID, let card = shown.first(where: { $0.id == id }) {
             drillIn.update(state: card.state)
         }
+    }
+
+    // MARK: - Link health (US-007)
+
+    /// The bound the story names as X: how long a card may keep showing a stale
+    /// reading after its host's link is declared dead. One sessions-poll backstop
+    /// cycle, which is what actually carries the change to the screen — a DIFFERENT
+    /// quantity from how long DETECTION took (an ssh child exit is immediate; a
+    /// silent partition takes up to the keepalive budget on the relay's argv).
+    ///
+    /// Nothing reads it at runtime — the board has no timer of its own here, it rides
+    /// the sessions poll. It is the written-down ceiling that poll must stay under, and
+    /// the test that pins `SessionsPoller.defaultInterval` beneath it is its only
+    /// reader, which is precisely the point: raise the cadence past 5s and US-007's
+    /// promise breaks silently.
+    // periphery:ignore - a stated bound, asserted in tests (scan runs with exclude_tests)
+    static let unreachableVisibleWithin: TimeInterval = 5
+
+    /// What the board shows: the model in `cards`, with every card on a host whose
+    /// relay reports a dead link overlaid as `.unreachable`.
+    ///
+    /// Derived per render, never stored. That is the whole recovery story — the last
+    /// observed state stays untouched in `cards`, so a link that comes back restores
+    /// it on the very next render with no bookkeeping and no "what was it before"
+    /// map. Cards on hosts nobody relays for (every local card) pass through: `nil`
+    /// health is silence, not a verdict, and a reachable host with no forwarder
+    /// installed stays an install-state message on the host chip.
+    private func displayCards() -> [BoardCard] {
+        guard let sessionsPoller else { return cards }
+        return cards.map { card in
+            guard let host = card.host ?? Self.relayHost(of: card),
+                  sessionsPoller.relayHealth(for: host) == .unreachable
+            else { return card }
+            return card.with(state: .unreachable)
+        }
+    }
+
+    /// The host a card we OPENED is bound to, for the window before any hook line has
+    /// come back to stamp `host` on it — which is exactly the window a link that never
+    /// came up lives in. Read back out of the card's `remote/<host>/<session>` id
+    /// through the same parser that wrote it, so the two spellings cannot drift.
+    private static func relayHost(of card: BoardCard) -> String? {
+        RemoteSessionKey.parse(sessionID: card.sessionID)?.host
+    }
+
+    /// Every host currently declared dead — part of the render signature, so a link
+    /// dying is a real change even when not one event line moved (US-007 AC-1). The
+    /// backstop poll pushes cards unconditionally, so this is what turns that tick
+    /// into a repaint.
+    private func unreachableHosts(among candidates: [BoardCard]) -> Set<String> {
+        guard let sessionsPoller else { return [] }
+        let hosts = candidates.compactMap { $0.host ?? Self.relayHost(of: $0) }
+        return Set(hosts.filter { sessionsPoller.relayHealth(for: $0) == .unreachable })
     }
 
     /// Fire a "task done" OS notification on the rising edge into the manual DONE
@@ -2093,7 +2190,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             if let freshest = bound.max(by: { Self.staler($0, $1) }) {
                 return smoothLiveState(card: card, observed: freshest.state)
             }
-            if let state = liveState(forDir: card.projectDir, id: card.sessionID, joinByDir: byDir, in: observed) {
+            if let state = liveState(for: card, joinByDir: byDir, in: observed) {
                 return smoothLiveState(card: card, observed: state)
             }
             idleHoldUntil.removeValue(forKey: card.id)
@@ -2108,6 +2205,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         // read-only lane instead of mixing them in with drillable task cards.
         let merged = adopted
         let signature = merged.map { "\($0.sessionID)|\($0.state.rawValue)|\($0.projectDir)" }
+            + unreachableHosts(among: merged).sorted().map { "link-dead|\($0)" }
         guard signature != lastSessionsSignature else { return }
         lastSessionsSignature = signature
         cards = merged   // ptyByCard keeps its owned entries → drill-in still works
@@ -2165,9 +2263,16 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// card tracks what's live now; activity-rank is only the tiebreak among
     /// equally-fresh states. This is what stops a STALE `blocked`/`waiting` from a
     /// finished run out-ranking a FRESH `running` (US-002).
-    private func liveState(forDir dir: String, id: String, joinByDir: Bool, in observed: [BoardCard]) -> CardState? {
-        let dir = Self.normDir(dir)
+    /// Both joins are scoped to the card's MACHINE first (`sich_host`, `nil` = this
+    /// laptop): a session id and a cwd are only unique within one host, so a build box
+    /// checking out the same repo path — or handing out the same session id — must not
+    /// move a local card (US-004 AC-3). Cross-machine binding happens only through the
+    /// explicit `SICH_CARD_ID` path above, which is host-independent by construction.
+    private func liveState(for card: BoardCard, joinByDir: Bool, in observed: [BoardCard]) -> CardState? {
+        let dir = Self.normDir(card.projectDir)
+        let id = card.sessionID
         return observed
+            .filter { $0.host == card.host }
             .filter { $0.sessionID == id || (joinByDir && Self.normDir($0.projectDir) == dir) }
             .max { Self.staler($0, $1) }
             .map(\.state)
@@ -2201,7 +2306,10 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         case .running:                   return 3
         case .done:                      return 2
         case .idle:                      return 1
-        case .unknown:                   return 0
+        // Never observed on a store entry (the board derives it at render time), and
+        // ranked with `unknown` if one ever reached here: it says nothing about which
+        // session is live.
+        case .unknown, .unreachable:     return 0
         }
     }
 }

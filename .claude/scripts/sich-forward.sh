@@ -32,12 +32,20 @@ if [ -n "$SICH_CARD_ID" ]; then
 fi
 printf '%s\n' "$line" >> "$file" 2>/dev/null
 
-# Per-turn review data. Claude's hook payload is inspected with macOS' bundled
-# plutil; git runs in the repo that owns the hook, so remote sessions ship the
-# resulting unified diff as data and the board never needs their filesystem.
-event=$(printf '%s' "$line" | /usr/bin/plutil -extract hook_event_name raw -o - - 2>/dev/null)
-session=$(printf '%s' "$line" | /usr/bin/plutil -extract session_id raw -o - - 2>/dev/null)
-cwd=$(printf '%s' "$line" | /usr/bin/plutil -extract cwd raw -o - - 2>/dev/null)
+# Per-turn review data. The three fields are read with POSIX sed rather than
+# macOS' bundled property-list tool: this same script is installed on Linux
+# hosts (US-002), where that tool does not exist and every extraction failed
+# silently — gating the whole block below, so diffs were dropped while the raw
+# append still succeeded. For the same reason every tool here is resolved
+# through PATH, never by an absolute macOS path. git runs in the repo that owns
+# the hook, so remote sessions ship the resulting unified diff as data and the
+# board never needs their filesystem.
+json_field() {
+    printf '%s' "$line" | sed -n 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+}
+event=$(json_field hook_event_name)
+session=$(json_field session_id)
+cwd=$(json_field cwd)
 if [ -n "$session" ] && [ -n "$cwd" ] && git -C "$cwd" rev-parse --git-dir >/dev/null 2>&1; then
     safe_session=$(printf '%s' "$session" | tr -cd '[:alnum:]_.-')
     state_dir="${SICH_DIFF_STATE_DIR:-$HOME/.sich/turn-diffs}/$safe_session"
@@ -90,7 +98,9 @@ if [ -n "$session" ] && [ -n "$cwd" ] && git -C "$cwd" rev-parse --git-dir >/dev
                     "$max_diff_bytes" >> "$diff_path.trim"
                 mv "$diff_path.trim" "$diff_path"
             fi
-            diff_b64=$(/usr/bin/base64 < "$diff_path" | tr -d '\n')
+            # GNU base64 wraps at 76 columns where macOS' does not; `tr -d` folds
+            # either shape back into the single JSON string field.
+            diff_b64=$(base64 < "$diff_path" | tr -d '\n')
             session_b64=""
             if [ -s "$state_dir/session-checkpoint" ]; then
                 session_checkpoint=$(cat "$state_dir/session-checkpoint")
@@ -103,10 +113,10 @@ if [ -n "$session" ] && [ -n "$cwd" ] && git -C "$cwd" rev-parse --git-dir >/dev
                     head -c "$max_diff_bytes" "$session_path" > "$session_path.trim"
                     mv "$session_path.trim" "$session_path"
                 fi
-                session_b64=$(/usr/bin/base64 < "$session_path" | tr -d '\n')
+                session_b64=$(base64 < "$session_path" | tr -d '\n')
                 rm -f "$session_path"
             fi
-            cwd_b64=$(printf '%s' "$cwd" | /usr/bin/base64 | tr -d '\n')
+            cwd_b64=$(printf '%s' "$cwd" | base64 | tr -d '\n')
             card_field=""
             if [ -n "$SICH_CARD_ID" ]; then
                 card_field=",\"sich_card_id\":\"$SICH_CARD_ID\""

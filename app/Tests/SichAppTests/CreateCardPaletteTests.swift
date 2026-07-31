@@ -28,7 +28,7 @@ private func makePalette(
         contentRect: root.frame, styleMask: [.titled], backing: .buffered, defer: false)
     window.contentView = root
     window.makeKeyAndOrderFront(nil)
-    window.makeFirstResponder(palette)
+    palette.focusStage()          // exactly what the shell's mount does
     root.layoutSubtreeIfNeeded()
     return (palette, root, window)
 }
@@ -82,6 +82,8 @@ private let kReturn: UInt16 = 36
     var captured: (title: String, dir: String)?
     palette.confirmSahaNew = { title, dir in captured = (title, dir); return nil }
 
+    #expect(palette.stage == .destination)
+    pressKey(kReturn, chars: "\r", in: window)     // "This Mac"
     #expect(palette.stage == .project)
     pressKey(kReturn, chars: "\r", in: window)     // pick the recent project
     #expect(palette.stage == .harness)
@@ -111,6 +113,7 @@ private let kReturn: UInt16 = 36
     var boundFolder: URL?
     palette.confirmSahaExisting = { folder, _ in boundFolder = folder; return nil }
 
+    pressKey(kReturn, chars: "\r", in: window)     // "This Mac"
     pressKey(kReturn, chars: "\r", in: window)     // project
     pressKey(kReturn, chars: "\r", in: window)     // harness → task
     #expect(palette.stage == .task)
@@ -135,6 +138,7 @@ private let kReturn: UInt16 = 36
         captured = (title, dir, harness, inWorktree)
     }
 
+    pressKey(kReturn, chars: "\r", in: window)     // "This Mac"
     pressKey(kReturn, chars: "\r", in: window)     // project
     pressKey(kReturn, chars: "\r", in: window)     // harness (Claude Code) → task
     #expect(palette.stage == .task)
@@ -168,6 +172,7 @@ private let kReturn: UInt16 = 36
     var captured: CreateCardPalette.Harness?
     palette.confirmInteractive = { _, _, harness, _ in captured = harness }
 
+    pressKey(kReturn, chars: "\r", in: window)     // "This Mac"
     pressKey(kReturn, chars: "\r", in: window)     // project
     pressKey(125, in: window)                      // harness: Claude → Codex
     pressKey(kReturn, chars: "\r", in: window)     // Codex → task
@@ -191,6 +196,7 @@ private let kReturn: UInt16 = 36
     var captured: Bool?
     palette.confirmInteractive = { _, _, _, inWorktree in captured = inWorktree }
 
+    pressKey(kReturn, chars: "\r", in: window)     // "This Mac"
     pressKey(kReturn, chars: "\r", in: window)     // project
     pressKey(kReturn, chars: "\r", in: window)     // harness → task
 
@@ -204,13 +210,13 @@ private let kReturn: UInt16 = 36
     #expect(captured == true, "toggled-on worktree reaches confirmInteractive")
 }
 
-/// Esc at the project stage cancels — a real key event reaches `onCancel`.
+/// Esc at the first stage cancels — a real key event reaches `onCancel`.
 @MainActor
-@Test func escapeAtProjectStageCancels() throws {
+@Test func escapeAtFirstStageCancels() throws {
     let (palette, _, window) = makePalette(
         recents: [PaletteProject(path: "/tmp/demo-project", activeCards: 0)], folders: [])
     var cancelled = false
     palette.onCancel = { cancelled = true }
-    pressKey(53, in: window)   // esc
+    pressKey(53, chars: "\u{1b}", in: window)   // esc, carrying the character a real key sends
     #expect(cancelled)
 }
