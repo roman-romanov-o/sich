@@ -281,6 +281,13 @@ public final class SessionsPoller {
             changed = true
             let key = DiffKey(host: diff.host, sessionID: diff.sessionID)
             var turns = diffsBySession[key, default: []]
+            // A fresh diff arriving with a LOWER iteration than the pile means the
+            // forwarder re-based after a commit and restarted its counter: everything
+            // accumulated is pre-commit history the operator already kept. Start the
+            // session's checkpoint list over (deliveredDiffs stays — replay guard).
+            if let last = turns.last, diff.iteration < last.iteration {
+                turns.removeAll()
+            }
             // Insert in iteration order WITHOUT sorting: two Stops inside one turn are
             // two distinct diffs under one iteration, and a sort is not stable — the
             // pair would reorder arbitrarily between polls. Arrival order breaks the tie.

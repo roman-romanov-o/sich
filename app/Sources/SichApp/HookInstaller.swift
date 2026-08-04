@@ -412,6 +412,15 @@ if [ -n "$session" ] && [ -n "$cwd" ] && git -C "$cwd" rev-parse --git-dir >/dev
         return "$result"
     }
     if [ "$event" = "UserPromptSubmit" ]; then
+        # A commit closes the review window: when HEAD moved since the last turn,
+        # the piled-up iterations are history the operator already kept, so the
+        # counter and the whole-session base both start over from the new HEAD.
+        head_now=$(git -C "$cwd" rev-parse HEAD 2>/dev/null)
+        head_seen=$(cat "$state_dir/head" 2>/dev/null)
+        if [ -n "$head_seen" ] && [ "$head_now" != "$head_seen" ]; then
+            rm -f "$state_dir/iteration" "$state_dir/session-checkpoint" 2>/dev/null
+        fi
+        printf '%s' "$head_now" > "$state_dir/head"
         iteration=$(cat "$state_dir/iteration" 2>/dev/null)
         iteration=$((${iteration:-0} + 1))
         printf '%s' "$iteration" > "$state_dir/iteration"
@@ -420,7 +429,7 @@ if [ -n "$session" ] && [ -n "$cwd" ] && git -C "$cwd" rev-parse --git-dir >/dev
              if [ -z "$base" ]; then base=$(git -C "$1" rev-parse HEAD 2>/dev/null); fi; \
              printf "%s" "$base" > "$3"' \
             sh "$cwd" "$iteration" "$state_dir/checkpoint"
-        if [ "$iteration" -eq 1 ]; then
+        if [ ! -s "$state_dir/session-checkpoint" ]; then
             cp "$state_dir/checkpoint" "$state_dir/session-checkpoint" 2>/dev/null
         fi
     elif [ "$event" = "Stop" ] && [ -s "$state_dir/checkpoint" ]; then

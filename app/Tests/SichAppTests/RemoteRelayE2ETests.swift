@@ -154,6 +154,43 @@ struct RemoteRelayE2ETests {
         #expect(Set(diffs.all.map(\.host)) == ["alpha.invalid", "beta.invalid"])
     }
 
+    /// Checklist item 3, app side — when the forwarder re-bases after a commit its
+    /// iteration counter restarts at 1; a fresh diff arriving BELOW the session's
+    /// pile means everything accumulated is pre-commit history the operator already
+    /// kept, so the checkpoint list starts over instead of stacking "iter 100".
+    @Test("a post-commit iteration-1 diff clears the session's pre-commit pile")
+    @MainActor func lowerIterationRestartsTheSessionsCheckpointPile() async throws {
+        let far = try RelayHost()
+        defer { far.tearDown() }
+        try far.write([])
+
+        let local = try LocalSink()
+        defer { local.tearDown() }
+        try local.seed(#"{"hook_event_name":"SessionStart","session_id":"local-only"}"#)
+
+        let diffs = DiffBox()
+        let poller = SessionsPoller(
+            eventsFile: local.file, interval: 86_400,
+            diffSink: { diffs.set($0) }, sink: { _ in })
+        poller.start()
+        await poller.drainForTesting()
+        poller.attachRemoteHost(far.spec, transport: far.transport)
+        defer { poller.stop() }
+
+        // Two pre-commit turns pile up…
+        try far.append(far.diff(iteration: 1, body: "--- a/x\n+++ b/x\n@@\n+one\n"))
+        try far.append(far.diff(iteration: 2, body: "--- a/x\n+++ b/x\n@@\n+two\n"))
+        #expect(await waitUntil { diffs.all.count == 2 })
+
+        // …then the operator commits and the forwarder restarts at iteration 1.
+        try far.append(far.diff(iteration: 1, body: "--- a/y\n+++ b/y\n@@\n+fresh\n"))
+        #expect(await waitUntil { diffs.all.count == 1 },
+                "the pre-commit pile must be dropped — got \(diffs.all.count) turns")
+        let kept = try #require(diffs.all.first)
+        #expect(kept.unifiedDiff.contains("+fresh"),
+                "the surviving turn is the post-commit one, not kept history")
+    }
+
     // MARK: - TC-E2E-002 / AC-2: `sich_host` is stamped by US, at ingestion
 
     @Test("TC-E2E-002 / AC-2: the channel stamps sich_host — the bytes cannot")

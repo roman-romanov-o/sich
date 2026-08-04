@@ -64,6 +64,41 @@ final class ForwarderPortabilityTests: XCTestCase {
             "the forwarder invoked plutil, which no Linux host has")
     }
 
+    /// Checklist item 3 — a commit closes the review window. The turn after HEAD
+    /// moves must restart the iteration counter at 1 and re-base the whole-session
+    /// diff on the new HEAD, so a committed session stops dragging "iter 100" and
+    /// a FILES CHANGED pile of history the operator already kept.
+    func testCommitResetsIterationAndRebasesSessionDiff() throws {
+        let jail = try Jail()
+        defer { jail.tearDown() }
+
+        // Turn 1: pre-commit work.
+        try jail.runForwarder(event: "UserPromptSubmit")
+        try "hello from the turn\n".write(
+            to: jail.repo.appendingPathComponent("app.txt"), atomically: true, encoding: .utf8)
+        try jail.runForwarder(event: "Stop")
+        let first = try XCTUnwrap(jail.turnDiffLine())
+        XCTAssertEqual((first["iteration"] as? NSNumber)?.intValue, 1)
+
+        // The operator keeps the work.
+        try jail.commitAll("keep the turn")
+
+        // The turn after the commit: counter restarts, session base moves to HEAD.
+        try jail.runForwarder(event: "UserPromptSubmit")
+        try "post-commit line\n".write(
+            to: jail.repo.appendingPathComponent("fresh.txt"), atomically: true, encoding: .utf8)
+        try jail.runForwarder(event: "Stop")
+
+        let diff = try XCTUnwrap(jail.turnDiffLine())
+        XCTAssertEqual((diff["iteration"] as? NSNumber)?.intValue, 1,
+                       "a commit must restart the iteration counter")
+        let session = try decoded(diff, "session_diff_base64")
+        XCTAssertTrue(session.contains("post-commit line"))
+        XCTAssertFalse(
+            session.contains("hello from the turn"),
+            "the session diff must re-base past the commit — kept history is not review debt")
+    }
+
     private func decoded(_ line: [String: Any], _ key: String) throws -> String {
         let raw = try XCTUnwrap(line[key] as? String, "\(key) missing")
         let data = try XCTUnwrap(Data(base64Encoded: raw), "\(key) is not valid base64")
@@ -155,6 +190,12 @@ final class ForwarderPortabilityTests: XCTestCase {
             try git(["config", "user.name", "Sich Test"])
             try git(["add", "-A"])
             try git(["commit", "-q", "-m", "seed"])
+        }
+
+        /// The operator's commit between turns — what the forwarder must notice.
+        func commitAll(_ message: String) throws {
+            try git(["add", "-A"])
+            try git(["commit", "-q", "-m", message])
         }
 
         private func git(_ args: [String]) throws {
