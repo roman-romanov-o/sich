@@ -26,47 +26,63 @@ import Testing
 @Suite(.serialized)
 struct HostChipRenderTests {
 
-    // MARK: - AC-4: four distinct renderings
+    // MARK: - AC-4: distinct renderings, and a healthy host renders nothing
 
-    @Test func everyInstallStateRendersItsOwnSentence() throws {
+    /// The chip carries only the detail — the card's project label already names
+    /// the destination, and the old `user@host — detail` form truncated away the
+    /// actionable half on a normal card width.
+    @Test func everyProblemStateRendersItsOwnSentence() throws {
         var rendered: [RemoteHookInstallState: String] = [:]
-        for state in RemoteHookInstallState.allCases {
+        for state in RemoteHookInstallState.allCases where state.chipDetail != nil {
             let chip = try chip(forRemote: state, destination: "roman@render.invalid")
             rendered[state] = chip.stringValue
-            #expect(chip.stringValue.hasPrefix("roman@render.invalid"))
+            #expect(!chip.stringValue.contains("roman@render.invalid"),
+                    "the destination lives on the repo chip, not here")
         }
 
-        #expect(rendered[.installed] == "roman@render.invalid")
-        #expect(rendered[.notInstalled] == "roman@render.invalid — hooks not installed")
-        #expect(rendered[.staleVersion] == "roman@render.invalid — hooks outdated")
-        #expect(rendered[.unknown] == "roman@render.invalid — hook status unknown")
-        #expect(Set(rendered.values).count == RemoteHookInstallState.allCases.count)
+        #expect(rendered[.notInstalled] == "hooks not installed")
+        #expect(rendered[.staleVersion] == "hooks outdated")
+        #expect(rendered[.unknown] == "hook status unknown")
+        #expect(Set(rendered.values).count == rendered.count)
+    }
+
+    /// A healthy remote host says nothing at all — the chip is a signal, not
+    /// decoration; repeating the destination beside the identical project label
+    /// was the visual noise the checklist flagged.
+    @Test func aHealthyRemoteHostRendersNoChip() throws {
+        let view = SessionCard(
+            card: remoteCard(destination: "roman@calm.invalid"), hostState: { _ in .installed })
+        #expect(hostChip(in: view) == nil)
     }
 
     /// The fix that must never regress: a host we could not read is NOT a healthy
-    /// host. Same-looking chips would silently claim coverage we do not have.
+    /// host. Silence would claim coverage we do not have, so `unknown` keeps a chip
+    /// where `installed` has none.
     @Test func unknownIsNeverRenderedAsInstalled() throws {
         let unknown = try chip(forRemote: .unknown, destination: "roman@dark.invalid")
-        let installed = try chip(forRemote: .installed, destination: "roman@dark.invalid")
+        let installed = SessionCard(
+            card: remoteCard(destination: "roman@dark.invalid"), hostState: { _ in .installed })
 
-        #expect(unknown.stringValue != installed.stringValue)
+        #expect(hostChip(in: installed) == nil)
         #expect(unknown.stringValue.contains("unknown"))
-        // Inert, but for a different reason than `installed`: nothing to fix vs.
-        // nothing we know. Neither offers a click.
+        // Inert: we could not read the host, so a click would be a guess.
         #expect(!unknown.status.isActionable)
-        #expect(!installed.status.isActionable)
     }
 
-    /// Actionable states are the only ones that look clickable, and they say what
-    /// the click would do.
+    /// Actionable states are the only ones that look clickable, and the tooltip
+    /// names the host the click would touch — the one place the destination
+    /// still appears on the chip.
     @Test func onlyActionableStatesAreTintedAndClickable() throws {
-        for state in RemoteHookInstallState.allCases {
+        for state in RemoteHookInstallState.allCases where state.chipDetail != nil {
             let chip = try chip(forRemote: state, destination: "roman@tint.invalid")
             let actionable = state == .notInstalled || state == .staleVersion
             #expect(chip.status.isActionable == actionable)
             #expect((chip.textColor == BoardTheme.attention) == actionable)
             #expect((chip.toolTip != nil) == actionable)
             #expect((chip.themedBackground != nil) == actionable)
+            if actionable {
+                #expect(chip.toolTip?.contains("roman@tint.invalid") == true)
+            }
         }
     }
 
@@ -119,7 +135,7 @@ struct HostChipRenderTests {
         #expect(!(mounted is NSButton))
         // No probe has run, so the honest reading is "we do not know" — never
         // silence and never "installed".
-        #expect(chip.stringValue == "roman@chip.invalid — hook status unknown")
+        #expect(chip.stringValue == "hook status unknown")
     }
 
     // MARK: - AC-7: a real click installs
@@ -148,10 +164,11 @@ struct HostChipRenderTests {
     }
 
     /// The negative: an inert chip does not eat the gesture. The click point
-    /// belongs to the card, so drill-in still works over a healthy host chip.
+    /// belongs to the card, so drill-in still works over an unknown-status chip
+    /// (`installed` no longer mounts a chip at all — see the render tests above).
     @Test func anInertChipNeitherInstallsNorSwallowsTheClick() throws {
         let destination = "roman@healthy.invalid"
-        let (root, window, card) = try mounted(state: .installed, destination: destination)
+        let (root, window, card) = try mounted(state: .unknown, destination: destination)
         defer { window.orderOut(nil) }
         let chip = try #require(hostChip(in: card))
 

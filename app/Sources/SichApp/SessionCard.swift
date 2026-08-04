@@ -338,10 +338,14 @@ final class SessionCard: NSView, NSDraggingSource {
     // MARK: - Host chip (US-005 AC-4, AC-7)
 
     /// What this card can say about where it runs. `nil` for an ordinary local
-    /// card that is being observed normally — there is nothing to report.
+    /// card that is being observed normally — there is nothing to report. A
+    /// healthy remote host is equally silent: the destination is already the
+    /// card's project label, so a chip repeating it was pure noise.
     func hostChipStatus() -> HostChipStatus? {
         if let destination = Self.remoteDestination(of: card) {
-            return .remote(destination: destination, state: hostState(destination))
+            let state = hostState(destination)
+            guard state.chipDetail != nil else { return nil }
+            return .remote(destination: destination, state: state)
         }
         // A card nothing has ever reported on. Saying only "unknown" would leave
         // the operator guessing whether the hooks are broken; they are not — this
@@ -487,8 +491,10 @@ enum HostChipStatus: Equatable {
     var text: String {
         switch self {
         case .remote(let destination, let state):
-            guard let detail = state.chipDetail else { return destination }
-            return "\(destination) — \(detail)"
+            // The detail alone — the card's project label already names the
+            // destination, and the old "user@host — detail" form was long enough
+            // that truncation routinely ate the part the operator could act on.
+            return state.chipDetail ?? destination
         case .notStartedBySich:
             return "not started by Sich"
         }
@@ -523,7 +529,8 @@ final class HostChip: ChipLabel {
         identifier = NSUserInterfaceItemIdentifier("host-chip")
         font = BoardTheme.chip
         textColor = status.isActionable ? BoardTheme.attention : BoardTheme.textDim
-        toolTip = status.isActionable ? "Install Sich's hooks on this host" : nil
+        toolTip = status.isActionable
+            ? status.destination.map { "Install Sich's hooks on \($0)" } : nil
         setAccessibilityLabel(status.text)
         // Fill only where a click does something: a healthy or unreadable host
         // stays as quiet as the repo chip beside it.

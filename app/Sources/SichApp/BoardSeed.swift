@@ -123,7 +123,10 @@ extension BoardSeed {
         let key = try RemoteSessionKey.make(for: spec)
         return BoardSeed(
             sessionID: sessionID ?? key.sessionID,
-            title: title ?? "\(spec.target) · \(key.session)",
+            // The tmux session name alone — the host already anchors the card as
+            // its project label, so repeating it in the title triple-printed the
+            // destination on one card face.
+            title: title ?? key.session,
             // `projectDir` is a display/label field for a remote card (no local path);
             // show the ssh destination so drill-in and the card subtitle read sensibly.
             projectDir: spec.target,
