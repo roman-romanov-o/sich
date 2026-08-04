@@ -26,6 +26,9 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// Backlog storage and its page remain implemented, but the unfinished section
     /// has no board or menu entry point until it is ready to ship.
     let backlogPage = BacklogPage()
+    /// The dedicated view for tasks archived off the DONE column (checklist:
+    /// "DONE column need to be archived time to time").
+    let archivePage = ArchivePage()
     let drillIn = DrillInPanel()
     let planningMode = PlanningModeView()
     private(set) var sahaTaskChooser: SahaTaskChooserView?
@@ -99,6 +102,10 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     var taskStore: BoardTaskStore?
     /// Backlog: durable task intent with no session yet. Array order = render order.
     private(set) var backlogTasks: [TaskRecord] = []
+    /// Archived tasks: finished work that left the board but stays durable in the
+    /// task book (`archivedAt != nil`). Rendered only by ``archivePage`` — never a
+    /// card, so a long history stops taxing every board refresh.
+    private(set) var archivedTasks: [TaskRecord] = []
     /// The per-card slice of a ``TaskRecord`` the board model doesn't hold itself
     /// (description, launch mode, creation time) — joined by card id and written
     /// into the task book on every mutation.
@@ -497,12 +504,56 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             return
         }
         for record in book.tasks {
-            switch record.placement {
-            case .backlog: backlogTasks.append(record)
-            case .board(let state): adoptBoardRecord(record, state: state)
-            }
+            adoptRecord(record)
         }
         persistTasks()
+    }
+
+    /// Route one loaded record. Already-archived records rejoin the archive; a
+    /// record finished in a PREVIOUS session archives NOW — that is the "time to
+    /// time": every launch sweeps yesterday's DONE column into the archive, so the
+    /// board only ever shows work finished since it last opened.
+    private func adoptRecord(_ record: TaskRecord) {
+        if record.archivedAt != nil {
+            adoptArchivedRecord(record)
+            return
+        }
+        switch record.placement {
+        case .backlog: backlogTasks.append(record)
+        case .board(.done): archiveOnLaunch(record)
+        case .board(let state): adoptBoardRecord(record, state: state)
+        }
+    }
+
+    private func adoptArchivedRecord(_ record: TaskRecord) {
+        archivedTasks.append(record)
+        discardRestoredCard(id: record.id)
+    }
+
+    private func archiveOnLaunch(_ record: TaskRecord) {
+        var archived = record
+        archived.archivedAt = Date()
+        adoptArchivedRecord(archived)
+    }
+
+    /// The session snapshot may have restored (and re-spawned a shell for) a card
+    /// the book says is archived — tear that card down so the task lives ONLY in
+    /// the archive. Same teardown as ``deleteCard`` minus the worktree removal:
+    /// archiving preserves the work, deleting destroys it.
+    private func discardRestoredCard(id: UUID) {
+        guard cards.contains(where: { $0.id == id }) else { return }
+        let pty = ptyByCard.removeValue(forKey: id)
+        pty?.terminate()
+        if let pty, let dead = registry.all.first(where: { $0.pty === pty }) {
+            registry.remove(id: dead.id)
+        }
+        cards.removeAll { $0.id == id }
+        deadCardIDs.remove(id)
+        idleHoldUntil.removeValue(forKey: id)
+        codexChoiceWaitingCardIDs.remove(id)
+        lastCardStates.removeValue(forKey: id)
+        taskMetaByCard.removeValue(forKey: id)
+        manuallyDoneCardIDs.remove(id)
     }
 
     /// One board-placed record rejoins the board: its metadata attaches to the
@@ -545,7 +596,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         let board = cards
             .filter { !seededCardIDs.contains($0.id) }
             .map(taskRecord(for:))
-        _ = try? taskStore.save(tasks: backlogTasks + board)
+        _ = try? taskStore.save(tasks: backlogTasks + board + archivedTasks)
     }
 
     /// A board card's durable record. Placement goes through
@@ -1120,6 +1171,8 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         layoutFullWindow(planningMode, in: root)
         backlogPage.isHidden = true
         layoutFullWindow(backlogPage, in: root)
+        archivePage.isHidden = true
+        layoutFullWindow(archivePage, in: root)
         layoutFullWindow(taskSwitcher, in: root)   // last = topmost: floats over any mode
         return root
     }
@@ -1212,6 +1265,8 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             }
         }
         backlogPage.onDelete = { [weak self] in self?.deleteBacklogTask(id: $0.id) }
+        boardView.onShowArchive = { [weak self] in self?.showArchivePage() }
+        archivePage.onReturn = { [weak self] in self?.hideArchivePage() }
         attention.onActivate = { [weak self] in self?.activateAttention() }
         drillIn.onTerminalSmaller = { [weak self] in self?.changeTerminalFont(by: -1) }
         drillIn.onTerminalLarger = { [weak self] in self?.changeTerminalFont(by: 1) }
@@ -1652,6 +1707,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         boardView.isHidden = true
         attention.isHidden = true
         backlogPage.isHidden = true
+        archivePage.isHidden = true
         quota.isHidden = true
         drillIn.isHidden = true
         planningMode.show(card: card)
@@ -1830,6 +1886,28 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         window?.makeFirstResponder(boardView)
     }
 
+    // MARK: - Archive page (the DONE column's history)
+
+    /// Swap the board chrome for the archive ledger (the archive icon beside DONE).
+    func showArchivePage() {
+        archivePage.render(archivedTasks)
+        boardView.isHidden = true
+        attention.isHidden = true
+        quota.isHidden = true
+        archivePage.isHidden = false
+        window?.makeFirstResponder(archivePage)
+    }
+
+    /// Esc / "← board": restore the board exactly as left.
+    func hideArchivePage() {
+        archivePage.isHidden = true
+        boardView.isHidden = false
+        attention.isHidden = false
+        quota.isHidden = false
+        refresh()
+        window?.makeFirstResponder(boardView)
+    }
+
     /// A card was dragged to another column → set its state to that column's state
     /// (a manual lifecycle override). Identity and PTY are preserved, so a drilled-in
     /// terminal keeps working; only the state — hence the board column — changes.
@@ -1939,6 +2017,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         boardView.isHidden = true
         attention.isHidden = true
         backlogPage.isHidden = true
+        archivePage.isHidden = true
         quota.isHidden = true
         drillIn.isHidden = false
         drillIn.focus(card: card, pty: pty, terminalFontSize: terminalFontSize)
@@ -2021,6 +2100,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         boardView.isHidden = false
         attention.isHidden = false
         backlogPage.isHidden = true
+        archivePage.isHidden = true
         quota.isHidden = false
         drillIn.isHidden = true
         // Release the planning terminal's view (the pump resumes draining its fd) but
@@ -2123,6 +2203,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         notifyNewlyDone()
         boardView.render(cards: selection.visibleCards(from: shown))
         if !backlogPage.isHidden { backlogPage.render(backlogTasks) }
+        if !archivePage.isHidden { archivePage.render(archivedTasks) }
         if includeQuota {
             quota.render(gauges: QuotaProjection.gauges(from: quotaSources), cards: shown)
         }

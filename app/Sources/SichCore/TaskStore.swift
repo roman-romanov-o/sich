@@ -86,6 +86,11 @@ public struct TaskRecord: Codable, Sendable, Equatable, Identifiable {
     /// `user@host` label where a local task has a cwd, and no revival can rebuild
     /// the attach. Optional on disk: older books decode without a version bump.
     public var remote: RemoteSpecSnapshot?
+    /// When this task left the board for the archive. Non-nil means the task no
+    /// longer renders as a card at all — it lives in the archive view, keeping the
+    /// DONE column (and the per-refresh card rebuild) lean while the record itself
+    /// stays durable. Optional on disk: older books decode without a version bump.
+    public var archivedAt: Date?
 
     public init(
         id: UUID = UUID(),
@@ -99,7 +104,8 @@ public struct TaskRecord: Codable, Sendable, Equatable, Identifiable {
         createdAt: Date = Date(),
         sessionRef: TaskSessionRef? = nil,
         accumulatedWorkingTime: TimeInterval? = nil,
-        remote: RemoteSpecSnapshot? = nil
+        remote: RemoteSpecSnapshot? = nil,
+        archivedAt: Date? = nil
     ) {
         self.id = id
         self.title = title
@@ -113,6 +119,7 @@ public struct TaskRecord: Codable, Sendable, Equatable, Identifiable {
         self.sessionRef = sessionRef
         self.accumulatedWorkingTime = accumulatedWorkingTime
         self.remote = remote
+        self.archivedAt = archivedAt
     }
 }
 

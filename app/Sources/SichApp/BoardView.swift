@@ -25,6 +25,8 @@ final class BoardView: NSView {
     /// A card's "Delete Task…" context item was picked — the host confirms, tears
     /// down the session + its worktree, and removes the card.
     var onDelete: ((BoardCard) -> Void)?
+    /// The archive icon beside DONE was tapped — the host opens the archive page.
+    var onShowArchive: (() -> Void)?
 
     /// The v5 column groups, left→right.
     enum ColumnGroup: CaseIterable {
@@ -197,6 +199,7 @@ final class BoardView: NSView {
         countLabels[group] = count
         row.addArrangedSubview(count)
         if group == .queue { row.addArrangedSubview(createButton()) }
+        if group == .done { row.addArrangedSubview(archiveButton()) }
         row.addArrangedSubview(trail)
         lead.widthAnchor.constraint(equalTo: trail.widthAnchor).isActive = true
         return row
@@ -254,6 +257,37 @@ final class BoardView: NSView {
     }
 
     @objc private func createTapped() { onCreate?() }
+
+    /// The way OUT of the board's history: finished work leaves for the archive on
+    /// the next launch, and this icon beside DONE is where the operator reads it.
+    /// Same yielded 490-priority sizing as ``createButton()`` — a required fixed
+    /// size here would become a window-wide minimum (the 750-priority trap).
+    private func archiveButton() -> NSButton {
+        let configuration = NSImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
+        let image = NSImage(
+            systemSymbolName: "archivebox",
+            accessibilityDescription: "View archive"
+        )?.withSymbolConfiguration(configuration)
+        let button = NSButton(image: image ?? NSImage(), target: self, action: #selector(archiveTapped))
+        button.identifier = NSUserInterfaceItemIdentifier("show-archive")
+        button.title = ""
+        button.toolTip = "View archived tasks"
+        button.setAccessibilityLabel("View archived tasks")
+        button.setButtonType(.momentaryPushIn)
+        button.isBordered = false
+        button.contentTintColor = BoardTheme.textFaint
+        button.imagePosition = .imageOnly
+        button.imageScaling = .scaleProportionallyDown
+        button.translatesAutoresizingMaskIntoConstraints = false
+        let width = button.widthAnchor.constraint(equalToConstant: 30)
+        let height = button.heightAnchor.constraint(equalToConstant: 30)
+        width.priority = .init(490)
+        height.priority = .init(490)
+        NSLayoutConstraint.activate([width, height])
+        return button
+    }
+
+    @objc private func archiveTapped() { onShowArchive?() }
 
     private func addRightHairline(to column: NSView) {
         let line = NSView()
