@@ -342,7 +342,16 @@ final class SessionCard: NSView, NSDraggingSource {
     /// healthy remote host is equally silent: the destination is already the
     /// card's project label, so a chip repeating it was pure noise.
     func hostChipStatus() -> HostChipStatus? {
-        if let destination = Self.remoteDestination(of: card) {
+        Self.chipStatus(for: card, hostState: hostState)
+    }
+
+    /// The chip derivation as a pure function of card + host state, so the board's
+    /// render diff can ask "would this card's chip read differently now?" without
+    /// building a view to find out.
+    static func chipStatus(
+        for card: BoardCard, hostState: (String) -> RemoteHookInstallState
+    ) -> HostChipStatus? {
+        if let destination = remoteDestination(of: card) {
             let state = hostState(destination)
             guard state.chipDetail != nil else { return nil }
             return .remote(destination: destination, state: state)

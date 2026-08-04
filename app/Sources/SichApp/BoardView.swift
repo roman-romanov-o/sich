@@ -84,6 +84,9 @@ final class BoardView: NSView {
     /// Per-column count captions, updated on every render.
     private var countLabels: [ColumnGroup: NSTextField] = [:]
     private var lastCards: [BoardCard] = []
+    /// What each cell was last populated from — the render diff's memory. Cleared
+    /// whenever the scaffold (and thus every cell) is rebuilt.
+    private var columnFaces: [ColumnGroup: [CardFace]] = [:]
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         themedBackground = BoardTheme.canvas
@@ -99,6 +102,7 @@ final class BoardView: NSView {
         constraints.forEach { $0.isActive = false }
         cells = [:]
         countLabels = [:]
+        columnFaces = [:]
         var previous: NSView?
         // Four equal columns: QUEUE → WORKING → NEEDS YOU → DONE. The unfinished
         // backlog UI stays out of this live-work surface.
@@ -304,40 +308,74 @@ final class BoardView: NSView {
 
     // MARK: - Render (called on every state change → live column moves)
 
-    /// Project a card snapshot onto the columns. Clearing + repopulating each cell
-    /// is the live-column-move mechanism (US-003 AC#3).
+    /// Everything a card view's face is built from: the card itself plus the host
+    /// chip reading, which lives OUTSIDE the card (`RemoteHookStatus`). When a
+    /// column's faces are unchanged, its existing views are provably identical to
+    /// what a rebuild would produce, so the cell is left alone.
+    private struct CardFace: Equatable {
+        let card: BoardCard
+        let chip: HostChipStatus?
+    }
+
+    /// Project a card snapshot onto the columns. Only columns whose cards changed
+    /// are repopulated — with a deep DONE/QUEUE ledger, tearing down and rebuilding
+    /// every card view (labels, layers, tracking areas, a heartbeat animation, a
+    /// duration timer each) on every live state flap of ONE active agent made the
+    /// whole app drag. Repopulating a changed cell is still the live-column-move
+    /// mechanism (US-003 AC#3).
     func render(cards: [BoardCard]) {
         lastCards = cards
-        for cell in cells.values {
-            cell.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        var byGroup: [ColumnGroup: [BoardCard]] = [:]
+        for card in cards {
+            byGroup[ColumnGroup.group(for: card.state), default: []].append(card)
         }
-        var counts: [ColumnGroup: Int] = [:]
-        var placed: [(group: Int, order: Int, view: SessionCard)] = []
-        for (order, card) in cards.enumerated() {
-            let group = ColumnGroup.group(for: card.state)
-            counts[group, default: 0] += 1
-            guard let cell = cells[group] else { continue }
-            let view = cardView(card)
-            cell.addArrangedSubview(view)
-            view.widthAnchor.constraint(equalTo: cell.widthAnchor).isActive = true
-            placed.append((groups.firstIndex(of: group) ?? 0, order, view))
-        }
-        // A clear filler at the end of each cell absorbs the column's slack height
-        // so cards pack at the top (the cell itself is stretched full-height to be
-        // a whole-column drop target).
-        for cell in cells.values {
-            let filler = NSView()
-            filler.setContentHuggingPriority(.init(1), for: .vertical)
-            cell.addArrangedSubview(filler)
+        for group in groups {
+            renderColumn(group, cards: byGroup[group] ?? [])
+            countLabels[group]?.stringValue =
+                countCaption(group, count: byGroup[group]?.count ?? 0)
         }
         // Keyboard order follows the model snapshot order. Visual placement still
         // happens by column above, but arrow-key traversal stays stable across live
         // state moves so focus does not jump when a card changes columns.
-        orderedCards = placed.sorted { $0.order < $1.order }.map(\.view)
+        orderedCards = orderedViews(for: cards)
         restoreKeyboardFocus()
-        for group in groups {
-            countLabels[group]?.stringValue = countCaption(group, count: counts[group] ?? 0)
+    }
+
+    private func renderColumn(_ group: ColumnGroup, cards: [BoardCard]) {
+        guard let cell = cells[group] else { return }
+        let faces = cards.map(face)
+        guard columnFaces[group] != faces else { return }
+        columnFaces[group] = faces
+        cell.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        for card in cards {
+            let view = cardView(card)
+            cell.addArrangedSubview(view)
+            view.widthAnchor.constraint(equalTo: cell.widthAnchor).isActive = true
         }
+        // A clear filler at the end of the cell absorbs the column's slack height
+        // so cards pack at the top (the cell itself is stretched full-height to be
+        // a whole-column drop target).
+        let filler = NSView()
+        filler.setContentHuggingPriority(.init(1), for: .vertical)
+        cell.addArrangedSubview(filler)
+    }
+
+    private func face(_ card: BoardCard) -> CardFace {
+        CardFace(card: card, chip: SessionCard.chipStatus(for: card) {
+            RemoteHookStatus.shared.state(for: $0)
+        })
+    }
+
+    /// The card views in model-snapshot order, gathered back out of the cells —
+    /// reused views for untouched columns, fresh ones for repopulated columns.
+    private func orderedViews(for cards: [BoardCard]) -> [SessionCard] {
+        var byID: [UUID: SessionCard] = [:]
+        for cell in cells.values {
+            for view in cell.arrangedSubviews.compactMap({ $0 as? SessionCard }) {
+                byID[view.card.id] = view
+            }
+        }
+        return cards.compactMap { byID[$0.id] }
     }
 
     func applyFontScale() {
