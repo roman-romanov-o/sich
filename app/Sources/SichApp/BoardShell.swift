@@ -433,11 +433,30 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     /// Drop a dead card: close its (already-reaped) pty fd and take it off the board.
+    /// A REMOTE card is the exception — its dead child is `ssh`, a dropped LINK, not
+    /// a finished task: tmux keeps the far side running, so the card stays and goes
+    /// idle until the next drill-in re-attaches it.
     private func removeDeadCard(_ cardID: UUID) {
         ptyByCard.removeValue(forKey: cardID)?.finish()   // child reaped; just closes the fd
-        cards.removeAll { $0.id == cardID }
         deadCardIDs.remove(cardID)
+        if demoteDeadRemoteCard(cardID) { return }
+        cards.removeAll { $0.id == cardID }
         refresh()
+    }
+
+    /// If `cardID` is a remote card, keep it on the board as session-less idle
+    /// (unless the operator marked it done) and persist that. Returns whether the
+    /// card was remote — i.e. whether removal must be skipped.
+    private func demoteDeadRemoteCard(_ cardID: UUID) -> Bool {
+        guard let index = cards.firstIndex(where: { $0.id == cardID }),
+              RemoteSessionKey.parse(sessionID: cards[index].sessionID) != nil
+        else { return false }
+        if !manuallyDoneCardIDs.contains(cardID) {
+            cards[index] = cards[index].with(state: .idle)
+        }
+        refresh()
+        persistTasks()
+        return true
     }
 
     // MARK: - Session resume (US-003) + shell integration (US-004)
@@ -492,7 +511,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     private func adoptBoardRecord(_ record: TaskRecord, state: CardState) {
         taskMetaByCard[record.id] = CardTaskMeta(
             details: record.details, mode: record.mode, createdAt: record.createdAt,
-            sessionRef: record.sessionRef
+            sessionRef: record.sessionRef, remote: record.remote?.spec
         )
         if state == .done { manuallyDoneCardIDs.insert(record.id) }
         if let index = cards.firstIndex(where: { $0.id == record.id }) {
@@ -500,9 +519,13 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
                 accumulatedWorkingTime: record.accumulatedWorkingTime ?? 0)
             return
         }
+        // A remote record keeps its `(host, session)` id — the string the duplicate
+        // guard and the host chip read — never a bare UUID that would let a second
+        // card claim the same far-side session.
+        let remoteID = record.remote.flatMap { try? RemoteSessionKey.make(for: $0.spec) }
         cards.append(BoardCard(
             id: record.id,
-            sessionID: record.id.uuidString,
+            sessionID: remoteID?.sessionID ?? record.id.uuidString,
             title: record.title.isEmpty ? nil : record.title,
             projectDir: record.projectDir ?? NSHomeDirectory(),
             agent: record.agent.flatMap(CardAgent.init(rawValue:)) ?? .claude,
@@ -542,8 +565,21 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             taskFolder: card.taskFolder,
             createdAt: meta.createdAt,
             sessionRef: sessionRef(for: card),
-            accumulatedWorkingTime: card.totalWorkingTime()
+            accumulatedWorkingTime: card.totalWorkingTime(),
+            remote: remoteSnapshot(for: card)
         )
+    }
+
+    /// A remote card's durable spec: prefer the live session's record (the freshest
+    /// truth), fall back to the meta carried from the loaded book so a save cycle
+    /// on a session-less card never costs the task its attach recipe.
+    private func remoteSnapshot(for card: BoardCard) -> RemoteSpecSnapshot? {
+        if let session = ptyByCard[card.id].flatMap({ pty in
+            registry.all.first { $0.pty === pty }
+        }), let spec = session.remoteSpec {
+            return RemoteSpecSnapshot(spec: spec)
+        }
+        return taskMetaByCard[card.id]?.remote.map(RemoteSpecSnapshot.init(spec:))
     }
 
     /// Resume hints only: the pinned Claude conversation id (if the card's session is
@@ -1484,7 +1520,9 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         cards.append(card)
         ptyByCard[card.id] = session.pty
         // The spec, not the argv: this is what a quit persists and the next launch
-        // rebuilds the same attach from (US-006).
+        // rebuilds the same attach from (US-006). It lives on the card's meta too,
+        // so the every-mutation task book carries it even if the session dies.
+        taskMetaByCard[card.id] = CardTaskMeta(mode: .interactive, remote: spec)
         session.recordRemoteSpec(spec)
         // Learn this host's hook state so the card's chip can say something true
         // about it (US-005). Inert unless the real executable enabled probing.
@@ -1917,6 +1955,11 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// longer exists locally (e.g. a remote card's `user@host` label) — the click
     /// stays inert rather than stranding a dead shell on the board.
     private func reviveSession(for card: BoardCard) -> PTYSession? {
+        // A remote card revives by RE-ATTACHING over ssh — before the local-dir
+        // guard, which its `user@host` label could never pass.
+        if let spec = remoteSpec(for: card) {
+            return reviveRemoteSession(spec: spec, card: card)
+        }
         let hint = taskMetaByCard[card.id]?.sessionRef
         let dir = hint?.lastCwd ?? card.projectDir
         var isDir: ObjCBool = false
@@ -1936,6 +1979,32 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             HookInstaller.installCodexShim()
             _ = session.pty.send(Array(Self.resumeCodexCommand().utf8))
         }
+        ptyByCard[card.id] = session.pty
+        persistTasks()
+        return session.pty
+    }
+
+    /// The spec a revival rebuilds the attach from: the durable meta first, then —
+    /// for books written before the spec was persisted — a best-effort parse of the
+    /// card's own `(host, session)` id and `user@host` label. A recovered spec may
+    /// lose a custom port; the next save persists the full spec going forward.
+    private func remoteSpec(for card: BoardCard) -> RemoteTmuxSpec? {
+        if let spec = taskMetaByCard[card.id]?.remote { return spec }
+        guard let key = RemoteSessionKey.parse(sessionID: card.sessionID) else { return nil }
+        return RemoteTmuxSpec.parse(destination: card.projectDir, sessionName: key.session)
+            ?? RemoteTmuxSpec(host: key.host, sessionName: key.session)
+    }
+
+    /// Re-attach a session-less remote card: tmux kept the far side exactly as the
+    /// operator left it, so revival is `ssh … tmux new-session -A` under the ORIGINAL
+    /// card id — and, like a restart restore, NO resume keystrokes are typed (they
+    /// would talk over whatever is already running in that session).
+    private func reviveRemoteSession(spec: RemoteTmuxSpec, card: BoardCard) -> PTYSession? {
+        guard let seed = try? BoardSeed.remoteTmux(
+            spec: spec, sessionID: card.sessionID, title: card.title,
+            cardID: card.id.uuidString, agent: card.agent
+        ), let session = launch(seed) else { return nil }
+        adoptRestoredRemote(spec, on: session)
         ptyByCard[card.id] = session.pty
         persistTasks()
         return session.pty
@@ -2327,4 +2396,8 @@ struct CardTaskMeta {
     /// didn't survive. Without this, the first save after adoption re-derives the
     /// ref from live sessions (there is none) and wipes the pinned conversation id.
     var sessionRef: TaskSessionRef?
+    /// The remote tmux spec for a remote card — the constructor's INPUT, kept at
+    /// the card level so the task book can persist it and a session-less remote
+    /// card can rebuild its attach on drill-in (the far side is still running).
+    var remote: RemoteTmuxSpec?
 }

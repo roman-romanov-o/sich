@@ -80,6 +80,12 @@ public struct TaskRecord: Codable, Sendable, Equatable, Identifiable {
     /// Cumulative seconds spent actively in WORKING. Optional on disk so task
     /// books written before duration tracking decode as zero without a version bump.
     public var accumulatedWorkingTime: TimeInterval?
+    /// The remote tmux session this task drives, when it is a remote card — the
+    /// constructor's INPUT spec (never an argv), same rule as the pane snapshot.
+    /// Without it, a remote task that outlives its ssh child has only a
+    /// `user@host` label where a local task has a cwd, and no revival can rebuild
+    /// the attach. Optional on disk: older books decode without a version bump.
+    public var remote: RemoteSpecSnapshot?
 
     public init(
         id: UUID = UUID(),
@@ -92,7 +98,8 @@ public struct TaskRecord: Codable, Sendable, Equatable, Identifiable {
         taskFolder: String? = nil,
         createdAt: Date = Date(),
         sessionRef: TaskSessionRef? = nil,
-        accumulatedWorkingTime: TimeInterval? = nil
+        accumulatedWorkingTime: TimeInterval? = nil,
+        remote: RemoteSpecSnapshot? = nil
     ) {
         self.id = id
         self.title = title
@@ -105,6 +112,7 @@ public struct TaskRecord: Codable, Sendable, Equatable, Identifiable {
         self.createdAt = createdAt
         self.sessionRef = sessionRef
         self.accumulatedWorkingTime = accumulatedWorkingTime
+        self.remote = remote
     }
 }
 
