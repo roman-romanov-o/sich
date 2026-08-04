@@ -184,6 +184,13 @@ final class DrillInPanel: NSView {
     private let sidebar = DrillInSidebar()
     private let terminalBody = NSView()
     private let changesView = ChangesView()
+    /// The draggable boundary between the terminal and the checkpoint sidebar.
+    /// Internal so a real mouse-drag test can dispatch events at it.
+    let paneDivider = PaneDivider()
+    private let paneLayout: PaneLayoutStore
+    private var sidebarWidthConstraint: NSLayoutConstraint?
+    /// Sidebar width when the current divider drag began; nil outside a drag.
+    private var dragStartWidth: CGFloat?
     private var surface: TerminalSurface?
     private var focusedCard: BoardCard?
     private var terminalFontSize: CGFloat = 20
@@ -192,7 +199,9 @@ final class DrillInPanel: NSView {
     /// diff pane is open so ChangesView's own "← Terminal" is the only nav there.
     private var headerHolder: NSView?
 
-    override init(frame frameRect: NSRect) {
+    init(frame frameRect: NSRect = .zero,
+         paneLayout: PaneLayoutStore = PaneLayoutStore()) {
+        self.paneLayout = paneLayout
         super.init(frame: frameRect)
         wantsLayer = true
         themedBackground = BoardTheme.canvas
@@ -275,10 +284,11 @@ final class DrillInPanel: NSView {
         return banner
     }
 
-    /// Body row: the terminal container fills the left, the 300pt sidebar rides right.
+    /// Body row: the terminal container fills the left, the sidebar (draggable
+    /// width, persisted) rides right behind a divider.
     private func buildBody() -> NSView {
         sidebar.translatesAutoresizingMaskIntoConstraints = false
-        let terminalRow = NSStackView(views: [termContainer, sidebar])
+        let terminalRow = NSStackView(views: [termContainer, paneDivider, sidebar])
         terminalRow.orientation = .horizontal
         terminalRow.alignment = .top
         terminalRow.spacing = 0
@@ -286,9 +296,15 @@ final class DrillInPanel: NSView {
         terminalBody.addSubview(terminalRow)
         changesView.translatesAutoresizingMaskIntoConstraints = false
         terminalBody.addSubview(changesView)
+        let sidebarWidth = sidebar.widthAnchor.constraint(
+            equalToConstant: paneLayout.width(
+                forKey: PaneLayoutStore.drillInSidebarWidthKey, default: 300))
+        sidebarWidthConstraint = sidebarWidth
+        wireDividerDrag()
         NSLayoutConstraint.activate([
-            sidebar.widthAnchor.constraint(equalToConstant: 300),
+            sidebarWidth,
             sidebar.heightAnchor.constraint(equalTo: terminalRow.heightAnchor),
+            paneDivider.heightAnchor.constraint(equalTo: terminalRow.heightAnchor),
             termContainer.heightAnchor.constraint(equalTo: terminalRow.heightAnchor),
             terminalRow.leadingAnchor.constraint(equalTo: terminalBody.leadingAnchor),
             terminalRow.trailingAnchor.constraint(equalTo: terminalBody.trailingAnchor),
@@ -301,6 +317,38 @@ final class DrillInPanel: NSView {
         ])
         changesView.isHidden = true
         return terminalBody
+    }
+
+    // MARK: - Draggable terminal/sidebar boundary
+
+    /// Test seam: the sidebar's current width as the drag/persistence sees it.
+    var sidebarPaneWidth: CGFloat { sidebarWidthConstraint?.constant ?? 0 }
+
+    private func wireDividerDrag() {
+        paneDivider.onDragStart = { [weak self] in
+            self?.dragStartWidth = self?.sidebarWidthConstraint?.constant
+        }
+        paneDivider.onDrag = { [weak self] delta in
+            guard let self, let dragStartWidth else { return }
+            // The divider sits left of the sidebar: dragging LEFT grows the sidebar.
+            setSidebarWidth(dragStartWidth - delta)
+        }
+        paneDivider.onDragEnd = { [weak self] in
+            guard let self else { return }
+            dragStartWidth = nil
+            paneLayout.setWidth(sidebarPaneWidth,
+                                forKey: PaneLayoutStore.drillInSidebarWidthKey)
+        }
+    }
+
+    private func setSidebarWidth(_ proposed: CGFloat) {
+        guard let constraint = sidebarWidthConstraint else { return }
+        let minSidebar: CGFloat = 220
+        let minTerminal: CGFloat = 400
+        let ceiling = terminalBody.bounds.width - PaneDivider.thickness - minTerminal
+        guard ceiling > minSidebar else { return }
+        constraint.constant = min(max(proposed, minSidebar), ceiling)
+        terminalBody.layoutSubtreeIfNeeded()
     }
 
     /// Focus a card's session: show its live embedded terminal, ready for input
