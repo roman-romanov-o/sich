@@ -1977,7 +1977,9 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         } else {
             // Display cards, not the model: the switcher is a second place the board
             // "reads" a state, and it must not offer a frozen `working` either (US-007).
-            let drillable = displayCards().filter { ptyByCard[$0.id] != nil }
+            // Done cards are finished work — they stay reachable from the board but
+            // don't belong in a quick-switch rotation.
+            let drillable = displayCards().filter { $0.state != .done && ptyByCard[$0.id] != nil }
             let ordered = TaskSwitcherOverlay.ordered(cards: drillable, mru: mruOrder)
             let current = drilledInCardID ?? planningModeCardID
             guard ordered.contains(where: { $0.id != current }) else { return }

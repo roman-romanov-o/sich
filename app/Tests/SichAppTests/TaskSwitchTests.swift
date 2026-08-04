@@ -157,6 +157,34 @@ struct TaskSwitchTests {
                 "the waiting card outranks earlier board positions")
     }
 
+    @Test("Done cards never appear in the switcher rotation")
+    func doneCardsExcluded() throws {
+        let shell = BoardShell(seeds: seeds([.running, .done, .running]))
+        shell.buildContentForTesting()
+        shell.drill(into: try #require(shell.cards.first))
+
+        _ = shell.handleTaskSwitchEvent(try chord(.control))
+        #expect(shell.switcherIsOpen == true)
+        #expect(shell.switcherSnapshot.allSatisfy { $0.state != .done },
+                "finished work must not be a quick-switch target")
+        #expect(shell.switcherSnapshot.count == 2)
+        _ = shell.handleTaskSwitchEvent(try flagsChanged([]))
+        #expect(shell.drilledInCardID == shell.cards[2].id,
+                "the only other live card wins, skipping the done one")
+    }
+
+    @Test("with only a done card besides the current one, the chord is a no-op")
+    func onlyDoneAlternativeNoOp() throws {
+        let shell = BoardShell(seeds: seeds([.running, .done]))
+        shell.buildContentForTesting()
+        let first = try #require(shell.cards.first)
+        shell.drill(into: first)
+
+        #expect(shell.handleTaskSwitchEvent(try chord(.control)) == nil)
+        #expect(shell.switcherIsOpen == false, "nowhere non-done to go → never opens")
+        #expect(shell.drilledInCardID == first.id)
+    }
+
     @Test("Esc closes the preview without switching; a closed switcher passes Esc on")
     func escCancels() throws {
         let shell = BoardShell(seeds: seeds([.running, .running]))
