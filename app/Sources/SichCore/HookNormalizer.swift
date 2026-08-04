@@ -31,6 +31,8 @@ public enum HookNormalizer {
         "Notification": .permissionRequest,
         "notification": .permissionRequest,
         "PermissionDenied": .errorExit,
+        "PreCompact": .compaction,
+        "pre_compact": .compaction,
         "SubagentStart": .subagentStart,
         "subagent_start": .subagentStart,
         "SubagentStop": .subagentStop,

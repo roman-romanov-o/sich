@@ -35,6 +35,13 @@ from the board.
    — all cases where the operator should look. Any new observed output while in
    this stalled state returns the card to WORKING and resets the timer.
 
+   2.2. **Compaction is WORKING.** While the agent rewrites its own context
+   (`PreCompact` through the `SessionStart` it re-emits on completion) the card
+   shows WORKING — compaction is autonomous work, not an operator wait. When
+   compaction completes the card returns to whatever it interrupted: a mid-turn
+   auto-compact resumes WORKING; a manual `/compact` typed after an ended turn
+   goes back to NEEDS YOU, since the agent is again waiting on the operator.
+
 3. **Turn ended, agent waiting for the user → NEEDS YOU.** The agent stopped
    (finished its turn, asked a question, requested permission) and is idle until
    the user types. This is the attention signal the whole board exists for.

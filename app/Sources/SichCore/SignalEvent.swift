@@ -15,6 +15,9 @@ public enum SignalKind: String, Sendable, Equatable {
     case subagentStop = "subagent-stop"
     case testRunStart = "test-run-start"
     case errorExit = "error-exit"
+    /// `PreCompact`: the agent is rewriting its own context — WORK, not a wait.
+    /// The `SessionStart` re-emitted when compaction completes closes the parenthesis.
+    case compaction
     case stop
     /// A clean end-of-session hook (`SessionEnd`): the run closed itself, so it goes
     /// straight to `done` with no 30s stale-decay wait. Distinct from a hard kill,

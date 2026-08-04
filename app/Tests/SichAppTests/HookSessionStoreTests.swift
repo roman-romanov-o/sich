@@ -107,4 +107,75 @@ struct HookSessionStoreTests {
         store.sweepStale(now: base.addingTimeInterval(31))
         #expect(store.entry(for: "killed")?.state == .waitingForInput)
     }
+
+    // MARK: - Compaction is WORK, never NEED YOU (checklist item 5)
+
+    /// A manual `/compact` is typed exactly on a Stop-ended card: the card must show
+    /// WORKING while claude rewrites its context (not NEED YOU, and no stall flip),
+    /// then return to the truthful NEED YOU when the re-emitted SessionStart closes
+    /// the parenthesis — with the turn latch intact, so a replayed tool line still
+    /// cannot re-open the ended turn but the operator's own prompt does.
+    @Test func manualCompactShowsWorkingThenRestoresThePromptWait() {
+        let store = HookSessionStore(stallThreshold: 30)
+        store.ingest([normalized(#"{"hook_event_name":"Stop","session_id":"s"}"#,
+                                 arrival: base)])
+        #expect(store.entry(for: "s")?.state == .waitingForInput)
+
+        store.ingest([normalized(#"{"hook_event_name":"PreCompact","session_id":"s"}"#,
+                                 arrival: base.addingTimeInterval(10))])
+        #expect(store.entry(for: "s")?.state == .running,
+                "compacting is work, not a request for the operator")
+        store.sweepStale(now: base.addingTimeInterval(35))
+        #expect(store.entry(for: "s")?.state == .running,
+                "an in-flight compaction inside the stall budget is not a stall")
+
+        store.ingest([normalized(#"{"hook_event_name":"SessionStart","session_id":"s"}"#,
+                                 arrival: base.addingTimeInterval(40))])
+        #expect(store.entry(for: "s")?.state == .waitingForInput,
+                "compaction done → claude is again waiting on the operator")
+        store.ingest([normalized(#"{"hook_event_name":"PostToolUse","session_id":"s"}"#,
+                                 arrival: base.addingTimeInterval(45))])
+        #expect(store.entry(for: "s")?.state == .waitingForInput,
+                "the restored turn latch still blocks replayed tool lines (US-008 AC-1)")
+        store.ingest([normalized(#"{"hook_event_name":"UserPromptSubmit","session_id":"s"}"#,
+                                 arrival: base.addingTimeInterval(50))])
+        #expect(store.entry(for: "s")?.state == .running)
+    }
+
+    /// Auto-compact fires mid-turn: WORKING before, during, and after — and the
+    /// completing SessionStart must not disturb the running state (it restores
+    /// `running`, the pre-compaction memory, not QUEUE).
+    @Test func autoCompactMidTurnStaysWorkingThroughout() {
+        let store = HookSessionStore(stallThreshold: 30)
+        for (offset, event) in [
+            (0.0, "UserPromptSubmit"), (5.0, "PreCompact"),
+            (10.0, "SessionStart"), (15.0, "PreToolUse"),
+        ] {
+            store.ingest([normalized(
+                #"{"hook_event_name":"\#(event)","session_id":"auto"}"#,
+                arrival: base.addingTimeInterval(offset))])
+            #expect(store.entry(for: "auto")?.state == .running,
+                    "\(event) must leave a mid-turn compaction WORKING")
+        }
+    }
+
+    /// A SessionStart with NO pending compaction keeps its long-standing neutrality:
+    /// a signal between PreCompact and SessionStart cancels the restore memory, so a
+    /// later resume cannot be hijacked into a stale state.
+    @Test func interveningSignalCancelsTheCompactionRestore() {
+        let store = HookSessionStore(stallThreshold: 30)
+        store.ingest([normalized(#"{"hook_event_name":"Stop","session_id":"c"}"#,
+                                 arrival: base)])
+        store.ingest([normalized(#"{"hook_event_name":"PreCompact","session_id":"c"}"#,
+                                 arrival: base.addingTimeInterval(5))])
+        // The operator types a real prompt before compaction reports completion:
+        // the prompt wins, and the SessionStart that follows must stay neutral
+        // (running survives) instead of restoring the remembered prompt-wait.
+        store.ingest([normalized(#"{"hook_event_name":"UserPromptSubmit","session_id":"c"}"#,
+                                 arrival: base.addingTimeInterval(8))])
+        store.ingest([normalized(#"{"hook_event_name":"SessionStart","session_id":"c"}"#,
+                                 arrival: base.addingTimeInterval(12))])
+        #expect(store.entry(for: "c")?.state == .running,
+                "a cancelled restore must not drag the card back to NEED YOU")
+    }
 }

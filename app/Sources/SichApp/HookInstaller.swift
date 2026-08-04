@@ -17,7 +17,7 @@ enum HookInstaller {
     static let events = [
         "SessionStart", "UserPromptSubmit", "PreToolUse",
         "PostToolUse", "Notification", "SubagentStart", "SubagentStop",
-        "Stop", "SessionEnd",
+        "PreCompact", "Stop", "SessionEnd",
     ]
 
     /// The embedded forwarder's bytes. The remote install pushes exactly these over

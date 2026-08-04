@@ -74,6 +74,12 @@ public final class HookSessionStore {
     // Sessions whose turn ended at a `Stop` and that are therefore waiting on the
     // OPERATOR — the one attention state no agent signal may clear (US-008 AC-1).
     private var awaitingPrompt: Set<SessionKey> = []
+    // Compaction parenthesis: `PreCompact` shows WORKING while the agent rewrites its
+    // context, remembering what it interrupted (state + turn latch); the `SessionStart`
+    // the agent re-emits when compaction completes restores that memory — auto-compact
+    // mid-turn resumes WORKING, a manual `/compact` typed at rest returns to NEEDS YOU
+    // instead of a false WORKING that only the stall sweep would correct.
+    private var compactionRestore: [SessionKey: (state: CardState, latched: Bool)] = [:]
     // Emitted state path per session (a transition is recorded only on a real state
     // change), mirroring the Python `StateReconciler.transitions_for` — the parity
     // diff (TC-INT-324) asserts on this, not just the final state.
@@ -169,14 +175,32 @@ public final class HookSessionStore {
     private func applyBurst(key: SessionKey, burst: [SignalEvent]) {
         let decisive = dominant(burst)
         lastEventAt[key] = burst.map(\.timestamp).max()!
-        let next = classify(
-            prior: currentState(key), event: decisive,
-            awaitingPrompt: awaitingPrompt.contains(key))
+        let next = resolveNext(key: key, event: decisive)
         noteTurnBoundary(key: key, kind: decisive.kind, next: next)
         write(
             key: key, state: next, at: decisive.timestamp,
             projectDir: decisive.cwd, cardID: decisive.cardID, agent: decisive.agent
         )
+    }
+
+    /// `classify` wrapped in the compaction-parenthesis bookkeeping. Any signal other
+    /// than the closing `SessionStart` cancels a pending restore — a real signal
+    /// out-ranks the memory, and a stale entry from an interrupted compaction must
+    /// not hijack a later resume.
+    private func resolveNext(key: SessionKey, event: SignalEvent) -> CardState {
+        let prior = currentState(key)
+        switch event.kind {
+        case .compaction:
+            compactionRestore[key] = (prior, awaitingPrompt.contains(key))
+        case .sessionStart:
+            if let restore = compactionRestore.removeValue(forKey: key) {
+                if restore.latched { awaitingPrompt.insert(key) }
+                return Self.settled(prior: prior, next: restore.state)
+            }
+        default:
+            compactionRestore[key] = nil
+        }
+        return classify(prior: prior, event: event, awaitingPrompt: awaitingPrompt.contains(key))
     }
 
     /// Track the sessions whose TURN ended — the attention state only the operator's
@@ -273,6 +297,13 @@ public final class HookSessionStore {
             // A submitted prompt puts an at-rest session (fresh at its first prompt,
             // or awaiting your reply) to work; other priors are left untouched.
             return prior == .waitingForInput || prior == .idle ? .running : prior
+        case .compaction:
+            // Rewriting the context is WORK — the agent is busy, not asking for
+            // anything. It legitimately lands on a Stop-ended card (a manual
+            // `/compact` is typed exactly there), so the turn latch deliberately
+            // does not gate it; `resolveNext` remembers what to give back when the
+            // completing SessionStart closes the parenthesis.
+            return Self.settled(prior: prior, next: .running)
         case .toolUse, .subagentStart:
             // A work signal cannot re-open a turn that ENDED (US-008 AC-1): the agent
             // cannot be running a tool it was never prompted for, so a tool call landing
