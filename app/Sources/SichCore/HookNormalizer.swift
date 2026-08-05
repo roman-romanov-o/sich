@@ -72,7 +72,8 @@ public enum HookNormalizer {
             cardID: payload["sich_card_id"] as? String,
             // Present only on a relayed line: the channel stamped it at ingestion
             // (US-003 AC-2) and it is what keeps two machines apart (US-004 AC-3).
-            host: payload[RemoteEventLine.hostKey] as? String
+            host: payload[RemoteEventLine.hostKey] as? String,
+            backgroundBusy: resolveBackgroundBusy(payload)
         )
     }
 
@@ -90,7 +91,27 @@ public enum HookNormalizer {
         if name == "PreToolUse" && isTestCommand(payload) {
             return .testRunStart
         }
+        // The idle nudge ("Claude is waiting for your input") is the turn boundary
+        // restated, not a permission ask — route it through `stop` so it shares the
+        // background-subagent masking (a nudge fired while a backgrounded child is
+        // still working must not light NEEDS YOU). Permission notifications keep the
+        // verbatim `permissionRequest` mapping.
+        if name == "Notification" && payload["notification_type"] as? String == "idle_prompt" {
+            return .stop
+        }
         return hookKind[name] ?? .unknown
+    }
+
+    /// Fold the payload's `background_tasks` array into one flag: is a background
+    /// subagent still running? A `SubagentStop` lists the stopping agent ITSELF as
+    /// `running`, so the event's own `agent_id` is excluded. `nil` when the payload
+    /// carries no array — the store then falls back to its last-known flag.
+    private static func resolveBackgroundBusy(_ payload: [String: Any]) -> Bool? {
+        guard let tasks = payload["background_tasks"] as? [[String: Any]] else { return nil }
+        let selfID = payload["agent_id"] as? String
+        return tasks.contains { task in
+            task["status"] as? String == "running" && task["id"] as? String != selfID
+        }
     }
 
     private static func resolveAgent(_ payload: [String: Any]) -> CardAgent {

@@ -42,6 +42,16 @@ from the board.
    auto-compact resumes WORKING; a manual `/compact` typed after an ended turn
    goes back to NEEDS YOU, since the agent is again waiting on the operator.
 
+   2.3. **A backgrounded subagent keeps the card WORKING.** Claude fires a
+   `Stop` when the main turn parks with "Waiting for N background agents to
+   finish" — but that Stop's own payload lists the still-running child in
+   `background_tasks`. Such a Stop (and the ~60s `idle_prompt` nudge that
+   follows it) parked the *prompt*, not the *work*: the card stays WORKING and
+   the turn latch does not arm. The FINAL Stop — the one whose payload reports
+   the background drained — is the real turn end and routes NEEDS YOU as usual.
+   The stall guard (2.1) still bounds the parenthesis: a child that goes silent
+   past the threshold routes attention anyway.
+
 3. **Turn ended, agent waiting for the user → NEEDS YOU.** The agent stopped
    (finished its turn, asked a question, requested permission) and is idle until
    the user types. This is the attention signal the whole board exists for.

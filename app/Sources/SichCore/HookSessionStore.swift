@@ -80,6 +80,12 @@ public final class HookSessionStore {
     // mid-turn resumes WORKING, a manual `/compact` typed at rest returns to NEEDS YOU
     // instead of a false WORKING that only the stall sweep would correct.
     private var compactionRestore: [SessionKey: (state: CardState, latched: Bool)] = [:]
+    // Background parenthesis (CARD-STATUS.md rule 2.3): sessions whose last
+    // `background_tasks`-carrying payload reported a still-running backgrounded
+    // subagent. A `Stop` (or idle nudge) landing inside the parenthesis parked the
+    // OPERATOR's prompt, not the WORK — the card stays WORKING. Only consulted when
+    // an event doesn't carry the flag itself; a payload's own array is authoritative.
+    private var backgroundBusy: Set<SessionKey> = []
     // Emitted state path per session (a transition is recorded only on a real state
     // change), mirroring the Python `StateReconciler.transitions_for` — the parity
     // diff (TC-INT-324) asserts on this, not just the final state.
@@ -175,6 +181,7 @@ public final class HookSessionStore {
     private func applyBurst(key: SessionKey, burst: [SignalEvent]) {
         let decisive = dominant(burst)
         lastEventAt[key] = burst.map(\.timestamp).max()!
+        burst.forEach { updateBackgroundBusy(key: key, event: $0) }
         let next = resolveNext(key: key, event: decisive)
         noteTurnBoundary(key: key, kind: decisive.kind, next: next)
         write(
@@ -200,13 +207,29 @@ public final class HookSessionStore {
         default:
             compactionRestore[key] = nil
         }
-        return classify(prior: prior, event: event, awaitingPrompt: awaitingPrompt.contains(key))
+        return classify(
+            prior: prior, event: event,
+            awaitingPrompt: awaitingPrompt.contains(key),
+            backgroundBusy: backgroundBusy.contains(key)
+        )
     }
 
     /// Track the sessions whose TURN ended — the attention state only the operator's
     /// next prompt clears. Set by a `Stop` (CARD-STATUS.md rule 3), cleared the moment
     /// the card is anywhere else, including the permission wait, which a tool call
     /// legitimately resolves.
+    /// Keep the background parenthesis current from any payload that reports it,
+    /// in burst order — a coalesced burst may open and close it in one batch.
+    /// `SessionEnd` closes it unconditionally: the process is gone, and a stale
+    /// `true` would mask the first real turn end after a resume.
+    private func updateBackgroundBusy(key: SessionKey, event: SignalEvent) {
+        if event.kind == .sessionEnd {
+            backgroundBusy.remove(key)
+        } else if let busy = event.backgroundBusy {
+            if busy { backgroundBusy.insert(key) } else { backgroundBusy.remove(key) }
+        }
+    }
+
     private func noteTurnBoundary(key: SessionKey, kind: SignalKind, next: CardState) {
         if next == .waitingForInput, kind == .stop {
             awaitingPrompt.insert(key)
@@ -260,10 +283,6 @@ public final class HookSessionStore {
         .permissionRequest: .waitingForInput,
         .testRunStart: .runningTests,
         .errorExit: .blocked,
-        // Stop is the root turn boundary (CARD-STATUS.md rule 3): the agent finished
-        // its turn and is idle until the operator types — the attention signal the
-        // board exists for. Queue is reserved for work that has not started.
-        .stop: .waitingForInput,
         .staleTimeout: .unknown,
         .contradictorySignals: .unknown,
         .unknown: .unknown,
@@ -272,8 +291,21 @@ public final class HookSessionStore {
     /// Next state for `prior` given a single signal (port of `classify`). `userInput`
     /// resumes a waiting session to `running`; on any non-waiting prior it leaves the
     /// state untouched rather than guessing.
-    private func classify(prior: CardState, event: SignalEvent, awaitingPrompt: Bool) -> CardState {
+    private func classify(
+        prior: CardState, event: SignalEvent, awaitingPrompt: Bool, backgroundBusy: Bool
+    ) -> CardState {
         switch event.kind {
+        case .stop:
+            // Stop is the root turn boundary (CARD-STATUS.md rule 3): the agent
+            // finished its turn and is idle until the operator types — the attention
+            // signal the board exists for. EXCEPT inside the background parenthesis
+            // (rule 2.3): a Stop that leaves a backgrounded subagent running parked
+            // the prompt while the work continues — waiting on your own subagent is
+            // WORKING, not NEEDS YOU. The child's completion re-invokes the root
+            // loop, whose FINAL Stop (background_tasks drained) lands here unmasked.
+            return Self.settled(
+                prior: prior, next: backgroundBusy ? .running : .waitingForInput
+            )
         case .sessionStart:
             // NEUTRAL: launching an agent is not starting work (CARD-STATUS.md
             // rule 1 — a created card auto-launches claude, and it must stay QUEUE

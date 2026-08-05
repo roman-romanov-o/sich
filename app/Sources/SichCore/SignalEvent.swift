@@ -57,6 +57,12 @@ public struct SignalEvent: Sendable, Equatable {
     /// field, so this is the ONLY thing separating two machines that happen to run
     /// the same session id in the same cwd (US-004 AC-3).
     public let host: String?
+    /// What the payload's `background_tasks` array reports: `true` when a background
+    /// subagent is still running, `false` when none are, `nil` when the payload
+    /// carries no such array (most hooks, and pre-background-agent Claude versions).
+    /// A `Stop` with `true` is NOT an operator wait — the turn parked while a child
+    /// keeps working (CARD-STATUS.md rule 2.3).
+    public let backgroundBusy: Bool?
 
     public init(
         kind: SignalKind,
@@ -66,7 +72,8 @@ public struct SignalEvent: Sendable, Equatable {
         timestamp: Date,
         cwd: String? = nil,
         cardID: String? = nil,
-        host: String? = nil
+        host: String? = nil,
+        backgroundBusy: Bool? = nil
     ) {
         self.kind = kind
         self.source = source
@@ -76,6 +83,7 @@ public struct SignalEvent: Sendable, Equatable {
         self.cwd = cwd
         self.cardID = cardID
         self.host = host
+        self.backgroundBusy = backgroundBusy
     }
 }
 

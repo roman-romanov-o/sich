@@ -118,4 +118,39 @@ struct HookNormalizerTests {
         store.sweepStale(now: arrival.addingTimeInterval(20))
         #expect(store.entry(for: "C")?.state == .waitingForInput)
     }
+
+    // MARK: - background_tasks parsing (CARD-STATUS.md rule 2.3)
+
+    @Test func backgroundTasksFoldToOneFlag() throws {
+        // Running child → busy; the payload is the live-capture Stop shape.
+        let busy = try #require(normalize(
+            #"{"hook_event_name":"Stop","session_id":"S","background_tasks":[{"id":"a1","type":"subagent","status":"running"}]}"#))
+        #expect(busy.backgroundBusy == true)
+
+        // All children finished → not busy; absent array → nil (older Claude).
+        let drained = try #require(normalize(
+            #"{"hook_event_name":"Stop","session_id":"S","background_tasks":[{"id":"a1","status":"completed"}]}"#))
+        #expect(drained.backgroundBusy == false)
+        let absent = try #require(normalize(#"{"hook_event_name":"Stop","session_id":"S"}"#))
+        #expect(absent.backgroundBusy == nil)
+
+        // A SubagentStop lists the stopping agent ITSELF as still running — its own
+        // id must not count as an open child.
+        let selfListed = try #require(normalize(
+            #"{"hook_event_name":"SubagentStop","session_id":"S","agent_id":"a1","background_tasks":[{"id":"a1","status":"running"}]}"#))
+        #expect(selfListed.backgroundBusy == false,
+                "the stopping agent's own entry is not a still-open background task")
+    }
+
+    /// The idle nudge is the turn boundary restated — it must route through `stop`
+    /// (sharing the background-parenthesis masking), while a permission Notification
+    /// keeps the verbatim `permissionRequest` mapping.
+    @Test func idleNudgeRoutesThroughStop() throws {
+        let nudge = try #require(normalize(
+            #"{"hook_event_name":"Notification","session_id":"S","notification_type":"idle_prompt"}"#))
+        #expect(nudge.kind == .stop)
+        let permission = try #require(normalize(
+            #"{"hook_event_name":"Notification","session_id":"S","message":"Claude needs your permission to use Bash"}"#))
+        #expect(permission.kind == .permissionRequest)
+    }
 }
