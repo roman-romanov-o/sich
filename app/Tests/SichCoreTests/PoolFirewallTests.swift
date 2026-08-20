@@ -58,8 +58,8 @@ struct PoolFirewallTests {
     }
 
     @Test("the ssh scan is tokenized: a name that merely contains `claude` passes", arguments: [
-        ["/usr/bin/ssh", "-t", "host", "tmux new-session -A -s 'claude-work'"],
-        ["/usr/bin/ssh", "-t", "host", "tmux new-session -A -s 'p' -c '/srv/claude-p'"]
+        ["/usr/bin/ssh", "-t", "host", "tmux new-session -A -D -s 'claude-work'"],
+        ["/usr/bin/ssh", "-t", "host", "tmux new-session -A -D -s 'p' -c '/srv/claude-p'"]
     ])
     func sshTokenizedScanAllowsLookalikes(_ argv: [String]) throws {
         // A substring search for "claude" over the joined argv would refuse these.

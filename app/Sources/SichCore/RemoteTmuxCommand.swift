@@ -74,11 +74,12 @@ public struct RemoteTmuxSpec: Equatable, Sendable {
 }
 
 /// Builds the argv that opens a remote tmux session in a local PTY:
-/// `ssh -t [opts] <target> tmux new-session -A -s <name> [-c <dir>]`.
+/// `ssh -t [opts] <target> tmux new-session -A -D -s <name> [-c <dir>]`.
 ///
 /// `-A` makes tmux *attach if the session exists, else create it* — so re-opening
 /// a card reconnects to the same running session instead of spawning duplicates,
 /// which is the whole point of tmux on a remote box (survive disconnects, resume).
+/// `-D` takes the session OVER on that attach; see ``remoteScript(session:dir:cardID:)``.
 /// `-t` forces PTY allocation so the remote tmux is fully interactive.
 ///
 /// Pure and total (no process launch) so the command shape is unit-testable.
@@ -170,9 +171,20 @@ public enum RemoteTmuxCommand {
         guard !session.isEmpty else { throw Invalid.emptySessionName }
         if let cardID, !isWellFormedCardID(cardID) { throw Invalid.invalidCardID(cardID) }
 
-        return ["/usr/bin/ssh", "-t"] + options(for: spec)
+        return ["/usr/bin/ssh", "-t"] + attachOptions + options(for: spec)
             + [destination, remoteScript(session: session, dir: spec.remoteDir, cardID: cardID)]
     }
+
+    /// What the INTERACTIVE attach adds on top of the relay's keepalive: a bounded dial.
+    ///
+    /// Without the keepalive a half-open link (laptop lid, Wi-Fi drop, the far side
+    /// wedged under load) leaves ssh blocked in TCP retransmit for ~15 minutes — the
+    /// operator stares at a frozen pane that is neither alive nor dead, and the board
+    /// keeps the card as if it were still attached, because the child never exits.
+    /// With it the link is declared dead in ~45s, the card demotes to idle, and the
+    /// next drill-in re-attaches. `ConnectTimeout` does the same for the opening dial
+    /// so a drill-in on a host that is off does not hang the card either.
+    private static let attachOptions = keepAliveOptions + ["-o", "ConnectTimeout=10"]
 
     /// The env var a far-side pane exports, and the forwarder splices into every hook
     /// payload as `sich_card_id`.
@@ -335,6 +347,14 @@ public enum RemoteTmuxCommand {
     /// The single remote command string ssh hands to the login shell on the far side.
     /// Session name and dir are shell-quoted because that shell re-parses this string.
     ///
+    /// `-D` detaches whatever client is already on that session, so a re-attach after a
+    /// flaky link TAKES IT OVER instead of joining it. Two clients on one session is not
+    /// a cosmetic problem: tmux sizes the window to the SMALLEST attached client, so a
+    /// half-dead client that ssh has not reaped yet shrinks the pane the operator is
+    /// looking at, and every keystroke is echoed to a corpse. `-D` is read only on the
+    /// attach branch of `-A`; on the create branch tmux ignores it (it is `-d` that
+    /// would create the session detached, and that flag is deliberately not here).
+    ///
     /// With a `cardID`, tmux is given a command to run in the new session, and that
     /// command has **two halves, both required** (DD-002):
     ///  * `tmux set-environment` writes the SESSION environment, which is what every
@@ -345,14 +365,34 @@ public enum RemoteTmuxCommand {
     /// `new-session -e` would do both in one flag but needs tmux ≥ 3.2 (Ubuntu 20.04
     /// ships 3.0a, where it is a usage error and the session never starts).
     static func remoteScript(session: String, dir: String?, cardID: String? = nil) -> String {
-        var tmux = "tmux new-session -A -s \(remoteQuoted(session))"
-        if let dir, !dir.trimmingCharacters(in: .whitespaces).isEmpty {
-            tmux += " -c \(remoteQuoted(dir))"
+        var tmux = "tmux new-session -A -D -s \(remoteQuoted(session))"
+        let dir = dir?.trimmingCharacters(in: .whitespaces) ?? ""
+        if !dir.isEmpty {
+            tmux += " -c \(remotePath(dir))"
         }
         guard let cardID else { return tmux }
         return tmux + " " + remoteQuoted(
             "tmux set-environment \(cardIDVariable) \(cardID); "
             + "\(cardIDVariable)=\(cardID) exec $SHELL -il")
+    }
+
+    /// A far-side path as ONE shell word, with a leading `~` handed to the remote shell
+    /// to expand — the tilde stays OUTSIDE the quotes, exactly like `$HOME` in
+    /// ``remoteHome(_:)``, and the rest of the path stays inside them.
+    ///
+    /// This exists because tmux does not expand `~` itself and does not complain when
+    /// `-c` names a directory it cannot enter: it silently starts the session in the
+    /// user's home. The remote folder picker hands out `~/…` paths, so a fully quoted
+    /// `-c '~/MyProjects/spectre'` lost the start directory on every session tmux had
+    /// to CREATE — the "my card came back at the home prompt" bug — with no error
+    /// anywhere to say so.
+    ///
+    /// `~otheruser/…` is left quoted: `$HOME` cannot express it, and expanding it would
+    /// mean emitting the path unquoted, where a space or a glob in it would re-parse.
+    static func remotePath(_ path: String) -> String {
+        if path == "~" { return "\"$HOME\"" }
+        guard path.hasPrefix("~/") else { return remoteQuoted(path) }
+        return "\"$HOME\"/" + remoteQuoted(String(path.dropFirst(2)))
     }
 
     private static func remoteQuoted(_ s: String) -> String {

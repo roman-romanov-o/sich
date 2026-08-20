@@ -90,30 +90,44 @@ struct BoardPersistenceTests {
         #expect(card.state == .idle)
     }
 
-    @Test("a card explicitly moved to DONE survives restart as done")
+    @Test("a card explicitly moved to DONE survives restart through the book, not a pane")
     func manuallyDoneCardSurvivesRestart() throws {
         let storeDir = makeTempDir()
+        let bookDir = makeTempDir()
         let work = makeTempDir()
-        defer { cleanup(storeDir); cleanup(work) }
+        defer { cleanup(storeDir); cleanup(bookDir); cleanup(work) }
 
-        let cardID = UUID()
-        let shell = BoardShell(seeds: [liveSeed(dir: work, cardID: cardID, state: .running)])
+        // An operator-created card (not a seed — seeds are fixtures the book
+        // deliberately ignores), spawned onto a stubbed /bin/cat pty.
+        let shell = BoardShell(seeds: [])
         _ = shell.buildContentForTesting()
+        shell.taskStore = BoardTaskStore(directory: bookDir)
+        shell.launchOverrideForTesting = { seed in
+            let pty = try! PTYSession(command: ["/bin/cat"])
+            try! pty.start()
+            return Session(projectDir: seed.projectDir, agentType: .claude,
+                           flowTag: .interactive, pty: pty, state: .running)
+        }
         defer { shell.e2eTeardown() }
+        let card = try #require(
+            shell.createSession(title: "Fix login redirect", projectDir: work.path))
+        let cardID = card.id
         shell.move(cardID: cardID, to: .done)
 
+        // Checklist 18.08 item 1: DONE closes the terminal, so the quit snapshot
+        // rightly carries NO pane for a finished task — nothing left to keep alive
+        // or re-spawn. Done-ness survives restart through the durable task book
+        // instead, where the next launch archives it
+        // (``ArchiveTests/doneTaskArchivesOnRelaunch`` proves that leg).
         let store = SessionSnapshotStore(directory: storeDir)
-        let saved = try #require(shell.persistOnTerminate(store: store))
-        let pane = try #require(saved.windows.flatMap(\.panes).first)
-        #expect(pane.cardState == .done)
+        let saved = shell.persistOnTerminate(store: store)
+        #expect((saved?.windows.flatMap(\.panes) ?? []).isEmpty,
+                "a finished task holds no shell at quit and books no pane")
 
-        let relaunched = BoardShell()
-        defer { relaunched.e2eTeardown() }
-        let restored = relaunched.restoreCardsForTesting(
-            store: SessionSnapshotStore(directory: storeDir)
-        )
-        let card = try #require(restored.first)
-        #expect(card.state == .done)
+        let record = try #require(
+            BoardTaskStore(directory: bookDir).load()?.tasks.first { $0.id == cardID })
+        #expect(record.placement == .board(.done),
+                "the book still says DONE — restart archives the task instead of losing it")
     }
 
     // MARK: - Gap 2: card identity + the hook binding

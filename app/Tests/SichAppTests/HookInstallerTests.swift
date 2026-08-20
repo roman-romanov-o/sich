@@ -279,6 +279,11 @@ final class HookInstallerTests: XCTestCase {
         XCTAssertTrue(bound.dropFirst(2).contains("hello"))
         XCTAssertTrue(bound[1].contains(#""SessionStart""#))
         XCTAssertTrue(bound[1].contains(#""PermissionRequest""#))
+        // The board's TUI palette rides the same blob, so it lands only in bound
+        // terminals — the operator's own Claude keeps whatever `/theme` set.
+        let boundSettings = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(bound[1].utf8)) as? [String: Any])
+        XCTAssertEqual(boundSettings["theme"] as? String, ClaudeTheme.settingsRef)
 
         _ = try run(shim.path, ["--help"], env: boundEnv)
         XCTAssertEqual(try loggedArgs(log), ["--help"], "help/version commands must not inject hooks")

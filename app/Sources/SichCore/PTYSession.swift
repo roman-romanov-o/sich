@@ -31,8 +31,11 @@ public final class PTYSession {
     public private(set) var outputGeneration: UInt64 = 0
 
     private let argv: [String]
-    private var rows: UInt16
-    private var cols: UInt16
+    /// The pty grid the session currently holds (spawn-time until the first
+    /// resize). Readable so callers can verify a spawn adopted the geometry
+    /// they asked for; only `resize` mutates it.
+    public private(set) var rows: UInt16
+    public private(set) var cols: UInt16
 
     public init(command argv: [String], rows: UInt16 = 24, cols: UInt16 = 80) throws {
         self.pool = try PoolFirewall.classify(argv)  // firewall on the spawn path

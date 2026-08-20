@@ -59,7 +59,7 @@ struct RemotePaneRestoreTests {
         // The bug: a local `/bin/sh -c "cd '/Users/tester' && … exec '/bin/zsh' -il"`.
         let argv = try #require(spawned.first)
         #expect(argv.first == "/usr/bin/ssh")
-        #expect(try #require(argv.last).hasPrefix("tmux new-session -A -s 'agent'"))
+        #expect(try #require(argv.last).hasPrefix("tmux new-session -A -D -s 'agent'"))
         // …and the pane keeps its remote label instead of being sent home.
         #expect(restored.first?.cwd == "roman@host.invalid")
         #expect(restored.first?.cwdFellBackToHome == false)

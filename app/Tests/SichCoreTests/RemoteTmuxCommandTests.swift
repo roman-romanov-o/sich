@@ -9,16 +9,39 @@ struct RemoteTmuxCommandTests {
     func minimalArgv() throws {
         let argv = try RemoteTmuxCommand.argv(for: RemoteTmuxSpec(host: "build-box"))
         #expect(argv == [
-            "/usr/bin/ssh", "-t", "build-box",
-            "tmux new-session -A -s 'sich'",
+            "/usr/bin/ssh", "-t",
+            "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
+            "-o", "ConnectTimeout=10",
+            "build-box",
+            "tmux new-session -A -D -s 'sich'",
         ])
+    }
+
+    @Test("the interactive link is kept alive, so a dead one dies instead of wedging")
+    func attachKeepsAlive() throws {
+        // Without these a half-open link (lid closed, Wi-Fi drop) blocks ssh in TCP
+        // retransmit for ~15 minutes: the pane freezes, the child never exits, and the
+        // board goes on showing an attached card. ~45s to a dead child is the fix.
+        let argv = try RemoteTmuxCommand.argv(for: RemoteTmuxSpec(host: "h"))
+        #expect(argv.contains(["-o", "ServerAliveInterval=15"]))
+        #expect(argv.contains(["-o", "ServerAliveCountMax=3"]))
+        // And a host that is simply OFF must fail the dial rather than hang the card.
+        #expect(argv.contains(["-o", "ConnectTimeout=10"]))
+    }
+
+    @Test("a re-attach TAKES OVER the session (-D), it does not join it")
+    func attachDetachesStaleClients() throws {
+        // tmux sizes a window to the smallest attached client, so a half-dead client
+        // ssh has not reaped yet shrinks the pane the operator is looking at.
+        let argv = try RemoteTmuxCommand.argv(for: RemoteTmuxSpec(host: "h", sessionName: "work"))
+        #expect(argv.last == "tmux new-session -A -D -s 'work'")
     }
 
     @Test("attach-or-create: uses -A so re-opening reconnects, never duplicates")
     func attachOrCreateFlag() throws {
         let argv = try RemoteTmuxCommand.argv(for: RemoteTmuxSpec(host: "h", sessionName: "work"))
         // -A is what makes tmux resume the SAME session across disconnects.
-        #expect(argv.last == "tmux new-session -A -s 'work'")
+        #expect(argv.last == "tmux new-session -A -D -s 'work'")
     }
 
     @Test("user, port, identity and start dir all thread through")
@@ -29,9 +52,12 @@ struct RemoteTmuxCommandTests {
         )
         let argv = try RemoteTmuxCommand.argv(for: spec)
         #expect(argv == [
-            "/usr/bin/ssh", "-t", "-p", "2222", "-i", "/keys/id_ed25519",
+            "/usr/bin/ssh", "-t",
+            "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
+            "-o", "ConnectTimeout=10",
+            "-p", "2222", "-i", "/keys/id_ed25519",
             "roman@10.0.0.5",
-            "tmux new-session -A -s 'agent' -c '/srv/app'",
+            "tmux new-session -A -D -s 'agent' -c '/srv/app'",
         ])
     }
 
@@ -40,7 +66,7 @@ struct RemoteTmuxCommandTests {
         // '.' and ':' are tmux address separators — an unsanitised name is unattachable.
         #expect(RemoteTmuxCommand.sanitizeSessionName("my.proj:2 build") == "my-proj-2-build")
         let argv = try RemoteTmuxCommand.argv(for: RemoteTmuxSpec(host: "h", sessionName: "a.b:c"))
-        #expect(argv.last == "tmux new-session -A -s 'a-b-c'")
+        #expect(argv.last == "tmux new-session -A -D -s 'a-b-c'")
     }
 
     @Test("firewall clean: the launched executable is ssh, not claude")
@@ -65,7 +91,26 @@ struct RemoteTmuxCommandTests {
     func remoteDirQuotingIsSafe() throws {
         let argv = try RemoteTmuxCommand.argv(
             for: RemoteTmuxSpec(host: "h", remoteDir: "/o'neil/app"))
-        #expect(argv.last == "tmux new-session -A -s 'sich' -c '/o'\\''neil/app'")
+        #expect(argv.last == "tmux new-session -A -D -s 'sich' -c '/o'\\''neil/app'")
+    }
+
+    @Test("a ~ start dir is expanded by the remote shell, not swallowed by tmux")
+    func tildeStartDirIsExpanded() throws {
+        // The remote folder picker hands out `~/…`. tmux expands no tilde and reports
+        // no error for a `-c` it cannot enter — it just starts the session in $HOME.
+        // Fully quoted, every session tmux CREATED came back at the home prompt.
+        let argv = try RemoteTmuxCommand.argv(
+            for: RemoteTmuxSpec(host: "h", remoteDir: "~/MyProjects/spectre"))
+        #expect(argv.last == "tmux new-session -A -D -s 'sich' -c \"$HOME\"/'MyProjects/spectre'")
+        // A bare `~` is the home directory itself, with no path to append.
+        #expect(RemoteTmuxCommand.remotePath("~") == "\"$HOME\"")
+        // The tail stays quoted: expansion must not hand the rest of the path back to
+        // the far-side shell to re-parse.
+        #expect(RemoteTmuxCommand.remotePath("~/my proj/$(id)")
+            == "\"$HOME\"/'my proj/$(id)'")
+        // Absolute paths are untouched, and `~otheruser` stays quoted (no $HOME for it).
+        #expect(RemoteTmuxCommand.remotePath("/srv/app") == "'/srv/app'")
+        #expect(RemoteTmuxCommand.remotePath("~build/app") == "'~build/app'")
     }
 
     // MARK: - the destination chokepoint (US-001.AC-2..AC-6, DD-004)
@@ -125,7 +170,7 @@ struct RemoteTmuxCommandTests {
 
     @Test("the argvs this task will emit pass the firewall — asserted at their FINAL shape")
     func legitimateRemoteArgvsPassTheFirewall() throws {
-        let card = "tmux new-session -A -s 'sich' "
+        let card = "tmux new-session -A -D -s 'sich' "
             + "'tmux set-environment SICH_CARD_ID abc-123; SICH_CARD_ID=abc-123 exec $SHELL -il'"
         let relay = ["/usr/bin/ssh", "-o", "ServerAliveInterval=15",
                      "-o", "ServerAliveCountMax=3", "build-box",
@@ -158,7 +203,7 @@ struct RemoteTmuxCommandTests {
         #expect(RemoteTmuxCommand.sanitizeSessionName("a';b") == "a';b")
         let argv = try RemoteTmuxCommand.argv(for: RemoteTmuxSpec(
             host: "h", sessionName: "a';b", remoteDir: "/srv;touch pwned"))
-        #expect(argv.last == "tmux new-session -A -s 'a'\\'';b' -c '/srv;touch pwned'")
+        #expect(argv.last == "tmux new-session -A -D -s 'a'\\'';b' -c '/srv;touch pwned'")
     }
 
     // MARK: - card identity on the pane (US-004 AC-1/AC-2, DD-002)
@@ -171,7 +216,7 @@ struct RemoteTmuxCommandTests {
             for: RemoteTmuxSpec(host: "h"), cardID: Self.cardID)
         // set-environment binds LATER panes (Ctrl-b c); the launch command binds only
         // the first shell. Emitting one without the other is the AC-2 false-pass.
-        #expect(argv.last == "tmux new-session -A -s 'sich' "
+        #expect(argv.last == "tmux new-session -A -D -s 'sich' "
             + "'tmux set-environment SICH_CARD_ID \(Self.cardID); "
             + "SICH_CARD_ID=\(Self.cardID) exec $SHELL -il'")
         #expect(try PoolFirewall.classify(argv) == .interactive)
@@ -182,13 +227,13 @@ struct RemoteTmuxCommandTests {
         let argv = try RemoteTmuxCommand.argv(
             for: RemoteTmuxSpec(host: "h", remoteDir: "/srv/app"), cardID: Self.cardID)
         let remote = try #require(argv.last)
-        #expect(remote.hasPrefix("tmux new-session -A -s 'sich' -c '/srv/app' 'tmux set-environment"))
+        #expect(remote.hasPrefix("tmux new-session -A -D -s 'sich' -c '/srv/app' 'tmux set-environment"))
     }
 
     @Test("no card id → the plain attach shape, unchanged")
     func withoutCardIDShapeIsUnchanged() throws {
         let argv = try RemoteTmuxCommand.argv(for: RemoteTmuxSpec(host: "h"))
-        #expect(argv.last == "tmux new-session -A -s 'sich'")
+        #expect(argv.last == "tmux new-session -A -D -s 'sich'")
     }
 
     @Test("a card id that is not uuid-shaped is refused, never interpolated")
@@ -240,7 +285,7 @@ struct RemoteTmuxCommandTests {
         let spec = try #require(RemoteTmuxSpec.parse(
             destination: "host", sessionName: "agent", remoteDir: "/srv"))
         let argv = try RemoteTmuxCommand.argv(for: spec)
-        #expect(argv.last == "tmux new-session -A -s 'agent' -c '/srv'")
+        #expect(argv.last == "tmux new-session -A -D -s 'agent' -c '/srv'")
     }
 
     @Test("blank / userless destinations parse to nil")

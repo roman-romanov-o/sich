@@ -228,7 +228,6 @@ final class PlanningModeView: NSView {
     let reviewLeftField = NSTextField(labelWithString: "")
     let terminalStatusField = NSTextField(labelWithString: "")
     let railDraftField = NSTextField(labelWithString: "")
-    private let terminalFontControls = FontSizeControls()
     /// The design's span-comment composer, scoped to the selected file. Editable —
     /// the one stock text field here; typing is not a custom-drawn interaction.
     let commentField = NSTextField()
@@ -307,8 +306,6 @@ final class PlanningModeView: NSView {
     private(set) var isViewingFile = false
     var onReturn: (() -> Void)?
     var onSuggestCommand: ((String) -> Void)?
-    var onTerminalSmaller: (() -> Void)?
-    var onTerminalLarger: (() -> Void)?
 
     /// Test seam: the mounted terminal, so a registry/pool-firewall test can assert the
     /// planning pane hosts the very session registered elsewhere (US-004 AC2).
@@ -380,8 +377,6 @@ final class PlanningModeView: NSView {
         commentField.action = #selector(commentFieldEntered)
         terminalToggle.onClick = { [weak self] in self?.toggleTerminal() }
         railToggle.onClick = { [weak self] in self?.toggleRail() }
-        terminalFontControls.onTerminalSmaller = { [weak self] in self?.onTerminalSmaller?() }
-        terminalFontControls.onTerminalLarger = { [weak self] in self?.onTerminalLarger?() }
         architectureToggle.toolTip = "Architecture"
         architectureToggle.onClick = { [weak self] in self?.toggleArchitecture() }
         sendFeedbackButton.onClick = { [weak self] in self?.sendFeedbackDraft() }
@@ -602,7 +597,7 @@ final class PlanningModeView: NSView {
         )
         collapse.onClick = { [weak self] in self?.toggleTerminal() }
         let spacer = NSView()
-        let header = NSStackView(views: [dot, title, spacer, terminalFontControls, collapse])
+        let header = NSStackView(views: [dot, title, spacer, collapse])
         header.orientation = .horizontal
         header.alignment = .centerY
         header.spacing = 8

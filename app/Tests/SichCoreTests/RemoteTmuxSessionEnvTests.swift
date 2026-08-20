@@ -42,7 +42,7 @@ struct RemoteTmuxSessionEnvTests {
         let remote = try #require(argv.last)
         // `new-session -e` needs tmux >= 3.2; Ubuntu 20.04 ships 3.0a, where it is a
         // usage error — the session never starts at all.
-        #expect(!remote.contains("new-session -A -s 's' -e"))
+        #expect(!remote.contains("new-session -A -D -s 's' -e"))
         #expect(remote.contains("tmux set-environment SICH_CARD_ID"))
 
         guard let tmux = try LocalTmux.orSkip() else { return }

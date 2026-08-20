@@ -64,6 +64,8 @@ enum BoardTheme {
     static let termBg = dynamic(dark: hex(0x282C34), light: hex(0xFAFBFC))
     static let termFg = dynamic(dark: hex(0xFFFFFF), light: hex(0x24313A))
     static let termCursor = dynamic(dark: hex(0xFFFFFF), light: hex(0x009966))
+    /// Underline ink for URLs/file paths detected in terminal output (item 9, 18.08).
+    static let termLink = dynamic(dark: hex(0x61AFEF), light: hex(0x0969DA))
 
     // MARK: - Terminal ANSI palette
     //
@@ -112,7 +114,7 @@ enum BoardTheme {
     }
 
     /// Resolve a (possibly dynamic) colour to plain sRGB bytes under `appearance`.
-    private static func rgb(_ color: NSColor, in appearance: NSAppearance) -> RGB {
+    static func rgb(_ color: NSColor, in appearance: NSAppearance) -> RGB {
         var out = RGB(r: 0, g: 0, b: 0)
         appearance.performAsCurrentDrawingAppearance {
             guard let srgb = color.usingColorSpace(.sRGB) else { return }
@@ -300,16 +302,54 @@ enum BoardTheme {
     /// ``shortPath(_:)``) so every `git worktree` of the same repo shares one
     /// colour instead of each task/branch minting its own.
     static func repoColor(_ path: String) -> NSColor {
-        let key = projectLabel((path as NSString).standardizingPath)
-        if let slot = repoColorSlots[key] {
+        color(forKey: projectLabel((path as NSString).standardizingPath))
+    }
+
+    /// The card-aware variant. An owned remote-tmux card's `projectDir` is its
+    /// `user@host` label, so keying on it would give every session on one box the
+    /// same hue and never the hue of the project itself. A card linked via
+    /// ``linkProject(card:toDirectory:)`` keys on the REMOTE directory's trailing
+    /// name instead — the same key a local checkout of that project produces — so
+    /// "sahaidachny here" and "sahaidachny on the mac studio" read as one project.
+    static func repoColor(for card: BoardCard) -> NSColor {
+        if let key = projectLinkByCard[card.id] { return color(forKey: key) }
+        return repoColor(card.projectDir)
+    }
+
+    /// Link a remote card to its project by the trailing name of its far-side
+    /// working directory. A `nil`/root/`~` dir carries no project name — the card
+    /// keeps its host-label hue.
+    static func linkProject(card id: UUID, toDirectory dir: String?) {
+        let leaf = ((dir ?? "") as NSString).lastPathComponent
+        guard !leaf.isEmpty, leaf != "~", leaf != "/" else { return }
+        projectLinkByCard[id] = leaf
+    }
+
+    private static var projectLinkByCard: [UUID: String] = [:]
+
+    /// One key → one palette slot, first-seen-first-slot, and the assignment is
+    /// durable: the slot map persists in `UserDefaults`, so a project keeps its
+    /// colour across relaunches instead of re-rolling by discovery order.
+    private static func color(forKey key: String) -> NSColor {
+        var slots = repoColorSlots
+            ?? (repoColorDefaults.dictionary(forKey: repoColorSlotsKey) as? [String: Int] ?? [:])
+        defer { repoColorSlots = slots }
+        if let slot = slots[key] {
             return repoPalette[slot % repoPalette.count]
         }
-        let slot = repoColorSlots.count
-        repoColorSlots[key] = slot
+        let slot = slots.count
+        slots[key] = slot
+        repoColorDefaults.set(slots, forKey: repoColorSlotsKey)
         return repoPalette[slot % repoPalette.count]
     }
 
-    private static var repoColorSlots: [String: Int] = [:]
+    /// Injectable store (same seam as `RecentFolderStore`) so tests run against a
+    /// throwaway suite instead of the developer's real defaults.
+    static var repoColorDefaults: UserDefaults = .standard {
+        didSet { repoColorSlots = nil }
+    }
+    private static let repoColorSlotsKey = "sich.repoColorSlots"
+    private static var repoColorSlots: [String: Int]?
     private static let repoPalette = [
         hex(0x20A896), hex(0x3A9ADE), hex(0x7A5FB8), hex(0xD97A3A),
         hex(0x99CC00), hex(0xD4599F), hex(0xB39900), hex(0xE84C3D),

@@ -111,7 +111,25 @@ public final class TerminalSurface: NSView {
     /// existing scrollback as well as new output — the flip is retroactive, no reflow.
     private func applyTerminalTheme() {
         session.terminal.apply(theme: BoardTheme.terminalTheme(for: effectiveAppearance))
+        // Claude paints its own TUI, below our palette. It watches the themes
+        // directory, so rewriting the file here re-colours the running child too —
+        // a flip mid-session doesn't leave its chrome on the side we just left.
+        ClaudeTheme.install(for: effectiveAppearance)
     }
+
+    /// Item 8 (18.08): a drill-in surface teaches the board its settled grid so the
+    /// NEXT spawn is born that shape. Off by default — planning-mode panes and test
+    /// surfaces are narrower than the drill-in viewport and must not pollute it.
+    public var teachesGeometry = false
+
+    // MARK: - Links (item 9, 18.08)
+
+    /// The card's project dir — relative file links on screen resolve against it.
+    public var workingDirectory: String?
+
+    /// How a ⌘-clicked link leaves the app. Injectable so tests can catch the URL
+    /// instead of actually launching a browser/Finder.
+    var openLink: (URL) -> Void = { NSWorkspace.shared.open($0) }
 
     // MARK: - Geometry → live resize
 
@@ -128,6 +146,9 @@ public final class TerminalSurface: NSView {
         session.resize(rows: UInt16(rows), cols: UInt16(cols),
                        cellWidthPx: UInt32(cellSize.width.rounded()),
                        cellHeightPx: UInt32(cellSize.height.rounded()))
+        if teachesGeometry {
+            TerminalGeometry.remember(rows: UInt16(rows), cols: UInt16(cols))
+        }
         requestRefresh(.full)
     }
 
@@ -347,6 +368,12 @@ public final class TerminalSurface: NSView {
 
     public override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        // ⌘-click on a highlighted URL/file opens it (item 9, 18.08) — the standard
+        // terminal gesture — and never starts a selection.
+        if event.modifierFlags.contains(.command),
+           openLink(at: gridPoint(at: convert(event.locationInWindow, from: nil))) {
+            return
+        }
         // Freeze the grid for the duration of the selection: selection coords are
         // viewport-relative, so live output shifting rows beneath the pointer is
         // what made "select in terminal" broken. Output buffers in the session
@@ -584,6 +611,56 @@ public final class TerminalSurface: NSView {
             }
             drawRun(row: row, from: start, to: col, cell: first)
         }
+        drawLinkUnderlines(row)
+    }
+
+    /// Item 9 (18.08): URLs and file paths get a hairline underline in the link
+    /// accent, so they read as clickable without repainting the glyphs themselves.
+    private func drawLinkUnderlines(_ row: Int) {
+        for link in links(in: row) {
+            let x = inset + CGFloat(link.columns.lowerBound) * cellSize.width
+            let width = CGFloat(link.columns.count) * cellSize.width
+            let y = inset + CGFloat(row + 1) * cellSize.height - 1.5
+            BoardTheme.termLink.setFill()
+            NSRect(x: x, y: y, width: width, height: 1).fill()
+        }
+    }
+
+    private func links(in row: Int) -> [TerminalLink] {
+        guard grid.cols > 0 else { return [] }
+        return TerminalLinkDetector.links(in: runText(row: row, from: 0, to: grid.cols))
+    }
+
+    /// Resolve and open the link under `point`, if any. Returns whether one opened —
+    /// mouseDown uses that to swallow the click instead of starting a selection.
+    private func openLink(at point: GridPoint) -> Bool {
+        guard let link = links(in: point.row).first(where: { $0.columns.contains(point.col) }),
+              let url = Self.resolve(link, against: workingDirectory) else { return false }
+        openLink(url)
+        return true
+    }
+
+    /// A URL opens as-is; a file span sheds its `:line[:col]` suffix, expands `~`,
+    /// resolves relative against the card's project dir, and only opens if it
+    /// actually exists here (the screen may be showing another machine's paths).
+    static func resolve(_ link: TerminalLink, against workingDirectory: String?) -> URL? {
+        switch link.kind {
+        case .url:
+            return URL(string: link.text)
+        case .file:
+            var path = link.text
+            // `Sources/App/File.swift:12:5` → the path part only.
+            if let match = path.range(of: #":\d+(:\d+)?$"#, options: .regularExpression) {
+                path.removeSubrange(match)
+            }
+            path = (path as NSString).expandingTildeInPath
+            if !path.hasPrefix("/") {
+                guard let base = workingDirectory else { return nil }
+                path = (base as NSString).appendingPathComponent(path)
+            }
+            guard FileManager.default.fileExists(atPath: path) else { return nil }
+            return URL(fileURLWithPath: path)
+        }
     }
 
     private func drawRun(row: Int, from start: Int, to end: Int, cell: TerminalCell) {
@@ -728,6 +805,24 @@ public final class TerminalSurface: NSView {
     /// themselves stay a human sign-off.
     func resolvedForegroundForTesting(fg: RGB?, bg: RGB?) -> NSColor {
         legibleFg(fg, on: bg)
+    }
+
+    /// Test seams (item 9): install a deterministic screen and hit-test links the
+    /// way the ⌘-click path does, without racing a live pty read.
+    func installGridForTesting(_ snapshot: TerminalGrid) {
+        grid = snapshot
+        needsDisplay = true
+    }
+
+    func linkForTesting(atCol col: Int, row: Int) -> TerminalLink? {
+        links(in: row).first { $0.columns.contains(col) }
+    }
+
+    /// The centre of a grid cell in this view's coords — lets the interaction test
+    /// aim a real event without duplicating the font-metric math.
+    func cellCenterForTesting(col: Int, row: Int) -> NSPoint {
+        NSPoint(x: inset + (CGFloat(col) + 0.5) * cellSize.width,
+                y: inset + (CGFloat(row) + 0.5) * cellSize.height)
     }
 
     private struct GridPoint: Equatable {

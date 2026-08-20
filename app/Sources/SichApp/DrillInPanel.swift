@@ -160,8 +160,6 @@ final class WorktreePill: NSTextField {
 final class DrillInPanel: NSView {
     /// Invoked when the operator returns to the board (US-002 AC#2).
     var onClose: (() -> Void)?
-    var onTerminalSmaller: (() -> Void)?
-    var onTerminalLarger: (() -> Void)?
 
     // Internal so a real mouseDown-event test can drive the click path (the
     // Interaction-AC Binding Rule: a click AC must be exercised by a dispatched
@@ -174,7 +172,6 @@ final class DrillInPanel: NSView {
     private let tagField = NSTextField(labelWithString: "")
     /// Which harness runs in the focused terminal — the visual chip beside the tag.
     private let harnessBadge = HarnessBadge(agent: .claude)
-    private let terminalFontControls = FontSizeControls()
     // Internal so a focus test can assert the worktree indicator is shown/hidden.
     let worktreeTag = WorktreePill()
     private let banner = NSView()
@@ -194,6 +191,11 @@ final class DrillInPanel: NSView {
     private var surface: TerminalSurface?
     private var focusedCard: BoardCard?
     private var terminalFontSize: CGFloat = 20
+
+    /// Item 8 (18.08): true only in the production shell — drill-in surfaces then
+    /// teach TerminalGeometry their settled grid so future spawns are born pre-sized.
+    /// Tests and E2E captures leave it false and never touch the real defaults.
+    var teachesGeometry = false
     private var availableDiffs: [TurnDiff] = []
     /// The breadcrumb header (← board / status pill / quota). Collapsed while the
     /// diff pane is open so ChangesView's own "← Terminal" is the only nav there.
@@ -206,8 +208,6 @@ final class DrillInPanel: NSView {
         wantsLayer = true
         themedBackground = BoardTheme.canvas
         backPill.onClick = { [weak self] in self?.goBack() }
-        terminalFontControls.onTerminalSmaller = { [weak self] in self?.onTerminalSmaller?() }
-        terminalFontControls.onTerminalLarger = { [weak self] in self?.onTerminalLarger?() }
         sidebar.onOpenDiff = { [weak self] turns, iteration, file in
             self?.openDiff(turns: turns, iteration: iteration, file: file)
         }
@@ -257,7 +257,7 @@ final class DrillInPanel: NSView {
         worktreeTag.isHidden = true
         let header = NSStackView(views: [
             backPill, slash, dirField, titleField, statusPill, spring,
-            worktreeTag, terminalFontControls, quotaField, tagField, harnessBadge,
+            worktreeTag, quotaField, tagField, harnessBadge,
         ])
         header.orientation = .horizontal
         header.alignment = .centerY
@@ -366,6 +366,8 @@ final class DrillInPanel: NSView {
         update(state: card.state)
         detachSurface()
         let surface = TerminalSurface(session: pty, fontSize: terminalFontSize)
+        surface.teachesGeometry = teachesGeometry
+        surface.workingDirectory = card.projectDir   // relative file links resolve here
         // Esc belongs to the child (Claude Code interrupt / edit), so "back to board"
         // is ⌘[ — routed via the surface's `performKeyEquivalent`. The click pill is
         // the other way back.

@@ -21,6 +21,11 @@ final class SessionCard: NSView, NSDraggingSource {
 
     private let stack = NSStackView()
     private let now: () -> Date
+    /// When this card started needing the operator (item 7, 18.08). Production
+    /// reads the board-fed ``AttentionClock``; tests inject a date directly.
+    private let waitingSince: (UUID) -> Date?
+    private weak var agingBar: NSView?
+    private let agingTicker = DurationTicker()
     /// Where the host chip's install state comes from. Production reads the probe
     /// store; tests inject each of the four states directly.
     private let hostState: (String) -> RemoteHookInstallState
@@ -35,15 +40,20 @@ final class SessionCard: NSView, NSDraggingSource {
         now: @escaping () -> Date = Date.init,
         hostState: @escaping (String) -> RemoteHookInstallState = {
             RemoteHookStatus.shared.state(for: $0)
+        },
+        waitingSince: @escaping (UUID) -> Date? = {
+            AttentionClock.shared.waitingSince($0)
         }
     ) {
         self.card = card
         self.now = now
         self.hostState = hostState
+        self.waitingSince = waitingSince
         super.init(frame: .zero)
         wantsLayer = true
         configureLayer()
         buildContent()
+        buildAgingBar()
     }
 
     required init?(coder: NSCoder) { nil }
@@ -324,7 +334,7 @@ final class SessionCard: NSView, NSDraggingSource {
     }
 
     private func repoText(font: NSFont) -> NSTextField {
-        label(BoardTheme.projectLabel(card.projectDir), font: font, color: BoardTheme.repoColor(card.projectDir))
+        label(BoardTheme.projectLabel(card.projectDir), font: font, color: BoardTheme.repoColor(for: card))
     }
 
     /// The project line — colour alone carries the project identity (one coding
@@ -332,7 +342,7 @@ final class SessionCard: NSView, NSDraggingSource {
     /// queue read as a wall of badges before any title).
     private func repoChip() -> NSTextField {
         label(BoardTheme.projectLabel(card.projectDir),
-              font: BoardTheme.chip, color: BoardTheme.repoColor(card.projectDir))
+              font: BoardTheme.chip, color: BoardTheme.repoColor(for: card))
     }
 
     // MARK: - Host chip (US-005 AC-4, AC-7)
@@ -376,6 +386,61 @@ final class SessionCard: NSView, NSDraggingSource {
             RemoteHookStatus.shared.requestInstall(for: destination)
         }
     }
+
+    // MARK: - Aging bar (item 7, 18.08)
+
+    /// A hairline along the card's bottom edge that fills and warms with waiting
+    /// time — at 4 minutes it is nearly invisible, at 3h35m it is loud. Only a
+    /// needs-attention card carries one; every other state stays clean.
+    private func buildAgingBar() {
+        guard card.state.needsAttention, waitingSince(card.id) != nil else { return }
+        let bar = NSView()
+        bar.wantsLayer = true
+        bar.layer?.cornerRadius = 1.5
+        bar.identifier = NSUserInterfaceItemIdentifier("aging-bar")
+        addSubview(bar)
+        agingBar = bar
+        updateAgingBar()
+        agingTicker.timer = Timer.scheduledTimer(
+            withTimeInterval: 30, repeats: true
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateAgingBar() }
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        updateAgingBar()
+    }
+
+    private func updateAgingBar() {
+        guard let bar = agingBar, let start = waitingSince(card.id) else { return }
+        let age = max(0, now().timeIntervalSince(start))
+        let fraction = Self.agingFraction(age)
+        let inset: CGFloat = 6
+        bar.frame = NSRect(
+            x: inset, y: 2,
+            width: max(0, bounds.width - 2 * inset) * fraction, height: 3)
+        bar.themedBackground = Self.agingColor(age)
+        bar.toolTip = "Waiting for you for \(Self.formatDuration(age))"
+    }
+
+    /// How much of the card's width the bar fills: linear from empty to full over
+    /// three hours of waiting, so 4 minutes reads as a barely-there sliver.
+    static func agingFraction(_ age: TimeInterval) -> CGFloat {
+        min(1, max(0, age / (3 * 3600)))
+    }
+
+    /// The bar's ink warms with age: it starts as a translucent attention amber
+    /// and ends as full-strength alert red at the three-hour mark.
+    static func agingColor(_ age: TimeInterval) -> NSColor {
+        let f = agingFraction(age)
+        let warmed = BoardTheme.attention.blended(withFraction: f, of: BoardTheme.alert)
+        return (warmed ?? BoardTheme.alert).withAlphaComponent(0.35 + 0.65 * f)
+    }
+
+    /// Test seam: the bar view, if this card carries one.
+    var agingBarForTesting: NSView? { agingBar }
 
     // MARK: - Drill-in (click) + drag (move) + rename (right-click)
 

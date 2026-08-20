@@ -100,6 +100,9 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// side-effect free; the real launch installs the Application Support store and
     /// persistence tests inject a temp-dir store.
     var taskStore: BoardTaskStore?
+    /// Item 6 (18.08): the per-task who-worked-when journal. `nil` in tests unless
+    /// injected, so suites never write into the real Application Support.
+    var workLog: TaskWorkLog?
     /// Backlog: durable task intent with no session yet. Array order = render order.
     private(set) var backlogTasks: [TaskRecord] = []
     /// Archived tasks: finished work that left the board but stays durable in the
@@ -126,7 +129,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     var remoteSessionRunner: any RemoteCommandRunner = SSHCommandRunner()
     /// Why the last remote-card attempt was refused, for the operator-facing alert.
     private(set) var lastRemoteSessionIssue: RemoteSessionIssue?
-    private var terminalFontSize: CGFloat = 20
+    private(set) var terminalFontSize: CGFloat = 20
 
     /// - Parameters:
     ///   - seeds: the sessions to populate the board with (defaults to the demo
@@ -167,6 +170,11 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         // touch — or be polluted by — the real Application Support book).
         if taskStore == nil, ProcessInfo.processInfo.environment["SICH_E2E"] == nil {
             taskStore = BoardTaskStore.applicationSupport()
+            workLog = TaskWorkLog.applicationSupport()
+            // Item 8 (18.08): only the real app teaches the spawn geometry — the same
+            // guard that keeps tests/E2E out of the operator's Application Support
+            // keeps them out of the operator's UserDefaults.
+            drillIn.teachesGeometry = true
         }
         // US-003: reload + re-open the pre-quit session tree before the fresh seed lands.
         restorePreviousSessions()
@@ -427,6 +435,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             guard let cardID = ptyByCard.first(where: { $0.value === session.pty })?.key
             else { continue }
             processed.append(cardID)
+            captureResumeHints(for: cardID)   // the session is about to leave the registry
             let disposition = SessionDisposition(state: session.state)
             if cardID == drilledInCardID {
                 deadCardIDs.insert(cardID)
@@ -449,6 +458,18 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         if demoteDeadRemoteCard(cardID) { return }
         cards.removeAll { $0.id == cardID }
         refresh()
+    }
+
+    /// Freeze a dying session's resume hints into the card's durable meta, at the one
+    /// moment they can still be read: the session leaves the registry a few lines
+    /// later, after which ``sessionRef(for:)`` has nothing to join and falls back to
+    /// this meta. Without it a dropped link DISCARDED the conversation id and the
+    /// far-side cwd the card had just learned, and the re-attach after it had nothing
+    /// left to come back to.
+    private func captureResumeHints(for cardID: UUID) {
+        guard ptyByCard[cardID] != nil,
+              let card = cards.first(where: { $0.id == cardID }) else { return }
+        taskMetaByCard[cardID, default: CardTaskMeta()].sessionRef = sessionRef(for: card)
     }
 
     /// If `cardID` is a remote card, keep it on the board as session-less idle
@@ -564,6 +585,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             details: record.details, mode: record.mode, createdAt: record.createdAt,
             sessionRef: record.sessionRef, remote: record.remote?.spec
         )
+        BoardTheme.linkProject(card: record.id, toDirectory: record.remote?.spec.remoteDir)
         if state == .done { manuallyDoneCardIDs.insert(record.id) }
         if let index = cards.firstIndex(where: { $0.id == record.id }) {
             cards[index] = cards[index].with(
@@ -645,9 +667,12 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             return taskMetaByCard[card.id]?.sessionRef
                 ?? TaskSessionRef(claudeSessionID: nil, lastCwd: card.projectDir)
         }
+        // The fallback is the card's own dir only for a LOCAL card, whose `projectDir`
+        // IS a directory. A remote card's is the `user@host` label — not a path on
+        // either machine — so until the far side reports one, it has no last cwd.
         return TaskSessionRef(
             claudeSessionID: session.claudeSessionID,
-            lastCwd: session.reportedCwd ?? card.projectDir
+            lastCwd: session.reportedCwd ?? (session.remoteSpec == nil ? card.projectDir : nil)
         )
     }
 
@@ -722,7 +747,8 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     private func openRestoredCard(pane: RestoredPane, command: [String]) {
         guard let session = try? registry.launch(
             command: command, projectDir: pane.cwd,
-            agentType: .shell, flowTag: pane.snapshot.flowTag
+            agentType: .shell, flowTag: pane.snapshot.flowTag,
+            rows: TerminalGeometry.preferred.rows, cols: TerminalGeometry.preferred.cols
         ) else { return }
         ShellSignalBridge.attachCwdReporting(to: session)   // US-004: live OSC-7 cwd
         // A pane that was driving a Claude conversation comes back on that conversation,
@@ -755,7 +781,10 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             manuallyDoneCardIDs.insert(card.id)
         }
         ptyByCard[card.id] = session.pty
-        if let spec = pane.snapshot.remote?.spec { adoptRestoredRemote(spec, on: session) }
+        if let spec = pane.snapshot.remote?.spec {
+            adoptRestoredRemote(spec, on: session)
+            BoardTheme.linkProject(card: card.id, toDirectory: spec.remoteDir)
+        }
     }
 
     /// Put a restored remote card back on the same footing a freshly created one has
@@ -930,13 +959,22 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
 
     private func launch(_ seed: BoardSeed) -> Session? {
         if let launchOverrideForTesting {
-            return launchOverrideForTesting(seed)
+            // The seam replaces the SPAWN, not the bookkeeping. Every path that joins a
+            // card to its session — the resume hints, the remote spec, the far-side
+            // facts a hook line teaches — looks the session up by pty in the registry,
+            // so a session left unregistered makes all of them silently no-op under
+            // test while working in production.
+            return launchOverrideForTesting(seed).map { registry.register($0) }
         }
         guard let session = try? registry.launch(
             command: seed.command,
             projectDir: seed.projectDir,
             agentType: AgentType(rawValue: seed.agent.rawValue) ?? .shell,
-            flowTag: seed.flow == .a ? .backlog : .interactive
+            flowTag: seed.flow == .a ? .backlog : .interactive,
+            // Item 8 (18.08): spawn at the drill-in's remembered grid so the first
+            // entry is a no-op resize — no reflow gap, the screen paints instantly.
+            rows: TerminalGeometry.preferred.rows,
+            cols: TerminalGeometry.preferred.cols
         ) else { return nil }
         ShellSignalBridge.attachCwdReporting(to: session)   // US-004: live OSC-7 cwd
         return session
@@ -952,22 +990,16 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         appMenu.addItem(withTitle: "New Task", action: #selector(newTaskMenuAction),
                         keyEquivalent: "n").target = self
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Increase Board Font",
-                        action: #selector(increaseBoardFontMenuAction),
+        // One ⌘+/⌘− pair for the whole app (checklist 18.08): on the board it scales
+        // board type, inside a terminal takeover it sizes the terminal font. The old
+        // ⌘⇧ terminal pair and the in-terminal pill are gone — context picks the
+        // target, the shortcut stays the one from the main screen.
+        appMenu.addItem(withTitle: "Increase Font",
+                        action: #selector(increaseFontMenuAction),
                         keyEquivalent: "=").target = self
-        appMenu.addItem(withTitle: "Decrease Board Font",
-                        action: #selector(decreaseBoardFontMenuAction),
+        appMenu.addItem(withTitle: "Decrease Font",
+                        action: #selector(decreaseFontMenuAction),
                         keyEquivalent: "-").target = self
-        let terminalUp = appMenu.addItem(withTitle: "Increase Terminal Font",
-                                         action: #selector(increaseTerminalFontMenuAction),
-                                         keyEquivalent: "+")
-        terminalUp.keyEquivalentModifierMask = [.command, .shift]
-        terminalUp.target = self
-        let terminalDown = appMenu.addItem(withTitle: "Decrease Terminal Font",
-                                           action: #selector(decreaseTerminalFontMenuAction),
-                                           keyEquivalent: "_")
-        terminalDown.keyEquivalentModifierMask = [.command, .shift]
-        terminalDown.target = self
         appMenu.addItem(.separator())
         // Recovery affordance: if the window ever ends up larger than the screen
         // (its resize edges then sit off-screen and can't be grabbed), ⌘0 pulls
@@ -988,10 +1020,18 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
 
     @objc private func newTaskMenuAction() { openCreatePalette() }
     @objc private func fitWindowMenuAction() { fitWindowToScreen() }
-    @objc private func increaseBoardFontMenuAction() { changeBoardFont(by: 0.1) }
-    @objc private func decreaseBoardFontMenuAction() { changeBoardFont(by: -0.1) }
-    @objc private func increaseTerminalFontMenuAction() { changeTerminalFont(by: 1) }
-    @objc private func decreaseTerminalFontMenuAction() { changeTerminalFont(by: -1) }
+    @objc private func increaseFontMenuAction() { zoomFont(direction: 1) }
+    @objc private func decreaseFontMenuAction() { zoomFont(direction: -1) }
+
+    /// Route ⌘+/⌘− to whatever the operator is looking at: the terminal font while a
+    /// terminal takeover (drill-in or planning) is up, board typography otherwise.
+    func zoomFont(direction: CGFloat) {
+        if drilledInCardID != nil || planningModeCardID != nil {
+            changeTerminalFont(by: direction)
+        } else {
+            changeBoardFont(by: direction * 0.1)
+        }
+    }
 
     /// Disk-writing installs + the notification prompt, run one tick after launch so
     /// they never block the window's first paint. All are idempotent and degrade
@@ -1007,6 +1047,10 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         // global agent config and cross-contaminating unrelated sessions.
         HookInstaller.installClaudeShim()
         HookInstaller.installCodexShim()
+        // The shim points Claude at `custom:sich`; this writes the file behind that
+        // reference, so the child's TUI palette is the board's rather than a
+        // dark-oriented default stranded on light paper.
+        ClaudeTheme.install(for: NSApp.effectiveAppearance)
         // US-004: install Ghostty shell-integration the same way (idempotent; non-zsh
         // and write failures degrade gracefully) so the shell reports cwd semantically.
         installShellIntegration(installRoot: Self.shellIntegrationRoot(), rc: Self.defaultZshrc())
@@ -1268,10 +1312,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         boardView.onShowArchive = { [weak self] in self?.showArchivePage() }
         archivePage.onReturn = { [weak self] in self?.hideArchivePage() }
         attention.onActivate = { [weak self] in self?.activateAttention() }
-        drillIn.onTerminalSmaller = { [weak self] in self?.changeTerminalFont(by: -1) }
-        drillIn.onTerminalLarger = { [weak self] in self?.changeTerminalFont(by: 1) }
-        planningMode.onTerminalSmaller = { [weak self] in self?.changeTerminalFont(by: -1) }
-        planningMode.onTerminalLarger = { [weak self] in self?.changeTerminalFont(by: 1) }
         drillIn.onClose = { [weak self] in self?.returnToBoard() }
         planningMode.onReturn = { [weak self] in self?.returnToBoard() }
     }
@@ -1578,7 +1618,20 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         // rebuilds the same attach from (US-006). It lives on the card's meta too,
         // so the every-mutation task book carries it even if the session dies.
         taskMetaByCard[card.id] = CardTaskMeta(mode: .interactive, remote: spec)
+        // Same project, other machine: the remote dir's trailing name links this
+        // card's hue to the local checkout of the same project.
+        BoardTheme.linkProject(card: card.id, toDirectory: spec.remoteDir)
         session.recordRemoteSpec(spec)
+        // A brand-new card lands in a brand-new tmux session — a bare login shell,
+        // which is not what anyone opened a card for. Start the agent the way the
+        // local flow does: type the command into the pty, where it buffers along the
+        // ssh/tty chain until the far shell reads it. Interactive `claude` pinned to
+        // a fresh conversation id — never `claude -p`. Structurally safe to type:
+        // `.foreign` was refused above and no far-side session can be `.bound` to an
+        // id minted this very call, so `-A` creates rather than attaches-over-someone.
+        let conversation = UUID()
+        session.recordClaudeSession(conversation)
+        _ = session.pty.send(Array(Self.startClaudeCommand(sessionID: conversation).utf8))
         // Learn this host's hook state so the card's chip can say something true
         // about it (US-005). Inert unless the real executable enabled probing.
         RemoteHookStatus.shared.register(spec)
@@ -1909,18 +1962,44 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     /// A card was dragged to another column → set its state to that column's state
-    /// (a manual lifecycle override). Identity and PTY are preserved, so a drilled-in
-    /// terminal keeps working; only the state — hence the board column — changes.
+    /// (a manual lifecycle override). Identity is preserved; the PTY is too, with one
+    /// exception: DONE closes the terminal (a finished task must stop eating a shell,
+    /// an fd, and a pump slot), after freezing its resume hints. Leaving DONE brings
+    /// the terminal back on the SAME conversation via ``reviveSession(for:)``.
     func move(cardID: UUID, to column: BoardColumn) {
         guard let idx = cards.firstIndex(where: { $0.id == cardID }) else { return }
+        let wasDone = cards[idx].state == .done
         cards[idx] = cards[idx].with(state: column.state)
         if column == .done {
             manuallyDoneCardIDs.insert(cardID)
+            closeTerminal(for: cardID)
         } else {
             manuallyDoneCardIDs.remove(cardID)
+            if wasDone, ptyByCard[cardID] == nil {
+                // DONE → back in play: resume the terminal eagerly so the card is
+                // live again the moment it lands, not on the next drill-in. The
+                // revival carries the conversation id captured at close time.
+                _ = reviveSession(for: cards[idx])
+            }
         }
         refresh()
         persistTasks()
+    }
+
+    /// Checklist 18.08: "when the task is DONE → close terminal, so we don't eat
+    /// resources." Captures resume hints first — the one moment the session can still
+    /// be read — so a later DONE → IN PROGRESS move (or drill-in) revives the same
+    /// Claude conversation. The session leaves the registry so neither the pump, the
+    /// dead-session reconcile, nor the quit snapshot keeps a finished task alive.
+    private func closeTerminal(for cardID: UUID) {
+        guard let pty = ptyByCard[cardID] else { return }
+        captureResumeHints(for: cardID)
+        ptyByCard.removeValue(forKey: cardID)
+        if let session = registry.all.first(where: { $0.pty === pty }) {
+            registry.remove(id: session.id)
+        }
+        pty.terminate()
+        deadCardIDs.remove(cardID)
     }
 
     /// Rename a card in place — identity, state, and PTY binding all preserved (the
@@ -2005,6 +2084,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     func drill(into card: BoardCard) {
         guard let pty = ptyByCard[card.id] ?? reviveSession(for: card) else { return }
         noteFocus(card.id)
+        workLog?.noteUserEntered(card)
         // A saha planning card re-opens the planning cockpit it was born in, not the
         // bare terminal takeover — otherwise leaving planning mode strands the operator
         // on the board with no way back into the pipeline/review (the "can't re-enter" bug).
@@ -2063,35 +2143,97 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         return session.pty
     }
 
-    /// The spec a revival rebuilds the attach from: the durable meta first, then —
-    /// for books written before the spec was persisted — a best-effort parse of the
-    /// card's own `(host, session)` id and `user@host` label. A recovered spec may
-    /// lose a custom port; the next save persists the full spec going forward.
+    /// The spec a revival rebuilds the attach from: the durable meta, or a recovery
+    /// from the card's own id — with the start directory refreshed to wherever the far
+    /// side was last seen working.
     private func remoteSpec(for card: BoardCard) -> RemoteTmuxSpec? {
-        if let spec = taskMetaByCard[card.id]?.remote { return spec }
+        guard var spec = taskMetaByCard[card.id]?.remote ?? recoveredRemoteSpec(for: card)
+        else { return nil }
+        // Start where the operator actually WAS, not where the card was created: the
+        // last cwd the far side reported. Only matters when tmux has to create the
+        // session (it ignores `-c` on an attach), which is exactly the case this is
+        // for — the far side lost the session and the card must rebuild the context.
+        if let observed = taskMetaByCard[card.id]?.sessionRef?.lastCwd, observed.hasPrefix("/") {
+            spec.remoteDir = observed
+        }
+        return spec
+    }
+
+    /// For books written before the spec was persisted: a best-effort parse of the
+    /// card's own `(host, session)` id and `user@host` label. A recovered spec may lose
+    /// a custom port; the next save persists the full spec going forward.
+    private func recoveredRemoteSpec(for card: BoardCard) -> RemoteTmuxSpec? {
         guard let key = RemoteSessionKey.parse(sessionID: card.sessionID) else { return nil }
         return RemoteTmuxSpec.parse(destination: card.projectDir, sessionName: key.session)
             ?? RemoteTmuxSpec(host: key.host, sessionName: key.session)
     }
 
-    /// Re-attach a session-less remote card: tmux kept the far side exactly as the
-    /// operator left it, so revival is `ssh … tmux new-session -A` under the ORIGINAL
-    /// card id — and, like a restart restore, NO resume keystrokes are typed (they
-    /// would talk over whatever is already running in that session).
+    /// Re-attach a session-less remote card under the ORIGINAL card id.
+    ///
+    /// Normally tmux kept the far side exactly as the operator left it and revival is a
+    /// pure attach: NO keystrokes are typed, because they would talk over whatever is
+    /// already running there. But `-A` also silently CREATES the session when the far
+    /// side lost it (a reboot, an OOM sweep, a killed tmux server) — and that case used
+    /// to be indistinguishable from a resume, so the operator landed on a bare login
+    /// shell with their conversation stranded. So ask first: only when the far side says
+    /// the session is gone do we rebuild the context we know about — the last directory,
+    /// via the spec, and the conversation, by resuming it.
     private func reviveRemoteSession(spec: RemoteTmuxSpec, card: BoardCard) -> PTYSession? {
+        let lost = remoteSessionIsLost(spec: spec, cardID: card.id.uuidString)
         guard let seed = try? BoardSeed.remoteTmux(
             spec: spec, sessionID: card.sessionID, title: card.title,
             cardID: card.id.uuidString, agent: card.agent
         ), let session = launch(seed) else { return nil }
         adoptRestoredRemote(spec, on: session)
+        if lost, let rebuild = remoteRebuildCommand(for: card, on: session) {
+            _ = session.pty.send(Array(rebuild.utf8))
+        }
         ptyByCard[card.id] = session.pty
         persistTasks()
         return session.pty
     }
 
+    /// What to type into a tmux session the far side had to build from nothing, to put
+    /// the card back on a conversation instead of an empty prompt.
+    ///
+    /// With a known conversation id it is a resume; without one — the far side was lost
+    /// before any hook line named it — it is a fresh conversation PINNED to an id we
+    /// mint here, exactly as the local create path does, so this card is resumable the
+    /// next time the far side drops it. Either way the session records the id, so it
+    /// survives an unbounded chain of losses.
+    ///
+    /// Claude cards only. Codex resume runs through a locally-installed shim that does
+    /// not exist on the far side, and Gemini has no resume; both come back to the shell
+    /// prompt they left, which is what the operator can act on.
+    /// Firewall-clean throughout: interactive `claude`, never `claude -p`.
+    private func remoteRebuildCommand(for card: BoardCard, on session: Session) -> String? {
+        guard card.agent == .claude else { return nil }
+        if let resumeID = taskMetaByCard[card.id]?.sessionRef?.claudeSessionID {
+            session.recordClaudeSession(resumeID)
+            return Self.resumeClaudeCommand(sessionID: resumeID)
+        }
+        let fresh = UUID()
+        session.recordClaudeSession(fresh)
+        return Self.startClaudeCommand(sessionID: fresh)
+    }
+
+    /// Whether the far side has LOST this card's tmux session, so the attach about to
+    /// run will really be a create. Only a definite `absent` counts: an unreachable or
+    /// silent host answers `unknown`, and typing a resume into a session that turns out
+    /// to be alive is the one outcome worse than not resuming at all.
+    private func remoteSessionIsLost(spec: RemoteTmuxSpec, cardID: String) -> Bool {
+        guard let key = try? RemoteSessionKey.make(for: spec) else { return false }
+        return RemoteSessionProbe.presence(
+            of: key, cardID: cardID, spec: spec, runner: remoteSessionRunner) == .absent
+    }
+
     /// US-002 AC#2: return to the board, state preserved — un-hide the board and
     /// attention header so the board looks exactly as it did before drilling in.
     func returnToBoard() {
+        if let inside = drilledInCardID ?? planningModeCardID,
+           let card = cards.first(where: { $0.id == inside }) {
+            workLog?.noteUserLeft(card)
+        }
         selection.returnToBoard()
         // A card whose child died while drilled in was left up so the operator could
         // read the end banner; leaving it now is the moment it comes off the board.
@@ -2273,6 +2415,15 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         for card in cards {
             let previous = lastCardStates[card.id]
             lastCardStates[card.id] = card.state
+            // Item 7 (18.08): the attention clock ages the "needs you" signal.
+            AttentionClock.shared.note(card)
+            // Item 6 (18.08): every edge any card takes lands in its work journal —
+            // this sweep already sees them all, so it is the one feed the log needs.
+            if let previous {
+                workLog?.noteState(from: previous, of: card)
+            } else {
+                workLog?.noteAppeared(card)
+            }
             guard card.state == .done, previous != nil, previous != .done else { continue }
             guard !NSApp.isActive else { continue }
             SystemNotifier.notifyDone(taskName: card.title ?? BoardTheme.shortPath(card.projectDir))
@@ -2280,6 +2431,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         // Drop states for cards that no longer exist so the map can't grow unbounded.
         let live = Set(cards.map(\.id))
         lastCardStates = lastCardStates.filter { live.contains($0.key) }
+        AttentionClock.shared.retain(live)
     }
 
     /// OS-level nudge when a session newly starts waiting on the operator while
@@ -2340,6 +2492,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             let byDir = uniqueDirs.contains(Self.normDir(card.projectDir))
             let bound = observed.filter { $0.boundCardID == card.id.uuidString }
             if let freshest = bound.max(by: { Self.staler($0, $1) }) {
+                learnRemoteFacts(from: freshest, for: card)
                 return smoothLiveState(card: card, observed: freshest.state)
             }
             if let state = liveState(for: card, joinByDir: byDir, in: observed) {
@@ -2369,6 +2522,30 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         // no teardown — the old `focusedCardID == nil` guard is gone.
         refresh()
         persistTasks()
+    }
+
+    /// Learn from a REMOTE card's bound hook line the two facts only the far side knows:
+    /// which conversation it is driving, and which directory it is driving it in.
+    ///
+    /// A local card is told both at launch — we pin the conversation id and we chose the
+    /// cwd. A remote card is told neither: the operator runs `claude` themselves inside
+    /// tmux, in whatever directory they `cd` to. Until these are captured, a session the
+    /// far side LOSES (a reboot, an OOM sweep, a killed tmux server) comes back as a bare
+    /// login shell at `$HOME` with the conversation stranded — which is precisely what a
+    /// dropped link looked like. Recorded on the live session, so the existing
+    /// ``sessionRef(for:)`` persists them with no second storage path.
+    private func learnRemoteFacts(from observed: BoardCard, for card: BoardCard) {
+        guard let pty = ptyByCard[card.id],
+              let session = registry.all.first(where: { $0.pty === pty }),
+              session.remoteSpec != nil else { return }
+        if let conversation = UUID(uuidString: observed.sessionID) {
+            session.recordClaudeSession(conversation)
+        }
+        // The hook's `cwd`, which for a remote line is a far-side absolute path. The
+        // relative label an unbound entry falls back to (its own session id) is not one.
+        if observed.projectDir.hasPrefix("/") {
+            session.reportCwd(observed.projectDir)
+        }
     }
 
     // A model "thinking" between tool calls emits no hook events for many seconds,

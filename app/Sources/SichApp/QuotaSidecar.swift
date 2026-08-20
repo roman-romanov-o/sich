@@ -133,9 +133,10 @@ public enum RepoLocator {
         return nil
     }
 
-    /// The dir the daily launch seeds the live-terminal card with. A Finder/`open`
-    /// launch starts the process at `/` — never a real project — which used to put
-    /// a permanent "/" card on the board; fall back to the user's home instead.
+    /// The default project dir for a newly created card — what the create palette
+    /// pre-fills and what a promoted backlog task with no dir of its own falls back
+    /// to. A Finder/`open` launch starts the process at `/`, never a real project, so
+    /// that case resolves to the user's home rather than the filesystem root.
     public static func launchProjectDir(
         repoRoot: URL? = RepoLocator.repoRoot(),
         cwd: String = FileManager.default.currentDirectoryPath,

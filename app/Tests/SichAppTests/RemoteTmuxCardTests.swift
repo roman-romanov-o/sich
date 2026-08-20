@@ -34,7 +34,7 @@ struct RemoteTmuxCardTests {
         let seed = try BoardSeed.remoteTmux(spec: spec)
         let remote = try #require(seed.command.last)
         #expect(seed.command.first == "/usr/bin/ssh")
-        #expect(remote.hasPrefix("tmux new-session -A -s 'agent' "))
+        #expect(remote.hasPrefix("tmux new-session -A -D -s 'agent' "))
         #expect(try PoolFirewall.classify(seed.command) == .interactive)
     }
 
@@ -237,6 +237,63 @@ struct RemoteTmuxCardTests {
         }
         #expect(shell.createRemoteTmuxSession(spec: spec) == nil)
         #expect(shell.cards.isEmpty)
+    }
+
+    // MARK: - Checklist 18.08, item 10 — a fresh remote card starts claude, not bash
+
+    /// The reported bug: "when you start remote session in recent directory —
+    /// claude is not starting, you just in bash". A brand-new card's tmux session is
+    /// always CREATED (`-A` has nothing to attach to: the default name is minted from
+    /// the card's own fresh id, and a foreign name is refused before launch), so the
+    /// pane came up as a bare login shell and stayed one. Creation must type the same
+    /// interactive `claude --session-id <uuid>` the local flow types — buffered by
+    /// the tty until the far shell reads it — and freeze that conversation id into
+    /// the task book so DONE→resume and revival keep working across machines.
+    @Test("a fresh remote card types claude into the pane and books the conversation")
+    func freshRemoteCardStartsClaude() throws {
+        let bookDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sich-remote-start-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: bookDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: bookDir) }
+
+        let shell = BoardShell(seeds: [])
+        _ = shell.buildContentForTesting()
+        defer { shell.e2eTeardown() }
+        shell.taskStore = BoardTaskStore(directory: bookDir)
+
+        let typed = Revival()
+        let launched = LaunchedCommand()
+        shell.launchOverrideForTesting = { seed in
+            launched.set(seed.command)
+            let pty = try! PTYSession(command: ["/bin/cat"])
+            try! pty.start()
+            pty.onInput = { bytes in
+                MainActor.assumeIsolated { typed.text += String(decoding: bytes, as: UTF8.self) }
+            }
+            return Session(projectDir: seed.projectDir, agentType: .claude,
+                           flowTag: .interactive, pty: pty, state: .running)
+        }
+
+        let spec = RemoteTmuxSpec(
+            host: "far.invalid", user: "roman", remoteDir: "~/MyProjects/spectre")
+        let card = try #require(shell.createRemoteTmuxSession(spec: spec))
+
+        // The launched binary stays ssh — the agent start rides the tty, not the argv.
+        #expect(launched.argv.first == "/usr/bin/ssh")
+
+        #expect(typed.text.contains("claude --session-id "),
+                "creation types an interactive claude — typed: \(typed.text)")
+        #expect(!typed.text.contains("claude -p"), "interactive pool only, firewall intact")
+
+        // The conversation typed into the pane is the one the durable book froze.
+        let uuidText = typed.text
+            .components(separatedBy: "claude --session-id ").last?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let conversation = try #require(UUID(uuidString: uuidText ?? ""))
+        let record = try #require(
+            BoardTaskStore(directory: bookDir).load()?.tasks.first { $0.id == card.id })
+        #expect(record.sessionRef?.claudeSessionID == conversation,
+                "the typed conversation id is booked, so resume/revival can find it")
     }
 }
 

@@ -119,7 +119,7 @@ final class TaskSwitcherOverlay: NSView {
         line.addArrangedSubview(NSView())   // flexible spacer
         line.addArrangedSubview(label(BoardTheme.projectLabel(card.projectDir),
                                       font: BoardTheme.chip,
-                                      color: BoardTheme.repoColor(card.projectDir)))
+                                      color: BoardTheme.repoColor(for: card)))
         line.addArrangedSubview(statusLabel(for: card))
 
         container.addSubview(line)

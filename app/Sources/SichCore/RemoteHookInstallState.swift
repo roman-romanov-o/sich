@@ -132,15 +132,37 @@ public struct SSHCommandRunner: RemoteCommandRunner {
     /// nonisolated(unsafe): written once at process start, before first use.
     public nonisolated(unsafe) static var spawningEnabled = false
 
-    public init() {}
+    /// The hard cap on one command, dial to exit. `BatchMode` bounds a password
+    /// prompt and `ConnectTimeout` bounds the dial, but a host whose SSH is gated
+    /// on an out-of-band step — Tailscale SSH waiting for a browser re-auth —
+    /// ACCEPTS the connection and then holds it silently: ssh neither answers nor
+    /// exits, and an unbounded probe froze the app until the operator authed.
+    /// Past the deadline the command is killed and the answer is `nil`, which the
+    /// probe layer already reads as "silence — proceed": the pane still attaches,
+    /// and the auth URL prints there for the operator to follow.
+    let deadline: TimeInterval
+
+    public init(deadline: TimeInterval = 10) {
+        self.deadline = deadline
+    }
 
     public func run(argv: [String], input: Data?) -> RemoteCommandResult? {
         guard Self.spawningEnabled, let executable = argv.first else { return nil }
         guard (try? PoolFirewall.classify(argv)) != nil else { return nil }
+        return Self.bounded(
+            executable: executable, arguments: Array(argv.dropFirst()),
+            input: input, deadline: deadline)
+    }
 
+    /// Run to completion or kill at the deadline. Split from ``run(argv:input:)``
+    /// so the deadline is testable without flipping `spawningEnabled` (which must
+    /// stay false under `swift test` — no test may reach the network).
+    static func bounded(
+        executable: String, arguments: [String], input: Data?, deadline: TimeInterval
+    ) -> RemoteCommandResult? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = Array(argv.dropFirst())
+        process.arguments = arguments
         let output = Pipe()
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
@@ -150,8 +172,45 @@ public struct SSHCommandRunner: RemoteCommandRunner {
 
         if let input { stdin.fileHandleForWriting.write(input) }
         try? stdin.fileHandleForWriting.close()
-        let data = output.fileHandleForReading.readDataToEndOfFile()
+
+        // Read on a worker so the deadline can fire while the child is silent;
+        // the read also drains the pipe, so the child can never block on write.
+        let collected = CollectedOutput()
+        let finished = DispatchSemaphore(value: 0)
+        let reader = output.fileHandleForReading
+        DispatchQueue.global(qos: .userInitiated).async {
+            collected.set(reader.readDataToEndOfFile())
+            finished.signal()
+        }
+        guard finished.wait(timeout: .now() + deadline) == .success else {
+            process.terminate()
+            if finished.wait(timeout: .now() + 1) == .timedOut {
+                // ssh mid-handshake can shrug off SIGTERM; SIGKILL it cannot.
+                kill(process.processIdentifier, SIGKILL)
+                finished.wait()
+            }
+            process.waitUntilExit()
+            return nil
+        }
         process.waitUntilExit()
-        return RemoteCommandResult(exitCode: process.terminationStatus, standardOutput: data)
+        return RemoteCommandResult(exitCode: process.terminationStatus, standardOutput: collected.get())
+    }
+}
+
+/// The bytes the worker read, handed across the deadline wait.
+private final class CollectedOutput: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func set(_ bytes: Data) {
+        lock.lock()
+        data = bytes
+        lock.unlock()
+    }
+
+    func get() -> Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return data
     }
 }
