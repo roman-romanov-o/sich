@@ -119,7 +119,7 @@ final class TaskSwitcherOverlay: NSView {
         line.addArrangedSubview(NSView())   // flexible spacer
         line.addArrangedSubview(label(BoardTheme.projectLabel(card.projectDir),
                                       font: BoardTheme.chip,
-                                      color: BoardTheme.repoColor(card.projectDir)))
+                                      color: BoardTheme.repoColor(for: card)))
         line.addArrangedSubview(statusLabel(for: card))
 
         container.addSubview(line)
@@ -155,7 +155,11 @@ final class TaskSwitcherOverlay: NSView {
         case .running: return "working"
         case .runningTests: return "tests"
         case .idle: return "idle"
+        case .parked: return "parked"
         case .done: return "done"
+        // Never blank: a card whose host stopped answering must say so here too,
+        // or the switcher becomes the one surface still showing stale calm (US-007).
+        case .unreachable: return "unreachable"
         default: return ""
         }
     }

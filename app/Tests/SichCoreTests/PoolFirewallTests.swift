@@ -41,10 +41,48 @@ struct PoolFirewallTests {
         }
     }
 
+    // MARK: - the ssh branch (US-001.AC-1, TC-UNIT-001)
+    //
+    // Until this landed, classify() gated the headless check behind
+    // argv[0] == "claude" — and "ssh" is not "claude", so an ssh argv carrying
+    // `claude -p` returned .interactive uninspected.
+
+    @Test("an ssh argv carrying headless claude is refused", arguments: [
+        ["/usr/bin/ssh", "host", "claude -p 'x'"],
+        ["/usr/bin/ssh", "-t", "roman@host", "claude --print 'x'"],
+        ["ssh", "-p", "2222", "host", "cd /srv && claude -p 'x'"],
+        ["/usr/bin/ssh", "-o", "ServerAliveInterval=15", "host", "claude --print=x"]
+    ])
+    func sshCarryingHeadlessClaudeRefused(_ argv: [String]) {
+        #expect(throws: PoolViolation.self) { try PoolFirewall.classify(argv) }
+    }
+
+    @Test("the ssh scan is tokenized: a name that merely contains `claude` passes", arguments: [
+        ["/usr/bin/ssh", "-t", "host", "tmux -CC new-session -A -D -s 'claude-work'"],
+        ["/usr/bin/ssh", "-t", "host", "tmux -CC new-session -A -D -s 'p' -c '/srv/claude-p'"]
+    ])
+    func sshTokenizedScanAllowsLookalikes(_ argv: [String]) throws {
+        // A substring search for "claude" over the joined argv would refuse these.
+        #expect(try PoolFirewall.classify(argv) == .interactive)
+    }
+
+    @Test("an ssh option that merely looks headless is not the remote command")
+    func sshOptionsAreNotScanned() throws {
+        // `-p 2222` is ssh's PORT flag sitting in the option position; only the
+        // remote-command operand is in scope.
+        #expect(try PoolFirewall.classify(["/usr/bin/ssh", "-p", "2222", "host", "tmux ls"])
+            == .interactive)
+    }
+
     @Test("the firewall sits on the PTYSession spawn path")
     func sessionRefusesHeadlessAtConstruction() {
         #expect(throws: PoolViolation.self) {
             _ = try PTYSession(command: ["claude", "-p", "headless"])
+        }
+        // …and the ssh branch is on the same chokepoint, so no *generated* remote
+        // argv can reach a PTY without passing it (US-001.AC-1, TC-INT-018).
+        #expect(throws: PoolViolation.self) {
+            _ = try PTYSession(command: ["/usr/bin/ssh", "-t", "host", "claude -p 'x'"])
         }
     }
 }

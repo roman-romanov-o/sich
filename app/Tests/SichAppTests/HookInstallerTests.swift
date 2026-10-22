@@ -217,6 +217,153 @@ final class HookInstallerTests: XCTestCase {
         }
     }
 
+    func testCursorInstallWritesShimsHookAndMergesUserHooksJSONIdempotently() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sich-cursor-home-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let config = home.appendingPathComponent(".cursor/hooks.json")
+        try FileManager.default.createDirectory(at: config.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"version":1,"hooks":{"stop":[{"command":"/usr/local/bin/mine.sh"}]}}"#.utf8).write(to: config)
+
+        XCTAssertTrue(HookInstaller.installCursorHooks(home: home))
+
+        for name in ["agent", "cursor-agent"] {
+            let shim = home.appendingPathComponent(".sich/bin/\(name)")
+            let body = try String(contentsOf: shim, encoding: .utf8)
+            XCTAssertTrue(body.contains("Sich Cursor wrapper"))
+            let attrs = try FileManager.default.attributesOfItem(atPath: shim.path)
+            XCTAssertEqual((attrs[.posixPermissions] as? NSNumber)?.intValue, 0o755)
+        }
+        let hook = home.appendingPathComponent(".sich/hooks/sich-cursor.sh")
+        XCTAssertTrue(try String(contentsOf: hook, encoding: .utf8).contains("plutil -replace sich_agent -string cursor"))
+
+        func hooks() throws -> [String: [[String: Any]]] {
+            let object = try JSONSerialization.jsonObject(with: Data(contentsOf: config)) as? [String: Any]
+            return try XCTUnwrap(object?["hooks"] as? [String: [[String: Any]]])
+        }
+        let merged = try hooks()
+        for event in ["sessionStart", "beforeSubmitPrompt", "preToolUse", "postToolUse", "postToolUseFailure",
+                      "subagentStart", "subagentStop", "preCompact", "stop", "sessionEnd"] {
+            XCTAssertTrue(merged[event]?.contains { $0["command"] as? String == hook.path } == true, event)
+        }
+        XCTAssertEqual(merged["stop"]?.first?["command"] as? String, "/usr/local/bin/mine.sh", "user hooks survive")
+
+        XCTAssertTrue(HookInstaller.installCursorHooks(home: home))
+        XCTAssertEqual(try hooks()["stop"]?.count, 2, "second install adds nothing")
+    }
+
+    func testCursorHookIsSilentOutsideASichTerminalAndStampsInsideOne() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sich-cursor-hook-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        XCTAssertTrue(HookInstaller.installCursorHooks(home: home))
+        let events = home.appendingPathComponent("events.jsonl")
+        let hook = home.appendingPathComponent(".sich/hooks/sich-cursor.sh")
+        let payload = #"{"hook_event_name":"stop","conversation_id":"conv","workspace_roots":["/repo"]}"#
+
+        func fire(cardID: String?) throws {
+            let process = Process()
+            process.executableURL = hook
+            var env = ["PATH": "/usr/bin:/bin", "SICH_EVENTS_FILE": events.path, "HOME": home.path]
+            env["SICH_CARD_ID"] = cardID
+            process.environment = env
+            process.standardOutput = FileHandle.nullDevice
+            let input = Pipe()
+            process.standardInput = input
+            try process.run()
+            input.fileHandleForWriting.write(Data(payload.utf8))
+            try input.fileHandleForWriting.close()
+            process.waitUntilExit()
+            XCTAssertEqual(process.terminationStatus, 0)
+        }
+
+        try fire(cardID: nil)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: events.path), "unbound Cursor runs emit nothing")
+
+        try fire(cardID: "card-7")
+        let line = try String(contentsOf: events, encoding: .utf8).split(separator: "\n").first
+        let object = try JSONSerialization.jsonObject(with: Data(try XCTUnwrap(line).utf8)) as? [String: Any]
+        XCTAssertEqual(object?["sich_agent"] as? String, "cursor")
+        XCTAssertEqual(object?["sich_card_id"] as? String, "card-7")
+        XCTAssertEqual(object?["conversation_id"] as? String, "conv")
+        XCTAssertEqual(object?["hook_event_name"] as? String, "stop")
+    }
+
+    func testAntigravityInstallWritesShimHookAndMergesNamedEntryIdempotently() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sich-agy-home-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let config = home.appendingPathComponent(".gemini/config/hooks.json")
+        try FileManager.default.createDirectory(at: config.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"mine":{"Stop":[{"type":"command","command":"mine.sh"}]}}"#.utf8).write(to: config)
+
+        XCTAssertTrue(HookInstaller.installAntigravityHooks(home: home))
+
+        let shim = home.appendingPathComponent(".sich/bin/agy")
+        XCTAssertTrue(try String(contentsOf: shim, encoding: .utf8).contains("Sich Antigravity wrapper"))
+        let attrs = try FileManager.default.attributesOfItem(atPath: shim.path)
+        XCTAssertEqual((attrs[.posixPermissions] as? NSNumber)?.intValue, 0o755)
+        let hook = home.appendingPathComponent(".sich/hooks/sich-antigravity.sh")
+        XCTAssertTrue(try String(contentsOf: hook, encoding: .utf8).contains("plutil -replace sich_agent -string antigravity"))
+
+        func entries() throws -> [String: Any] {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: config)) as? [String: Any])
+        }
+        let merged = try entries()
+        XCTAssertNotNil(merged["mine"], "user entries survive")
+        let sich = try XCTUnwrap(merged["sich"] as? [String: Any])
+        XCTAssertNil(sich["PreToolUse"], "PreToolUse demands a permission decision — never hooked")
+        for event in ["PreInvocation", "PostInvocation", "Stop"] {
+            let handler = try XCTUnwrap((sich[event] as? [[String: Any]])?.first, event)
+            XCTAssertEqual(handler["command"] as? String, "'\(hook.path)' \(event)")
+        }
+        let post = try XCTUnwrap((sich["PostToolUse"] as? [[String: Any]])?.first)
+        XCTAssertEqual(post["matcher"] as? String, "*")
+        XCTAssertEqual(((post["hooks"] as? [[String: Any]])?.first?["command"]) as? String, "'\(hook.path)' PostToolUse")
+
+        let before = try Data(contentsOf: config)
+        XCTAssertTrue(HookInstaller.installAntigravityHooks(home: home))
+        XCTAssertEqual(try Data(contentsOf: config), before, "second install rewrites nothing")
+    }
+
+    func testAntigravityHookStampsTheEventNameItWasCalledWith() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sich-agy-hook-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        XCTAssertTrue(HookInstaller.installAntigravityHooks(home: home))
+        let events = home.appendingPathComponent("events.jsonl")
+        let hook = home.appendingPathComponent(".sich/hooks/sich-antigravity.sh")
+        let payload = #"{"conversationId":"agy-conv","workspacePaths":["/repo"],"modelName":"gemini-3-pro"}"#
+
+        func fire(cardID: String?) throws {
+            let process = Process()
+            process.executableURL = hook
+            process.arguments = ["Stop"]
+            var env = ["PATH": "/usr/bin:/bin", "SICH_EVENTS_FILE": events.path, "HOME": home.path]
+            env["SICH_CARD_ID"] = cardID
+            process.environment = env
+            process.standardOutput = FileHandle.nullDevice
+            let input = Pipe()
+            process.standardInput = input
+            try process.run()
+            input.fileHandleForWriting.write(Data(payload.utf8))
+            try input.fileHandleForWriting.close()
+            process.waitUntilExit()
+            XCTAssertEqual(process.terminationStatus, 0)
+        }
+
+        try fire(cardID: nil)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: events.path), "unbound agy runs emit nothing")
+
+        try fire(cardID: "card-9")
+        let line = try String(contentsOf: events, encoding: .utf8).split(separator: "\n").first
+        let object = try JSONSerialization.jsonObject(with: Data(try XCTUnwrap(line).utf8)) as? [String: Any]
+        XCTAssertEqual(object?["hook_event_name"] as? String, "Stop", "the payload has no name — the script stamps $1")
+        XCTAssertEqual(object?["sich_agent"] as? String, "antigravity")
+        XCTAssertEqual(object?["sich_card_id"] as? String, "card-9")
+        XCTAssertEqual(object?["conversationId"] as? String, "agy-conv")
+    }
+
     func testClaudeShimInstallWritesScopedWrapperWithoutGlobalSettings() throws {
         let home = FileManager.default.temporaryDirectory
             .appendingPathComponent("sich-claude-home-\(UUID().uuidString)")
@@ -279,6 +426,11 @@ final class HookInstallerTests: XCTestCase {
         XCTAssertTrue(bound.dropFirst(2).contains("hello"))
         XCTAssertTrue(bound[1].contains(#""SessionStart""#))
         XCTAssertTrue(bound[1].contains(#""PermissionRequest""#))
+        // The board's TUI palette rides the same blob, so it lands only in bound
+        // terminals — the operator's own Claude keeps whatever `/theme` set.
+        let boundSettings = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(bound[1].utf8)) as? [String: Any])
+        XCTAssertEqual(boundSettings["theme"] as? String, ClaudeTheme.settingsRef)
 
         _ = try run(shim.path, ["--help"], env: boundEnv)
         XCTAssertEqual(try loggedArgs(log), ["--help"], "help/version commands must not inject hooks")

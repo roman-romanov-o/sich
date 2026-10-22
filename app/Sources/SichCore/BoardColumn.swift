@@ -10,6 +10,7 @@ import Foundation
 /// underlying state column stays distinct here.
 public enum BoardColumn: String, Sendable, Equatable, CaseIterable {
     case idle
+    case parked
     case running
     case waitingForInput = "waiting-for-input"
     case runningTests = "running-tests"
@@ -22,19 +23,22 @@ public enum BoardColumn: String, Sendable, Equatable, CaseIterable {
     public init(state: CardState) {
         switch state {
         case .idle: self = .idle
+        case .parked: self = .parked
         case .running: self = .running
         case .waitingForInput: self = .waitingForInput
         case .runningTests: self = .runningTests
         case .blocked: self = .blocked
         case .done: self = .done
-        case .unknown: self = .unknown
+        // A card whose host is gone is not positively determined either, so it
+        // lands in the same column — never in WORKING (US-007 AC-3). The card face
+        // keeps the two apart; the column is the coarser grouping.
+        case .unknown, .unreachable: self = .unknown
         }
     }
 
-    /// True for the two columns the HELM POC renders together under one
-    /// `⚠ waiting · blocked` header (US-005 made structural).
+    /// True for the column where the agent waits on the operator (not external block).
     public var isAttention: Bool {
-        self == .waitingForInput || self == .blocked
+        self == .waitingForInput
     }
 
     /// The state a manual drop into this column sets — the inverse of

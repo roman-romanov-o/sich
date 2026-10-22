@@ -52,6 +52,59 @@ struct HookNormalizerTests {
         #expect(store.entry(for: "C")?.state == .running)
     }
 
+    @Test func cursorCamelCaseVocabularyDrivesTheSameLifecycle() throws {
+        func cursor(_ name: String, extra: String = "") throws -> SignalEvent {
+            try #require(normalize(
+                #"{"hook_event_name":"\#(name)","sich_agent":"cursor","conversation_id":"conv-1","workspace_roots":["/repo"]\#(extra)}"#))
+        }
+        let start = try cursor("sessionStart")
+        #expect(start.agent == .cursor)
+        #expect(start.kind == .sessionStart)
+        #expect(start.sessionID == "conv-1", "Cursor names the session conversation_id")
+        #expect(start.cwd == "/repo", "no cwd on the payload → first workspace root")
+
+        let store = HookSessionStore()
+        store.ingest([start])
+        #expect(store.entry(for: "conv-1")?.state == .idle)
+        store.ingest([try cursor("beforeSubmitPrompt")])
+        #expect(store.entry(for: "conv-1")?.state == .running)
+        #expect(try cursor("preToolUse", extra: #","tool_name":"Read""#).kind == .toolUse)
+        #expect(try cursor("postToolUseFailure").kind == .errorExit)
+        #expect(try cursor("preCompact").kind == .compaction)
+        #expect(try cursor("subagentStart").kind == .subagentStart)
+        #expect(try cursor("subagentStop").kind == .subagentStop)
+        store.ingest([try cursor("stop")])
+        #expect(store.entry(for: "conv-1")?.state == .waitingForInput)
+        store.ingest([try cursor("sessionEnd")])
+        #expect(store.entry(for: "conv-1")?.state == .idle)
+    }
+
+    @Test func antigravityEventsStampedByTheScriptDriveTheLifecycle() throws {
+        func agy(_ name: String) throws -> SignalEvent {
+            try #require(normalize(
+                #"{"hook_event_name":"\#(name)","sich_agent":"antigravity","conversationId":"agy-1","workspacePaths":["/repo"],"modelName":"gemini-3-pro"}"#))
+        }
+        let pre = try agy("PreInvocation")
+        #expect(pre.agent == .antigravity)
+        #expect(pre.kind == .toolUse)
+        #expect(pre.sessionID == "agy-1", "Antigravity names the session conversationId")
+        #expect(pre.cwd == "/repo", "no cwd on the payload → first workspacePaths entry")
+
+        let store = HookSessionStore()
+        store.ingest([pre])
+        #expect(store.entry(for: "agy-1")?.state == .running)
+        #expect(try agy("PostToolUse").kind == .toolUse)
+        #expect(try agy("PostInvocation").kind == .toolUse)
+        store.ingest([try agy("Stop")])
+        #expect(store.entry(for: "agy-1")?.state == .waitingForInput)
+    }
+
+    @Test func cursorShellToolRunningTestsIsATestRun() throws {
+        let event = try #require(normalize(
+            #"{"hook_event_name":"preToolUse","sich_agent":"cursor","conversation_id":"c","cwd":"/repo","tool_name":"Shell","tool_input":{"command":"pytest -q"}}"#))
+        #expect(event.kind == .testRunStart)
+    }
+
     @Test func codexSnakeCasePermissionRequestSetsAttention() throws {
         let event = try #require(
             normalize(#"{"hook_event_name":"permission_request","sich_agent":"codex","session_id":"C"}"#))
@@ -117,5 +170,40 @@ struct HookNormalizerTests {
         // Root Stop never arrives. Past the budget the stall guard routes attention.
         store.sweepStale(now: arrival.addingTimeInterval(20))
         #expect(store.entry(for: "C")?.state == .waitingForInput)
+    }
+
+    // MARK: - background_tasks parsing (CARD-STATUS.md rule 2.3)
+
+    @Test func backgroundTasksFoldToOneFlag() throws {
+        // Running child → busy; the payload is the live-capture Stop shape.
+        let busy = try #require(normalize(
+            #"{"hook_event_name":"Stop","session_id":"S","background_tasks":[{"id":"a1","type":"subagent","status":"running"}]}"#))
+        #expect(busy.backgroundBusy == true)
+
+        // All children finished → not busy; absent array → nil (older Claude).
+        let drained = try #require(normalize(
+            #"{"hook_event_name":"Stop","session_id":"S","background_tasks":[{"id":"a1","status":"completed"}]}"#))
+        #expect(drained.backgroundBusy == false)
+        let absent = try #require(normalize(#"{"hook_event_name":"Stop","session_id":"S"}"#))
+        #expect(absent.backgroundBusy == nil)
+
+        // A SubagentStop lists the stopping agent ITSELF as still running — its own
+        // id must not count as an open child.
+        let selfListed = try #require(normalize(
+            #"{"hook_event_name":"SubagentStop","session_id":"S","agent_id":"a1","background_tasks":[{"id":"a1","status":"running"}]}"#))
+        #expect(selfListed.backgroundBusy == false,
+                "the stopping agent's own entry is not a still-open background task")
+    }
+
+    /// The idle nudge is the turn boundary restated — it must route through `stop`
+    /// (sharing the background-parenthesis masking), while a permission Notification
+    /// keeps the verbatim `permissionRequest` mapping.
+    @Test func idleNudgeRoutesThroughStop() throws {
+        let nudge = try #require(normalize(
+            #"{"hook_event_name":"Notification","session_id":"S","notification_type":"idle_prompt"}"#))
+        #expect(nudge.kind == .stop)
+        let permission = try #require(normalize(
+            #"{"hook_event_name":"Notification","session_id":"S","message":"Claude needs your permission to use Bash"}"#))
+        #expect(permission.kind == .permissionRequest)
     }
 }

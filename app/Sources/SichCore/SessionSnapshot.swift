@@ -35,6 +35,47 @@ public struct WindowSnapshot: Codable, Equatable, Sendable {
     public init(panes: [PaneSnapshot]) { self.panes = panes }
 }
 
+/// Where a pane's REMOTE session lives, in the only form we persist: the
+/// constructor's **input**, never its output.
+///
+/// This is the whole watcher argument in one shape. An argv on disk would be a
+/// command a launch replays with no human present; a spec is a set of constrained
+/// coordinates (host, login, session name, port, key, dir) that only
+/// ``RemoteTmuxCommand/argv(for:cardID:)`` can turn into a command — so the
+/// destination grammar, the pool firewall and the tmux shape are re-applied on
+/// every restore instead of being frozen into the file. Nothing here can name a
+/// command, which is why widening it is a decision, not a detail.
+public struct RemoteSpecSnapshot: Codable, Equatable, Sendable {
+    public let host: String
+    public let user: String?
+    public let sessionName: String
+    public let port: Int?
+    public let identityFile: String?
+    public let remoteDir: String?
+    /// Optional so a pre-windows snapshot decodes (nil → `.posix`, no version bump);
+    /// always written going forward — a psmux card must restore as a psmux card.
+    public let hostKind: RemoteHostKind?
+
+    public init(spec: RemoteTmuxSpec) {
+        host = spec.host
+        user = spec.user
+        sessionName = spec.sessionName
+        port = spec.port
+        identityFile = spec.identityFile
+        remoteDir = spec.remoteDir
+        hostKind = spec.hostKind
+    }
+
+    /// The spec this snapshot was made of — the input a rebuild feeds back into the
+    /// shared argv constructor.
+    public var spec: RemoteTmuxSpec {
+        RemoteTmuxSpec(
+            host: host, user: user, sessionName: sessionName,
+            port: port, identityFile: identityFile, remoteDir: remoteDir,
+            hostKind: hostKind ?? .posix)
+    }
+}
+
 /// One pane's restorable identity: **cwd + session identity** plus the child PID
 /// captured at snapshot time. The PID is used only to decide reopen-vs-closed on
 /// restore — never to re-attach — and the agent command is deliberately not stored.
@@ -78,6 +119,16 @@ public struct PaneSnapshot: Codable, Equatable, Sendable {
     /// leaked SIGTERM-ignoring login shells made the old PID probe appear to work.
     /// Optional so a pre-`wasAlive` snapshot falls back to the PID probe.
     public let wasAlive: Bool?
+    /// The remote session this pane was attached to, if any (US-006). Optional, so a
+    /// pre-remote snapshot decodes it as nil and restores as the local pane it always
+    /// was — the `claudeSessionID` precedent, and the reason this story needs no
+    /// version bump (a bump is IGNORED, not migrated: it would discard every pane).
+    /// A pane with one is rebuilt into an ssh/tmux argv on restore; `cwd` is then a
+    /// label (`user@host`), not a local path.
+    public let remote: RemoteSpecSnapshot?
+    /// The Claude Code profile (`CLAUDE_CONFIG_DIR`) this pane's card uses. Optional
+    /// for back-compat; nil means the default `~/.claude` account.
+    public let claudeProfileID: UUID?
 
     public init(
         sessionID: UUID,
@@ -90,7 +141,9 @@ public struct PaneSnapshot: Codable, Equatable, Sendable {
         taskFolder: String? = nil,
         cardID: UUID? = nil,
         cardState: CardState? = nil,
-        wasAlive: Bool? = nil
+        wasAlive: Bool? = nil,
+        remote: RemoteSpecSnapshot? = nil,
+        claudeProfileID: UUID? = nil
     ) {
         self.sessionID = sessionID
         self.cwd = cwd
@@ -103,19 +156,23 @@ public struct PaneSnapshot: Codable, Equatable, Sendable {
         self.cardID = cardID
         self.cardState = cardState
         self.wasAlive = wasAlive
+        self.remote = remote
+        self.claudeProfileID = claudeProfileID
     }
 
     /// The same pane with its app-level card metadata filled in. Core builds a pane from
     /// the session (which has no card notion); the app layer joins the card in by PTY
     /// identity and stamps what only it knows — the card's id, name, column, and folder.
     public func with(
-        cardID: UUID?, cardState: CardState?, title: String?, taskFolder: String?
+        cardID: UUID?, cardState: CardState?, title: String?, taskFolder: String?,
+        claudeProfileID: UUID? = nil
     ) -> PaneSnapshot {
         PaneSnapshot(
             sessionID: sessionID, cwd: cwd, agentType: agentType, flowTag: flowTag,
             childPID: childPID, claudeSessionID: claudeSessionID,
             title: title, taskFolder: taskFolder,
-            cardID: cardID, cardState: cardState, wasAlive: wasAlive
+            cardID: cardID, cardState: cardState, wasAlive: wasAlive, remote: remote,
+            claudeProfileID: claudeProfileID ?? self.claudeProfileID
         )
     }
 }

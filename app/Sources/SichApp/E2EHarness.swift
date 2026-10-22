@@ -71,7 +71,34 @@ final class E2EHarness {
         after(0.9) {
             self.shots.append(self.capture("02-drillin-terminal"))
             self.checks.append(Check("drillin_shown", !self.shell.drillIn.isHidden))
-            self.captureBack()
+            self.runScrollBenchIfRequested(then: self.captureBack)
+        }
+    }
+
+    /// `SICH_SCROLLBENCH=1`: fill the live terminal's scrollback, then swipe through
+    /// it at the display's refresh rate and record the frame pacing (the number the
+    /// 120 Hz goal is judged by). Pacing is reported, not gated — it varies per
+    /// machine — but a run with no frames at all (display asleep: the display link
+    /// never fires) is a failed measurement, not a pass.
+    private func runScrollBenchIfRequested(then next: @escaping () -> Void) {
+        guard ProcessInfo.processInfo.environment["SICH_SCROLLBENCH"] != nil,
+              let first = shell.cards.first,
+              let surface = shell.drillIn.surfaceForTesting else { return next() }
+        // Bench on the fastest connected display: a 144 Hz external monitor is the
+        // screen the goal is judged on when one is plugged in, and the display
+        // link follows the window there.
+        if let fastest = NSScreen.screens.max(by: { $0.maximumFramesPerSecond < $1.maximumFramesPerSecond }),
+           fastest != window.screen {
+            window.setFrameOrigin(fastest.visibleFrame.origin)
+            checks.append(Check("bench_display", window.screen == fastest,
+                                "\(fastest.localizedName) @ \(fastest.maximumFramesPerSecond) Hz"))
+        }
+        shell.e2eSend(Array("seq 1 3000\n".utf8), into: first)
+        after(2.0) {
+            E2EScrollBench(surface: surface, outDir: self.outDir).run(seconds: 3) { result in
+                self.checks.append(Check("scrollbench", result.frames > 0, result.summary))
+                next()
+            }
         }
     }
 
@@ -107,24 +134,25 @@ final class E2EHarness {
 
     // MARK: - Capture
 
-    /// Both paths are faithful here — our terminal renders via Core Graphics in
-    /// `draw(_:)` (no GPU/Metal surface), so `cacheDisplay` reproduces the glyphs,
-    /// colours and cursor exactly (proven: the drill-in shot shows the real prompt +
-    /// coloured cursor). We still PREFER `screencapture` when Screen Recording is
-    /// granted: it grabs the genuinely composited on-screen window (the gold
-    /// standard, and future-proof if any layer ever goes GPU-backed). Without that
-    /// permission `screencapture` just fails and we fall back — no quality loss.
+    /// Both paths are faithful here — the terminal is a stack of row `CALayer`s
+    /// whose `contents` are CPU-rendered row images plus a `draw(_:)` overlay, and
+    /// `CALayer.render` composites both (proven: the drill-in shot shows the real
+    /// prompt, coloured text + cursor). We still PREFER `screencapture` when Screen
+    /// Recording is granted: it grabs the genuinely composited on-screen window (the
+    /// gold standard). Without that permission `screencapture` just fails and we
+    /// fall back — no quality loss.
     private func capture(_ name: String) -> Shot {
         let path = outDir.appendingPathComponent("\(name).png")
         let forced = ProcessInfo.processInfo.environment["SICH_CAPTURE"]
         if forced != "layer", screencaptureWindow(to: path), fileNonEmpty(path) {
             return Shot(name: name, path: path.path, method: "screencapture (composited window)")
         }
-        // Permission-free fallback. Our whole UI draws via Core Graphics in `draw(_:)`
-        // into layer-backed views, so rendering the content view's layer tree
-        // (`CALayer.render`) reproduces every glyph/colour/cursor faithfully — no
-        // Screen Recording grant needed. (Window-level `cacheDisplay` does NOT
-        // composite layer-backed subviews, which is why the terminal came out blank.)
+        // Permission-free fallback. Our UI is `draw(_:)` into layer-backed views plus
+        // the terminal's image-content row layers, and rendering the content view's
+        // layer tree (`CALayer.render`) reproduces every glyph/colour/cursor
+        // faithfully — no Screen Recording grant needed. (Window-level `cacheDisplay`
+        // does NOT composite layer-backed subviews, which is why the terminal came
+        // out blank.)
         if layerRenderPNG(to: path) {
             return Shot(name: name, path: path.path,
                         method: "layer-render (permission-free; grant Screen Recording for the composited path)")
@@ -145,8 +173,8 @@ final class E2EHarness {
     }
 
     /// Render the content view's layer tree into a bitmap. Faithful for our UI
-    /// (every surface is a custom `draw(_:)` into a layer-backed view, not a stock
-    /// NSControl) and needs no Screen Recording permission, so the visual artifact
+    /// (custom `draw(_:)` layer-backed views and image-content layers, not stock
+    /// NSControls) and needs no Screen Recording permission, so the visual artifact
     /// exists on any machine — CI included.
     private func layerRenderPNG(to path: URL) -> Bool {
         guard let view = window.contentView, let layer = view.layer,

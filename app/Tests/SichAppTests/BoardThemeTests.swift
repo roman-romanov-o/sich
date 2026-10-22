@@ -27,6 +27,7 @@ struct BoardThemeTests {
     @Test("surface + text tokens differ between light and dark appearance", arguments: [
         "canvas", "cardFill", "documentSurface", "cardStroke", "hairline",
         "needsYouColumn", "needsYouCard",
+        "workingCard", "doneCard",
         "textPrimary", "textMuted", "textFaint", "documentText", "textDim",
         "termBg", "termFg",
     ])
@@ -72,6 +73,10 @@ struct BoardThemeTests {
 
         #expect(contrast(fg, card) >= 4.5, "\(name) is too faint on cardFill")
         #expect(contrast(fg, canvas) >= 4.5, "\(name) is too faint on canvas")
+        for (surface, token) in [("workingCard", BoardTheme.workingCard), ("doneCard", BoardTheme.doneCard)] {
+            let fill = try #require(rgb(token, in: .aqua))
+            #expect(contrast(fg, fill) >= 4.5, "\(name) is too faint on \(surface)")
+        }
     }
 
     private static let tokens: [String: NSColor] = [
@@ -79,6 +84,8 @@ struct BoardThemeTests {
         "documentSurface": BoardTheme.documentSurface, "cardStroke": BoardTheme.cardStroke,
         "hairline": BoardTheme.hairline, "needsYouColumn": BoardTheme.needsYouColumn,
         "needsYouCard": BoardTheme.needsYouCard,
+        "workingCard": BoardTheme.workingCard,
+        "doneCard": BoardTheme.doneCard,
         "textPrimary": BoardTheme.textPrimary, "textMuted": BoardTheme.textMuted,
         "textFaint": BoardTheme.textFaint, "documentText": BoardTheme.documentText,
         "textDim": BoardTheme.textDim, "termBg": BoardTheme.termBg, "termFg": BoardTheme.termFg,
@@ -117,6 +124,14 @@ struct CardTitleTextTests {
         let text = BoardTheme.cardTitleText(title, color: .white)
         let font = try #require(text.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
         #expect(font == BoardTheme.cardTitle, "no per-title font forks — uniformity won")
+    }
+
+    @Test("the title anchors by size at regular weight, never by emphasis")
+    func regularWeight() throws {
+        let traits = BoardTheme.cardTitle.fontDescriptor.object(forKey: .traits) as? [NSFontDescriptor.TraitKey: Any]
+        let weight = traits?[.weight] as? CGFloat ?? 0
+        #expect(weight == NSFont.Weight.regular.rawValue, "card title drifted back to a heavier weight")
+        #expect(BoardTheme.cardTitle.pointSize > BoardTheme.title.pointSize, "size, not weight, is the anchor")
     }
 
     @Test("titles carry tightened line height for the multi-line wrap")

@@ -80,6 +80,23 @@ public struct TaskRecord: Codable, Sendable, Equatable, Identifiable {
     /// Cumulative seconds spent actively in WORKING. Optional on disk so task
     /// books written before duration tracking decode as zero without a version bump.
     public var accumulatedWorkingTime: TimeInterval?
+    /// The remote tmux session this task drives, when it is a remote card — the
+    /// constructor's INPUT spec (never an argv), same rule as the pane snapshot.
+    /// Without it, a remote task that outlives its ssh child has only a
+    /// `user@host` label where a local task has a cwd, and no revival can rebuild
+    /// the attach. Optional on disk: older books decode without a version bump.
+    public var remote: RemoteSpecSnapshot?
+    /// When this task left the board for the archive. Non-nil means the task no
+    /// longer renders as a card at all — it lives in the archive view, keeping the
+    /// DONE column (and the per-refresh card rebuild) lean while the record itself
+    /// stays durable. Optional on disk: older books decode without a version bump.
+    public var archivedAt: Date?
+    /// Which Claude Code config dir this task's sessions use (`CLAUDE_CONFIG_DIR`).
+    /// Nil means the default `~/.claude` profile. Optional on disk for back-compat.
+    public var claudeProfileID: UUID?
+    /// Rule 1 (``docs/OPERATING-RULES.md``): explicit snooze off NEEDS YOU until this
+    /// instant. Optional on disk for back-compat.
+    public var needsYouDeferredUntil: Date?
 
     public init(
         id: UUID = UUID(),
@@ -92,7 +109,11 @@ public struct TaskRecord: Codable, Sendable, Equatable, Identifiable {
         taskFolder: String? = nil,
         createdAt: Date = Date(),
         sessionRef: TaskSessionRef? = nil,
-        accumulatedWorkingTime: TimeInterval? = nil
+        accumulatedWorkingTime: TimeInterval? = nil,
+        remote: RemoteSpecSnapshot? = nil,
+        archivedAt: Date? = nil,
+        claudeProfileID: UUID? = nil,
+        needsYouDeferredUntil: Date? = nil
     ) {
         self.id = id
         self.title = title
@@ -105,6 +126,10 @@ public struct TaskRecord: Codable, Sendable, Equatable, Identifiable {
         self.createdAt = createdAt
         self.sessionRef = sessionRef
         self.accumulatedWorkingTime = accumulatedWorkingTime
+        self.remote = remote
+        self.archivedAt = archivedAt
+        self.claudeProfileID = claudeProfileID
+        self.needsYouDeferredUntil = needsYouDeferredUntil
     }
 }
 

@@ -97,7 +97,8 @@ public final class SessionRegistry {
                 claudeSessionID: session.claudeSessionID,
                 // No PID to probe → assume alive, matching the restore side's long-standing
                 // "unknown liveness is not a reason to drop a card" default.
-                wasAlive: pid.map(isAlive) ?? true
+                wasAlive: pid.map(isAlive) ?? true,
+                remote: session.remoteSpec.map(RemoteSpecSnapshot.init(spec:))
             )
         }
         return panes.isEmpty ? [] : [WindowSnapshot(panes: panes)]
@@ -205,36 +206,65 @@ public final class SessionRestorer {
     private let homeDirectory: String
     private let shellPath: String
     private let reopen: Reopen
+    private let accountEnv: (UUID?, CardAgent) -> String
+    private let accountFor: (UUID?) -> AgentAccountProfile?
 
     public init(
         isAlive: @escaping LivenessCheck = PTYSession.isProcessAlive,
         directoryExists: @escaping (String) -> Bool = SessionRestorer.pathIsDirectory,
         homeDirectory: String = NSHomeDirectory(),
         shellPath: String = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh",
+        accountEnv: @escaping (UUID?, CardAgent) -> String = { _, _ in "" },
+        accountFor: @escaping (UUID?) -> AgentAccountProfile? = { _ in nil },
         reopen: @escaping Reopen
     ) {
         self.isAlive = isAlive
         self.directoryExists = directoryExists
         self.homeDirectory = homeDirectory
         self.shellPath = shellPath
+        self.accountEnv = accountEnv
+        self.accountFor = accountFor
         self.reopen = reopen
     }
 
     /// Restore every pane, preserving window/pane order (the pre-quit layout).
     public func restore(_ snapshot: SessionSnapshot) -> [RestoredPane] {
         snapshot.windows.flatMap { window in
-            window.panes.map { self.restore(pane: $0) }
+            window.panes.compactMap { self.restore(pane: $0) }
         }
     }
 
-    private func restore(pane: PaneSnapshot) -> RestoredPane {
-        let (cwd, fellBack) = resolveCwd(pane.cwd)
+    /// One pane, or `nil` when it cannot be re-established at all — a remote pane whose
+    /// persisted destination no longer forms a legal one. Dropping it is the point:
+    /// restoring it as a LOCAL shell would silently hand the operator their own machine
+    /// where a remote session was promised.
+    private func restore(pane: PaneSnapshot) -> RestoredPane? {
+        let (cwd, fellBack) = resolveCwd(for: pane)
+        guard let command = launchCommand(for: pane, cwd: cwd) else { return nil }
         let restored = RestoredPane(
             snapshot: pane, cwd: cwd, cwdFellBackToHome: fellBack,
             liveness: wasAliveAtQuit(pane) ? .reopened : .dead
         )
-        if restored.liveness == .reopened { reopenShell(for: restored) }
+        if restored.liveness == .reopened { reopenShell(for: restored, command: command) }
         return restored
+    }
+
+    /// The argv this pane comes back on, rebuilt from what was persisted — never read
+    /// from it. A remote pane goes back through ``RemoteTmuxCommand/argv(for:cardID:)``,
+    /// the same constructor the create path uses, so the destination grammar and the
+    /// tmux shape are re-applied now rather than trusted from disk; `nil` means the
+    /// persisted spec no longer yields a legal command.
+    private func launchCommand(for pane: PaneSnapshot, cwd: String) -> [String]? {
+        guard let remote = pane.remote else {
+            let agent = pane.agentType.cardAgent
+            return Self.shellCommand(
+                shell: shellPath, cwd: cwd, cardID: pane.cardID,
+                accountEnv: accountEnv(pane.claudeProfileID, agent))
+        }
+        let tmuxEnv = accountFor(pane.claudeProfileID)
+            .map { AgentAccountBackend.remoteTmuxEnvironment(for: $0) } ?? []
+        return try? RemoteTmuxCommand.argv(
+            for: remote.spec, cardID: pane.cardID?.uuidString, tmuxEnvironment: tmuxEnv)
     }
 
     /// Prefer the liveness recorded at snapshot time; fall back to probing the recorded
@@ -244,13 +274,12 @@ public final class SessionRestorer {
         pane.wasAlive ?? (pane.childPID.map(isAlive) ?? true)
     }
 
-    /// Re-open a plain interactive shell at the pane's cwd, carrying the card binding.
-    /// The agent command is intentionally absent and the command is routed through the
-    /// pool firewall, so restore can never resurrect a headless agent.
-    private func reopenShell(for pane: RestoredPane) {
-        let command = Self.shellCommand(
-            shell: shellPath, cwd: pane.cwd, cardID: pane.snapshot.cardID
-        )
+    /// Re-open the pane — a plain interactive shell at its cwd, or the ssh/tmux attach a
+    /// remote pane's spec rebuilds into. The agent command is intentionally absent in
+    /// both cases, and every argv (including the remote one, which runs at launch with
+    /// no human present) is routed through the pool firewall, so restore can never
+    /// resurrect a headless agent.
+    private func reopenShell(for pane: RestoredPane, command: [String]) {
         guard (try? PoolFirewall.classify(command)) != nil else { return }
         reopen(pane, command)
     }
@@ -260,11 +289,12 @@ public final class SessionRestorer {
     /// `exec` the login shell. Both parts are load-bearing — a PTY does not chdir for us,
     /// so without the `cd` the shell opens wherever the app was launched from, and without
     /// `SICH_CARD_ID` the hook feed can never bind this card's agent again.
-    static func shellCommand(shell: String, cwd: String, cardID: UUID?) -> [String] {
+    static func shellCommand(
+        shell: String, cwd: String, cardID: UUID?, accountEnv: String = ""
+    ) -> [String] {
         let bind = cardID.map { "SICH_CARD_ID=\(shellQuoted($0.uuidString)) " } ?? ""
-        let codexShim = "\(NSHomeDirectory())/.sich/bin"
-        let path = "PATH=\(shellQuoted(codexShim)):\"$PATH\" "
-        let launch = "cd \(shellQuoted(cwd)) && \(path)\(bind)exec \(shellQuoted(shell)) -il"
+        let path = "PATH=\(shellQuoted("\(NSHomeDirectory())/.sich/bin")):\"$PATH\" "
+        let launch = "cd \(shellQuoted(cwd)) && \(path)\(accountEnv)\(bind)exec \(shellQuoted(shell)) -il"
         return ["/bin/sh", "-c", launch]
     }
 
@@ -274,8 +304,12 @@ public final class SessionRestorer {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
-    private func resolveCwd(_ cwd: String) -> (path: String, fellBack: Bool) {
-        directoryExists(cwd) ? (cwd, false) : (homeDirectory, true)
+    /// A remote pane's `cwd` is a LABEL (`user@host`), not a local path: probing the
+    /// filesystem for it always fails, and the home fallback is what used to turn a
+    /// restored remote card into a local shell. Only a local pane is resolved.
+    private func resolveCwd(for pane: PaneSnapshot) -> (path: String, fellBack: Bool) {
+        guard pane.remote == nil else { return (pane.cwd, false) }
+        return directoryExists(pane.cwd) ? (pane.cwd, false) : (homeDirectory, true)
     }
 
     /// Default cwd-existence probe: the path is a real, existing directory.

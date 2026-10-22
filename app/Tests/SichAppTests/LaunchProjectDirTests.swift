@@ -4,10 +4,11 @@ import Testing
 @testable import SichApp
 
 /// Regression: launching the built .app from Finder starts the process with
-/// cwd `/` (GUI apps inherit no shell cwd) and no repo root above it, which
-/// seeded a permanent "/" live-terminal card on every launch. The launch dir
-/// must never resolve to the filesystem root.
-@Suite("Live-terminal launch dir (Finder-launch '/' card regression)")
+/// cwd `/` (GUI apps inherit no shell cwd) and no repo root above it. That dir is
+/// now the DEFAULT PROJECT DIR for a card the operator creates (the launch no
+/// longer seeds a card of its own), and it must never resolve to the filesystem
+/// root — a card created from the palette would open its shell in `/`.
+@Suite("Default project dir (Finder-launch '/' regression)")
 struct LaunchProjectDirTests {
 
     @Test("Finder launch (cwd '/', no repo root) falls back to home, not '/'")

@@ -1,0 +1,59 @@
+// stories.c4 — task-100 user story as a dynamic view.
+
+model {
+  us-001 = story 'US-001: terminate() never leaves a zombie' {
+    #must
+    description '''
+      As a developer running Sich for days, I want every child that
+      PTYSession.terminate() kills to be reaped even when the kernel takes
+      longer than 100 ms to tear it down, so that the process table does not
+      fill with <defunct> children.
+    '''
+    metadata {
+      priority 'must'
+      depends_on ''
+      decisions ''
+      edge_cases 'child already reaped (waitpid -1/ECHILD) -> no-op; child dies inside the fast loop -> no reaper armed; app quits while reapers pending -> fine, init adopts them'
+    }
+  }
+  us-001 -> sys.pty 'delivered by'
+}
+
+views {
+  dynamic view us-001-flow {
+    title 'US-001: terminate() never leaves a zombie'
+    description '''
+      Fast path unchanged; the slow path gains an async reaper instead of
+      forgetting the pid.
+    '''
+
+    sys.probe -> sys.pty 'terminate() (defer in scrape)' {
+      notes '''
+        Same call the 5-minute /usage probes and BoardShell card-close make today.
+      '''
+    }
+    sys.pty -> kernel 'kill(SIGKILL); waitpid(WNOHANG) up to 100 × 1 ms' {
+      notes '''
+        **AC-1** — a child that exits within the loop is reaped synchronously,
+        exactly as today (no behaviour change on the fast path).
+      '''
+    }
+    sys.pty <- kernel 'still 0 after 100 ms (Node heap teardown)' {
+      notes '''
+        **AC-2** — when the loop expires the pid is NOT dropped: an async reaper
+        (DispatchSource process-exit source, or a detached utility-QoS
+        `waitpid(pid, 0)`) is armed and terminate() returns immediately.
+      '''
+    }
+    sys.pty -> kernel 'reaper: waitpid(pid) on exit' {
+      notes '''
+        **AC-3** — after the child finally dies, `ps` shows no `<defunct>` row
+        for it under the app; the regression test spawns a child that ignores
+        nothing but dies slowly (e.g. a child that has already been SIGSTOPped
+        before SIGKILL, or a sleep wrapped so teardown lags) and asserts
+        `waitpid(pid, WNOHANG)` eventually returns -1/ECHILD rather than the
+        pid staying reapable.
+      '''
+    }
+  }
+}

@@ -45,8 +45,52 @@ struct BoardColumnMoveReproTests {
         #expect(groupHoldingCard(view) == .working)
     }
 
-    @Test("columns read like classic kanban: QUEUE → WORKING → NEEDS YOU → DONE")
-    func classicKanbanColumnOrder() {
-        #expect(BoardView.ColumnGroup.allCases == [.queue, .working, .needsYou, .done])
+    @Test("columns left→right: QUEUE → PARKED → WORKING → NEEDS YOU → BLOCKED → DONE")
+    func boardColumnOrder() {
+        #expect(BoardView.ColumnGroup.allCases == [
+            .queue, .parked, .working, .needsYou, .blocked, .done,
+        ])
+    }
+
+    @Test("blocked and waiting land in separate columns")
+    func blockedVsNeedsYou() {
+        let view = board()
+        view.render(cards: [
+            BoardCard(id: UUID(), sessionID: "w", projectDir: "~/w",
+                      agent: .claude, flow: .b, state: .waitingForInput),
+            BoardCard(id: UUID(), sessionID: "b", projectDir: "~/b",
+                      agent: .claude, flow: .b, state: .blocked),
+        ])
+        #expect(sessionCards(view, in: .needsYou).count == 1)
+        #expect(sessionCards(view, in: .blocked).count == 1)
+    }
+
+    /// The "app becomes slow with many tasks" fix: a live state flap of one active
+    /// agent must not tear down and rebuild the whole DONE/QUEUE ledger — each card
+    /// view carries labels, layers, tracking areas, and a timer, so rebuilding all
+    /// of them on every flap scaled the cost of ONE agent's activity by the TOTAL
+    /// card count. Untouched columns keep their view instances; the changed column
+    /// still repaints (the live-column-move contract above is unaffected).
+    @Test("a state flap in one column leaves other columns' views untouched")
+    func untouchedColumnsReuseTheirViews() throws {
+        let view = board()
+        let done = BoardCard(id: UUID(), sessionID: "d", projectDir: "~/x",
+                             agent: .claude, flow: .b, state: .done)
+        let live = BoardCard(id: UUID(), sessionID: "r", projectDir: "~/x",
+                             agent: .claude, flow: .b, state: .running)
+        view.render(cards: [done, live])
+        let doneViewBefore = try #require(sessionCards(view, in: .done).first)
+
+        view.render(cards: [done, live.with(state: .runningTests)])
+        let doneViewAfter = try #require(sessionCards(view, in: .done).first)
+        #expect(doneViewBefore === doneViewAfter,
+                "an unchanged DONE column must keep its existing card view")
+        let workingView = try #require(sessionCards(view, in: .working).first)
+        #expect(workingView.card.state == .runningTests,
+                "the changed WORKING column must repaint to the new state")
+    }
+
+    private func sessionCards(_ view: BoardView, in group: BoardView.ColumnGroup) -> [SessionCard] {
+        view.cellForTesting(group)?.arrangedSubviews.compactMap { $0 as? SessionCard } ?? []
     }
 }

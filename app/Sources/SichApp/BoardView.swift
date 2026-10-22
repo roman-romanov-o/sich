@@ -2,8 +2,10 @@ import AppKit
 import SichCore
 
 /// The mission-control board surface (US-003), in the Mission Control v5 layout:
-/// four full-height, equal-width columns — QUEUE / WORKING / NEEDS YOU / DONE —
-/// instead of raw state columns × flow swimlanes. Flow is card
+/// six live columns — QUEUE / PARKED / WORKING / NEEDS YOU / BLOCKED / DONE —
+/// instead of raw state columns × flow swimlanes. DONE can be folded into a
+/// narrow rail (``DoneRail``) so a laptop-width board spends its width on the
+/// three live columns; the fold persists across launches. Flow is card
 /// metadata now (the harness badge + an "auto" marker on autonomous
 /// cards only), not a lane.
 ///
@@ -25,27 +27,42 @@ final class BoardView: NSView {
     /// A card's "Delete Task…" context item was picked — the host confirms, tears
     /// down the session + its worktree, and removes the card.
     var onDelete: ((BoardCard) -> Void)?
+    /// Switch the card to another account on the same harness.
+    var onSwitchAccount: ((BoardCard, UUID) -> Void)?
+    /// Continue the task on a different harness with a context handoff.
+    var onSwitchHarness: ((BoardCard, CardAgent) -> Void)?
+    /// Rule 1: defer a NEEDS YOU card to queue until tomorrow.
+    var onDeferNeedsYou: ((BoardCard) -> Void)?
+    /// The archive icon beside DONE was tapped — the host opens the archive page.
+    var onShowArchive: (() -> Void)?
 
     /// The v5 column groups, left→right.
     enum ColumnGroup: CaseIterable {
-        case queue, working, needsYou, done
+        case queue, parked, working, needsYou, blocked, done
 
         /// Every `CardState` lands in exactly one group — total, so no card can
         /// silently vanish from the board (the `.unknown` regression).
         static func group(for state: CardState) -> ColumnGroup {
             switch state {
-            case .waitingForInput, .blocked: return .needsYou
+            case .waitingForInput: return .needsYou
+            case .blocked: return .blocked
             case .running, .runningTests: return .working
-            case .idle, .unknown: return .queue
+            case .parked: return .parked
+            // `unreachable` is explicitly NOT `.working`: the whole point is that a
+            // link we cannot read must stop looking like progress (US-007 AC-3).
+            case .idle: return .queue
+            case .unknown, .unreachable: return .parked
             case .done: return .done
             }
         }
 
         var title: String {
             switch self {
-            case .needsYou: return "NEEDS YOU"
-            case .working: return "WORKING"
             case .queue: return "QUEUE"
+            case .parked: return "PARKED"
+            case .working: return "WORKING"
+            case .needsYou: return "NEEDS YOU"
+            case .blocked: return "BLOCKED"
             case .done: return "DONE"
             }
         }
@@ -54,9 +71,11 @@ final class BoardView: NSView {
         /// representative `BoardColumn` (the host's `onMove` contract).
         var dropColumn: BoardColumn {
             switch self {
-            case .needsYou: return .waitingForInput
-            case .working: return .running
             case .queue: return .idle
+            case .parked: return .parked
+            case .working: return .running
+            case .needsYou: return .waitingForInput
+            case .blocked: return .blocked
             case .done: return .done
             }
         }
@@ -66,8 +85,32 @@ final class BoardView: NSView {
             switch self {
             case .needsYou: return BoardTheme.attention
             case .working: return BoardTheme.stateColor(.running)
-            case .queue, .done: return nil
+            case .blocked: return BoardTheme.stateColor(.blocked)
+            case .queue, .parked, .done: return nil
             }
+        }
+    }
+
+    /// Where the DONE fold choice lives; tests hand in a throwaway suite.
+    private let defaults: UserDefaults
+    private static let doneCollapsedKey = "board.doneCollapsed"
+    /// Width of the DONE column while collapsed — just the header chrome, stacked.
+    static let doneRailWidth: CGFloat = 44
+
+    /// DONE folded into a narrow rail so the three live columns get its width.
+    /// Finished cards are still counted there; expand to read or drop onto them.
+    private(set) var isDoneCollapsed: Bool
+
+    /// An unfolded DONE column's width as a share of a live column's while narrow.
+    static let narrowDoneRatio: CGFloat = 0.7
+
+    /// Portrait windows have no width to spare: DONE — history, not work — gives
+    /// up part of its column to the live ones. The shell drives this from the
+    /// window shape; the fold above stays the operator's own, stronger choice.
+    var isDoneNarrow = false {
+        didSet {
+            guard isDoneNarrow != oldValue else { return }
+            applyFontScale()
         }
     }
 
@@ -79,8 +122,25 @@ final class BoardView: NSView {
     private var focusedCardID: UUID?
     /// Per-column count captions, updated on every render.
     private var countLabels: [ColumnGroup: NSTextField] = [:]
+    /// What a lane's emptiness toggles: its column surface, caps title and dot.
+    private var laneViews: [ColumnGroup: (column: NSView, title: NSTextField, dot: NSView?)] = [:]
+    /// Every column view, folded DONE rail included, in board order.
+    private var columnViews: [ColumnGroup: NSView] = [:]
+    /// Each lane's header row — its width is what an empty lane shrinks to.
+    private var laneHeaders: [ColumnGroup: NSView] = [:]
+    /// The lanes currently drawn at header width, and the width constraints that
+    /// put them there. Re-solved only when the set of empty lanes changes.
+    private var compactLanes: Set<ColumnGroup>?
+    private var laneWidthConstraints: [NSLayoutConstraint] = []
     private var lastCards: [BoardCard] = []
-    override init(frame frameRect: NSRect) {
+    private var lastQuotaBlocks: [UUID: CardQuotaBlock] = [:]
+    private var lastSwitchMenus: [UUID: CardSwitchMenu] = [:]
+    /// What each cell was last populated from — the render diff's memory. Cleared
+    /// whenever the scaffold (and thus every cell) is rebuilt.
+    private var columnFaces: [ColumnGroup: [CardFace]] = [:]
+    init(frame frameRect: NSRect = .zero, defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        isDoneCollapsed = defaults.bool(forKey: Self.doneCollapsedKey)
         super.init(frame: frameRect)
         themedBackground = BoardTheme.canvas
         buildScaffold()
@@ -95,11 +155,18 @@ final class BoardView: NSView {
         constraints.forEach { $0.isActive = false }
         cells = [:]
         countLabels = [:]
+        laneViews = [:]
+        columnViews = [:]
+        laneHeaders = [:]
+        compactLanes = nil
+        laneWidthConstraints = []
+        columnFaces = [:]
         var previous: NSView?
-        // Four equal columns: QUEUE → WORKING → NEEDS YOU → DONE. The unfinished
+        // QUEUE → PARKED → WORKING → NEEDS YOU → BLOCKED → DONE. The unfinished
         // backlog UI stays out of this live-work surface.
-        let columns = groups.map { makeColumn($0) }
-        for column in columns {
+        for group in groups {
+            let collapsed = group == .done && isDoneCollapsed
+            let column = collapsed ? makeDoneRail() : makeColumn(group)
             column.translatesAutoresizingMaskIntoConstraints = false
             addSubview(column)
             NSLayoutConstraint.activate([
@@ -108,22 +175,56 @@ final class BoardView: NSView {
                 column.leadingAnchor.constraint(
                     equalTo: previous?.trailingAnchor ?? leadingAnchor),
             ])
-            if let previous {
-                column.widthAnchor.constraint(equalTo: previous.widthAnchor).isActive = true
+            if collapsed {
+                column.widthAnchor.constraint(equalToConstant: Self.doneRailWidth).isActive = true
             }
+            columnViews[group] = column
             previous = column
         }
         previous?.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
+        applyLaneWidths(compact: [])
+    }
+
+    /// Lane widths. A lane with cards shares the free width equally with the other
+    /// occupied lanes (DONE at ``narrowDoneRatio`` in a portrait window); an EMPTY
+    /// lane shrinks to its header, so an idle NEEDS YOU no longer costs a busy
+    /// QUEUE its width — the wrapping and truncation on real boards came from that.
+    /// A board with every lane empty keeps the even split (nothing to favour).
+    private func applyLaneWidths(compact requested: Set<ColumnGroup>) {
+        let live = groups.filter { !(isDoneCollapsed && $0 == .done) }
+        let compact = requested.count >= live.count ? [] : requested
+        guard compact != compactLanes else { return }
+        compactLanes = compact
+        NSLayoutConstraint.deactivate(laneWidthConstraints)
+        laneWidthConstraints = []
+        var anchor: NSView?
+        for group in live {
+            guard let column = columnViews[group] else { continue }
+            if compact.contains(group), let header = laneHeaders[group] {
+                let gutter: CGFloat = group == .done && isDoneNarrow ? 10 : 20
+                let width = ceil(header.fittingSize.width) + gutter * 2
+                laneWidthConstraints.append(column.widthAnchor.constraint(equalToConstant: width))
+            } else if let anchor {
+                let ratio = group == .done && isDoneNarrow ? Self.narrowDoneRatio : 1
+                laneWidthConstraints.append(column.widthAnchor.constraint(
+                    equalTo: anchor.widthAnchor, multiplier: ratio))
+            } else {
+                anchor = column
+            }
+        }
+        NSLayoutConstraint.activate(laneWidthConstraints)
     }
 
     private func makeColumn(_ group: ColumnGroup) -> NSView {
         let column = NSView()
         column.wantsLayer = true
-        if group == .needsYou {
-            column.themedBackground = BoardTheme.needsYouColumn
-        }
+        // NEEDS YOU / BLOCKED take their tint from ``applyLaneTone`` once their
+        // count is known; PARKED is always the quiet sunken shelf.
+        if group == .parked { column.themedBackground = BoardTheme.parkedColumn }
         if group != .done { addRightHairline(to: column) }
 
+        // A narrow DONE spends its little width on the cards, not the gutters.
+        let gutter: CGFloat = group == .done && isDoneNarrow ? 10 : 20
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -132,12 +233,12 @@ final class BoardView: NSView {
         column.addSubview(stack)
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: column.topAnchor, constant: 12),
-            stack.leadingAnchor.constraint(equalTo: column.leadingAnchor, constant: 20),
-            stack.trailingAnchor.constraint(equalTo: column.trailingAnchor, constant: -20),
+            stack.leadingAnchor.constraint(equalTo: column.leadingAnchor, constant: gutter),
+            stack.trailingAnchor.constraint(equalTo: column.trailingAnchor, constant: -gutter),
             stack.bottomAnchor.constraint(equalTo: column.bottomAnchor),
         ])
 
-        let header = columnHeader(group)
+        let header = columnHeader(group, column: column)
         stack.addArrangedSubview(header)
         header.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
@@ -176,31 +277,74 @@ final class BoardView: NSView {
         return scroll
     }
 
+    /// The collapsed DONE column (see ``DoneRail``). No cell — finished cards are
+    /// not laid out while folded, so nothing here is a drop target.
+    private func makeDoneRail() -> NSView {
+        let rail = DoneRail(toggle: doneToggleButton(), archive: archiveButton())
+        countLabels[.done] = rail.countLabel
+        return rail
+    }
+
+    /// The DONE fold control: a chevron pointing the way the column will go.
+    private func doneToggleButton() -> NSButton {
+        let description = isDoneCollapsed ? "Expand DONE" : "Collapse DONE"
+        return BoardSymbolButton.make(
+            symbol: isDoneCollapsed ? "chevron.left" : "chevron.right", pointSize: 13,
+            tint: BoardTheme.textFaint, identifier: "done-collapse-toggle",
+            description: description, target: self, action: #selector(doneToggleTapped))
+    }
+
+    @objc private func doneToggleTapped() { setDoneCollapsed(!isDoneCollapsed) }
+
+    /// Fold or unfold DONE. Persists the choice and rebuilds the scaffold (the
+    /// same reflow a zoom step pays), re-rendering the last snapshot into it.
+    func setDoneCollapsed(_ collapsed: Bool) {
+        isDoneCollapsed = collapsed
+        defaults.set(collapsed, forKey: Self.doneCollapsedKey)
+        buildScaffold()
+        render(cards: lastCards)
+    }
+
     /// Centered lane signage: dot + TITLE + count travel as one cluster (a
     /// centered title with the count still glued to the right edge would read
     /// as two disconnected floats). Equal-width spacers do the centering.
-    private func columnHeader(_ group: ColumnGroup) -> NSView {
+    private func columnHeader(_ group: ColumnGroup, column: NSView) -> NSView {
         let row = NSStackView()
         row.spacing = 8
+        // Six columns × the row's inter-item spacing would otherwise set a hard
+        // window-width floor; clip the header instead of refusing a shrink.
+        row.setClippingResistancePriority(.init(490), for: .horizontal)
         let lead = NSView()
         let trail = NSView()
         row.addArrangedSubview(lead)
-        if let dotColor = group.dotColor { row.addArrangedSubview(pulsingDot(dotColor)) }
-        let titleColor: NSColor =
-            group == .needsYou ? BoardTheme.attention : BoardTheme.textMuted
-        let title = label(group.title, font: BoardTheme.columnTitle, color: titleColor)
-        title.attributedStringValue = BoardTheme.caps(group.title, color: titleColor)
+        let dot = group.dotColor.map { stateDot($0, pulses: group == .needsYou) }
+        if let dot { row.addArrangedSubview(dot) }
+        let title = label(group.title, font: BoardTheme.columnTitle, color: BoardTheme.textMuted)
         row.addArrangedSubview(title)
-        let count = label("", font: BoardTheme.mono, color: BoardTheme.textFaint)
+        laneViews[group] = (column, title, dot)
+        laneHeaders[group] = row
+        applyLaneTone(group, count: 0)
+        let count = label("", font: BoardTheme.numeric, color: BoardTheme.textFaint)
         countLabels[group] = count
         row.addArrangedSubview(count)
         if group == .queue { row.addArrangedSubview(createButton()) }
+        if group == .done {
+            row.addArrangedSubview(archiveButton())
+            row.addArrangedSubview(doneToggleButton())
+        }
         row.addArrangedSubview(trail)
         lead.widthAnchor.constraint(equalTo: trail.widthAnchor).isActive = true
+        // One fixed height for every lane: QUEUE's + and DONE's icons would
+        // otherwise make those two headers taller and drop their titles below
+        // the other columns' baseline.
+        row.heightAnchor.constraint(equalToConstant: 28).isActive = true
         return row
     }
 
-    private func pulsingDot(_ color: NSColor) -> NSView {
+    /// The lane dot. Only NEEDS YOU breathes — it is the one header that asks
+    /// for the operator; WORKING's cards already carry their own live pulse and
+    /// BLOCKED is static by definition, so motion there was just noise.
+    private func stateDot(_ color: NSColor, pulses: Bool) -> NSView {
         let dot = NSView()
         dot.themedBackground = color
         dot.layer?.cornerRadius = 3.5
@@ -209,10 +353,12 @@ final class BoardView: NSView {
             dot.widthAnchor.constraint(equalToConstant: 7),
             dot.heightAnchor.constraint(equalToConstant: 7),
         ])
+        guard pulses, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return dot }
         let pulse = CABasicAnimation(keyPath: "opacity")
         pulse.fromValue = 1.0
         pulse.toValue = 0.35
-        pulse.duration = 0.9
+        pulse.duration = 1.2
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         pulse.autoreverses = true
         pulse.repeatCount = .infinity
         dot.layer?.add(pulse, forKey: "pulse")
@@ -223,35 +369,24 @@ final class BoardView: NSView {
     /// The tooltip and accessibility label preserve the text cue without spending
     /// a second row on visible helper copy.
     private func createButton() -> NSButton {
-        let configuration = NSImage.SymbolConfiguration(pointSize: 22, weight: .semibold)
-        let image = NSImage(
-            systemSymbolName: "plus.circle.fill",
-            accessibilityDescription: "Add task"
-        )?.withSymbolConfiguration(configuration)
-        let button = NSButton(image: image ?? NSImage(), target: self, action: #selector(createTapped))
-        button.identifier = NSUserInterfaceItemIdentifier("add-task")
-        button.title = ""
-        button.toolTip = "Add task"
-        button.setAccessibilityLabel("Add task")
-        button.setButtonType(.momentaryPushIn)
-        button.isBordered = false
-        button.contentTintColor = BoardTheme.brand
-        button.imagePosition = .imageOnly
-        button.imageScaling = .scaleProportionallyDown
-        button.translatesAutoresizingMaskIntoConstraints = false
-        // Yield the fixed size to the window (see yieldWidthToWindow): a required
-        // 30pt here becomes the queue header's minimum, and the equal-width
-        // columns multiply it into a window-wide floor the operator can't drag
-        // below. At 490 the symbol scales down instead of pinning the window.
-        let width = button.widthAnchor.constraint(equalToConstant: 30)
-        let height = button.heightAnchor.constraint(equalToConstant: 30)
-        width.priority = .init(490)
-        height.priority = .init(490)
-        NSLayoutConstraint.activate([width, height])
-        return button
+        BoardSymbolButton.make(
+            symbol: "plus.circle.fill", pointSize: 17, tint: BoardTheme.brand,
+            identifier: "add-task", description: "Add task",
+            target: self, action: #selector(createTapped))
     }
 
     @objc private func createTapped() { onCreate?() }
+
+    /// The way OUT of the board's history: finished work leaves for the archive on
+    /// the next launch, and this icon beside DONE is where the operator reads it.
+    private func archiveButton() -> NSButton {
+        BoardSymbolButton.make(
+            symbol: "archivebox", pointSize: 15, tint: BoardTheme.textFaint,
+            identifier: "show-archive", description: "View archived tasks",
+            target: self, action: #selector(archiveTapped))
+    }
+
+    @objc private func archiveTapped() { onShowArchive?() }
 
     private func addRightHairline(to column: NSView) {
         let line = NSView()
@@ -268,52 +403,140 @@ final class BoardView: NSView {
 
     // MARK: - Render (called on every state change → live column moves)
 
-    /// Project a card snapshot onto the columns. Clearing + repopulating each cell
-    /// is the live-column-move mechanism (US-003 AC#3).
-    func render(cards: [BoardCard]) {
+    /// Everything a card view's face is built from: the card itself plus the host
+    /// chip reading, which lives OUTSIDE the card (`RemoteHookStatus`). When a
+    /// column's faces are unchanged, its existing views are provably identical to
+    /// what a rebuild would produce, so the cell is left alone.
+    private struct CardFace: Equatable {
+        let card: BoardCard
+        let chip: HostChipStatus?
+        let quotaBlock: CardQuotaBlock
+        let switchMenu: CardSwitchMenu
+
+        // Spelled out rather than synthesized: periphery cannot see a synthesized
+        // == read the fields and would flag them assign-only.
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.card == rhs.card && lhs.chip == rhs.chip
+                && lhs.quotaBlock == rhs.quotaBlock && lhs.switchMenu == rhs.switchMenu
+        }
+    }
+
+    /// Project a card snapshot onto the columns. Only columns whose cards changed
+    /// are repopulated — with a deep DONE/QUEUE ledger, tearing down and rebuilding
+    /// every card view (labels, layers, tracking areas, a heartbeat animation, a
+    /// duration timer each) on every live state flap of ONE active agent made the
+    /// whole app drag. Repopulating a changed cell is still the live-column-move
+    /// mechanism (US-003 AC#3).
+    func render(
+        cards: [BoardCard],
+        quotaBlocks: [UUID: CardQuotaBlock] = [:],
+        switchMenus: [UUID: CardSwitchMenu] = [:]
+    ) {
         lastCards = cards
-        for cell in cells.values {
-            cell.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        lastQuotaBlocks = quotaBlocks
+        lastSwitchMenus = switchMenus
+        var byGroup: [ColumnGroup: [BoardCard]] = [:]
+        for card in cards {
+            byGroup[ColumnGroup.group(for: card.state), default: []].append(card)
         }
-        var counts: [ColumnGroup: Int] = [:]
-        var placed: [(group: Int, order: Int, view: SessionCard)] = []
-        for (order, card) in cards.enumerated() {
-            let group = ColumnGroup.group(for: card.state)
-            counts[group, default: 0] += 1
-            guard let cell = cells[group] else { continue }
-            let view = cardView(card)
-            cell.addArrangedSubview(view)
-            view.widthAnchor.constraint(equalTo: cell.widthAnchor).isActive = true
-            placed.append((groups.firstIndex(of: group) ?? 0, order, view))
+        for group in groups {
+            renderColumn(group, cards: byGroup[group] ?? [])
+            let count = byGroup[group]?.count ?? 0
+            countLabels[group]?.stringValue = countCaption(group, count: count)
+            applyLaneTone(group, count: count)
         }
-        // A clear filler at the end of each cell absorbs the column's slack height
-        // so cards pack at the top (the cell itself is stretched full-height to be
-        // a whole-column drop target).
-        for cell in cells.values {
-            let filler = NSView()
-            filler.setContentHuggingPriority(.init(1), for: .vertical)
-            cell.addArrangedSubview(filler)
-        }
+        applyLaneWidths(compact: Set(groups.filter { (byGroup[$0] ?? []).isEmpty }))
         // Keyboard order follows the model snapshot order. Visual placement still
         // happens by column above, but arrow-key traversal stays stable across live
         // state moves so focus does not jump when a card changes columns.
-        orderedCards = placed.sorted { $0.order < $1.order }.map(\.view)
+        orderedCards = orderedViews(for: cards)
         restoreKeyboardFocus()
-        for group in groups {
-            countLabels[group]?.stringValue = countCaption(group, count: counts[group] ?? 0)
+    }
+
+    /// An empty lane is quiet (US-005 AC#3, no false alarm): no tinted surface,
+    /// no dot, a muted title. NEEDS YOU and BLOCKED only light up — tint, coloured
+    /// title, live dot — while they actually hold a card.
+    private func applyLaneTone(_ group: ColumnGroup, count: Int) {
+        guard let lane = laneViews[group] else { return }
+        let active = count > 0
+        lane.dot?.isHidden = !active
+        let titleColor: NSColor = switch (group, active) {
+        case (.needsYou, true): BoardTheme.attention
+        case (.blocked, true): BoardTheme.stateColor(.blocked)
+        default: BoardTheme.textMuted
         }
+        // Only the colour changes here; the caps keep the font the header was built
+        // with, so a re-tone never resizes one title out of step with its count.
+        let caps = NSMutableAttributedString(
+            attributedString: BoardTheme.caps(group.title, color: titleColor))
+        if let font = lane.title.font {
+            caps.addAttribute(.font, value: font, range: NSRange(location: 0, length: caps.length))
+        }
+        lane.title.attributedStringValue = caps
+        switch group {
+        case .needsYou: lane.column.themedBackground = active ? BoardTheme.needsYouColumn : nil
+        case .blocked: lane.column.themedBackground = active ? BoardTheme.blockedColumn : nil
+        default: break
+        }
+    }
+
+    private func renderColumn(_ group: ColumnGroup, cards: [BoardCard]) {
+        guard let cell = cells[group] else { return }
+        let faces = cards.map(face)
+        guard columnFaces[group] != faces else { return }
+        // Cards new to this lane since its last render have just moved here (or were
+        // just created). A freshly built scaffold has no "last render" — launch and
+        // zoom rebuilds stay still.
+        let previous = columnFaces[group].map { Set($0.map(\.card.id)) }
+        columnFaces[group] = faces
+        cell.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        for card in cards {
+            let view = cardView(card)
+            cell.addArrangedSubview(view)
+            view.widthAnchor.constraint(equalTo: cell.widthAnchor).isActive = true
+            if let previous, !previous.contains(card.id) { view.animateArrival() }
+        }
+        // A clear filler at the end of the cell absorbs the column's slack height
+        // so cards pack at the top (the cell itself is stretched full-height to be
+        // a whole-column drop target).
+        let filler = NSView()
+        filler.setContentHuggingPriority(.init(1), for: .vertical)
+        cell.addArrangedSubview(filler)
+    }
+
+    private func face(_ card: BoardCard) -> CardFace {
+        CardFace(
+            card: card,
+            chip: SessionCard.chipStatus(for: card) {
+                RemoteHookStatus.shared.state(for: $0)
+            },
+            quotaBlock: lastQuotaBlocks[card.id] ?? .none,
+            switchMenu: lastSwitchMenus[card.id] ?? CardSwitchMenu(accounts: [], harnesses: [])
+        )
+    }
+
+    /// The card views in model-snapshot order, gathered back out of the cells —
+    /// reused views for untouched columns, fresh ones for repopulated columns.
+    private func orderedViews(for cards: [BoardCard]) -> [SessionCard] {
+        var byID: [UUID: SessionCard] = [:]
+        for cell in cells.values {
+            for view in cell.arrangedSubviews.compactMap({ $0 as? SessionCard }) {
+                byID[view.card.id] = view
+            }
+        }
+        return cards.compactMap { byID[$0.id] }
     }
 
     func applyFontScale() {
         buildScaffold()
-        render(cards: lastCards)
+        render(cards: lastCards, quotaBlocks: lastQuotaBlocks, switchMenus: lastSwitchMenus)
     }
 
     private func countCaption(_ group: ColumnGroup, count: Int) -> String {
         switch group {
         case .needsYou: return count == 0 ? "" : "\(count)"
         case .working: return count == 0 ? "" : "\(count)"
-        case .queue: return count == 0 ? "" : "\(count)"
+        case .queue, .parked, .blocked: return count == 0 ? "" : "\(count)"
         case .done: return count == 0 ? "" : "\(count)"
         }
     }
@@ -369,10 +592,19 @@ final class BoardView: NSView {
     func cellForTesting(_ group: ColumnGroup) -> BoardCell? { cells[group] }
 
     private func cardView(_ card: BoardCard) -> SessionCard {
-        let view = SessionCard(card: card)
+        let view = SessionCard(
+            card: card,
+            quotaBlock: lastQuotaBlocks[card.id] ?? .none,
+            switchMenu: lastSwitchMenus[card.id] ?? CardSwitchMenu(accounts: [], harnesses: [])
+        )
         view.onSelect = { [weak self] in self?.onSelect?($0) }
         view.onRename = { [weak self] in self?.onRename?($0) }
         view.onDelete = { [weak self] in self?.onDelete?($0) }
+        view.onSwitchAccount = { [weak self] in self?.onSwitchAccount?($0, $1) }
+        view.onSwitchHarness = { [weak self] in self?.onSwitchHarness?($0, $1) }
+        view.onDeferNeedsYou = { [weak self] in self?.onDeferNeedsYou?($0) }
+        view.onPark = { [weak self] card in self?.onMove?(card.id, .parked) }
+        view.onBlockExternally = { [weak self] card in self?.onMove?(card.id, .blocked) }
         return view
     }
 

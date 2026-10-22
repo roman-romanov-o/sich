@@ -36,7 +36,10 @@ public enum JSONLNormalizer {
             source: .jsonl,
             sessionID: record["session_id"] as? String ?? "",
             timestamp: SignalTimestamp.parse(record["timestamp"], arrival: arrival),
-            cwd: record["cwd"] as? String
+            cwd: record["cwd"] as? String,
+            // Same channel stamp as the hook path: a relayed transcript record must
+            // reconcile against ITS machine's session, not a same-id local one.
+            host: record[RemoteEventLine.hostKey] as? String
         )
     }
 }

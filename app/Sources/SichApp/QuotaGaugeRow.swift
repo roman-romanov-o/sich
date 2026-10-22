@@ -82,7 +82,7 @@ public final class QuotaGaugeRow: NSView {
 
         resetLabel.stringValue = resetLine()
         resetLabel.isHidden = resetLabel.stringValue.isEmpty
-        resetLabel.font = BoardTheme.monoSmall
+        resetLabel.font = BoardTheme.numericSmall
         resetLabel.textColor = resetColor()
         resetLabel.lineBreakMode = .byTruncatingTail
         resetLabel.toolTip = poolTitle()
@@ -242,7 +242,6 @@ final class QuotaBar: NSView, ThemeReapplying {
         labelOnTrack.string = label
         labelOnFill.string = label
         applyColors()
-        configureExhaustedAnimation()
         needsLayout = true
     }
 
@@ -282,7 +281,7 @@ final class QuotaBar: NSView, ThemeReapplying {
                 fill.backgroundColor = BoardTheme.alert.cgColor
             case .active:
                 let color: NSColor = switch currentTone {
-                case .healthy: BoardTheme.stateColor(.done)
+                case .healthy: BoardTheme.healthy
                 case .constrained: BoardTheme.attention
                 case .critical: BoardTheme.alert
                 case .unknown: NSColor.clear
@@ -311,23 +310,5 @@ final class QuotaBar: NSView, ThemeReapplying {
             x: inset, y: ((bounds.height - height) / 2).rounded(),
             width: bounds.width - inset * 2, height: height
         )
-    }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        configureExhaustedAnimation()
-    }
-
-    private func configureExhaustedAnimation() {
-        fill.removeAnimation(forKey: "exhaustedPulse")
-        guard window != nil, currentState == .exhausted else { return }
-        let animation = CABasicAnimation(keyPath: "opacity")
-        animation.fromValue = 0.55
-        animation.toValue = 1.0
-        animation.duration = 0.9
-        animation.autoreverses = true
-        animation.repeatCount = .infinity
-        animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        fill.add(animation, forKey: "exhaustedPulse")
     }
 }

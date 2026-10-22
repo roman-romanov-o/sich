@@ -1,0 +1,979 @@
+format: saha/v2
+task: task-10-remote-agent-environment
+title: "Remote Agent Environment (TASK-10a): watch an agent on another machine"
+created: 2026-07-16
+migrated_to_v2: 2026-07-30
+mode: full
+status: completed_pending_manual
+
+# Migrated from the legacy markdown artifacts, which stay on disk as FROZEN
+# reference prose (user-stories/, design-decisions/, code-changes/, test-specs/,
+# implementation-plan/). model/*.c4 + this file are authoritative.
+#
+# RENAME NOTE: planning predates the Ghostling -> Sich rename (commit 7108ddb).
+# Paths and identifiers here are POST-rename (SichCore / SichApp, SICH_CARD_ID,
+# ~/.sich/events.jsonl, sich_host); the legacy markdown still says "ghostling",
+# and every line number it cites is stale — navigate by symbol.
+
+planning:
+  research:            { status: done, artifacts: [research/task-10-remote-agent-environment-research.md] }
+  task_description:    { status: done, views: [task-context] }
+  user_stories:        { status: done, views: [us-001-flow, us-002-flow, us-003-flow, us-004-flow, us-005-flow, us-006-flow, us-007-flow, us-008-flow, us-009-flow] }
+  design_decisions:    { status: done, views: [decisions] }
+  code_changes:        { status: done, views: [contracts] }
+  test_specs:
+    status: done
+    views: [ts-unit-01, ts-unit-02, ts-int-01, ts-int-02, ts-int-03, ts-int-04,
+            ts-e2e-01, ts-e2e-02, ts-e2e-03, ts-e2e-04, ts-e2e-05, ts-e2e-06]
+    gaps:
+      - story: US-002
+        reason: >-
+          AC-2 (diffs render from a real Linux box) is verify:manual by design —
+          the story states it is not auto-passable and must never be marked done
+          by a test. Covered by ts-e2e-06 sign-off, not by an automated spec.
+  implementation_plan: { status: done, views: [phases] }
+  verify:              { status: done, notes: "likec4 validate model -> Valid (7 files), 2026-07-30" }
+
+stories:
+  - id: US-001
+    title: ssh commands cannot smuggle headless work
+    view: us-001-flow
+    priority: must
+    status: done
+    story: >-
+      As the operator, I want it to be structurally impossible for the app to generate an
+      ssh command that runs headless `claude -p` work, so that the two-pool economics hold
+      on every machine, not just this laptop.
+    acceptance_criteria:
+      - id: AC-1
+        text: >-
+          `PoolFirewall.classify(["/usr/bin/ssh", "host", "claude -p 'x'"])` throws. Today it
+          returns .interactive uninspected, because classify gates assertNoHeadlessFlag behind
+          isClaude(argv.first) and "ssh" is not "claude". WRITTEN RED FIRST. The scan is
+          tokenized on argument boundaries, never a substring search: a session named
+          claude-work must pass.
+        verify: automated
+        status: done
+        specs: [ts-unit-01]
+        tests:
+          - SichCoreTests.PoolFirewallTests/sshCarryingHeadlessClaudeRefused
+          - SichCoreTests.PoolFirewallTests/sshTokenizedScanAllowsLookalikes
+          - SichCoreTests.PoolFirewallTests/sshOptionsAreNotScanned
+          - SichCoreTests.PoolFirewallTests/sessionRefusesHeadlessAtConstruction
+      - id: AC-2
+        text: >-
+          A destination that is really an ssh OPTION is refused at argv construction:
+          RemoteTmuxCommand.argv(for:) throws Invalid.invalidDestination for a spec whose
+          destination resolves to `-oProxyCommand=sh -c 'claude -p x'` — whether the spec came
+          from parse() or was built directly. This is a LIVE HOLE in shipped code: such a
+          destination has no "@" and no trailing :<int>, survives parse() whole, lands in ssh's
+          option position, and ssh executes ProxyCommand ON THE LOCAL MACHINE. WRITTEN RED
+          FIRST. parse() keeps its Optional return and does NOT become throwing; Invalid is
+          nested on RemoteTmuxCommand, not on RemoteTmuxSpec.
+        verify: automated
+        status: done
+        specs: [ts-unit-01]
+        tests:
+          - SichCoreTests.RemoteTmuxCommandTests/optionShapedDestinationRefused
+          - SichAppTests.RemoteTmuxCardTests/optionShapedDestinationMakesNoCard
+      - id: AC-3
+        text: >-
+          The same refusal holds when the payload rides the USER position
+          (`-oProxyCommand=...@host`), because the destination is composed as user@host and
+          user is equally unguarded. The guard is on the composed destination, not on host alone.
+        verify: automated
+        status: done
+        specs: [ts-unit-01]
+        tests:
+          - SichCoreTests.RemoteTmuxCommandTests/optionShapedUserRefused
+      - id: AC-4
+        text: >-
+          A RemoteTmuxSpec built DIRECTLY (not through parse()) with host " -oProxyCommand=..."
+          (LEADING WHITESPACE) also throws. This AC distinguishes the correct guard from the
+          plausible wrong one: the `target` property composes the UNTRIMMED host while the token
+          actually appended is rebuilt from the TRIMMED host, so a guard on spec.target passes
+          this input (it starts with a space, not "-") and ssh receives the trimmed option
+          anyway. Validate POST-TRIM, on the exact string appended.
+        verify: automated
+        status: done
+        specs: [ts-unit-01]
+        tests:
+          - SichCoreTests.RemoteTmuxCommandTests/untrimmedHostIsStillRefused
+      - id: AC-5
+        text: >-
+          The argvs this task legitimately emits PASS: the DD-001 relay (`ssh ... tail -F ...`)
+          and the DD-002 tmux command asserted against its FINAL shape (which prepends
+          `tmux set-environment`), not today's. Bracketed IPv6 destinations pass — Tailscale
+          hands out IPv6, so a [A-Za-z0-9.-] grammar would refuse a real host.
+        verify: automated
+        status: done
+        specs: [ts-unit-01]
+        tests:
+          - SichCoreTests.RemoteTmuxCommandTests/legitimateRemoteArgvsPassTheFirewall
+          - SichCoreTests.RemoteTmuxCommandTests/bracketedIPv6Accepted
+          - SichCoreTests.RemoteTmuxCommandTests/portAndIdentityAreConsumedByTheirFlags
+      - id: AC-6
+        text: >-
+          The quoting boundary is asserted against the function that actually provides it: a
+          session name or remote dir containing "'" or ";" is neutralised by remoteQuoted, NOT
+          by sanitizeSessionName, which folds only . : space tab and never touches a quote.
+        verify: automated
+        status: done
+        specs: [ts-unit-01]
+        tests:
+          - SichCoreTests.RemoteTmuxCommandTests/quotingBoundaryIsRemoteQuoted
+    edge_cases:
+      - name: port / identityFile are safe by emission order
+        trigger: a refactor emits a port or identity without its preceding -p / -i flag
+        expected: >-
+          ssh would parse the value as an option. Both are positionally consumed by their
+          flag today; the ordering itself is asserted (TC-UNIT-007).
+      - name: a human types `claude -p` in their own remote pane
+        trigger: operator runs headless work by hand on the far side
+        expected: not prevented, and nothing should try — the invariant protects them from OUR automation
+    depends_on: []
+    decisions: [DD-004]
+
+  - id: US-002
+    title: Turn diffs survive GNU userland
+    view: us-002-flow
+    priority: must
+    status: done
+    story: >-
+      As the operator, I want the hook forwarder to produce turn diffs on a GNU/Linux host,
+      so that a remote card's drill-in shows the same per-turn review a local one does.
+    acceptance_criteria:
+      - id: AC-1
+        text: >-
+          An automated fixture runs the forwarder under GNU coreutils semantics — no plutil
+          available, base64 wrapping at 76 columns — and the resulting event line carries a
+          well-formed session, cwd and diff payload. WRITTEN RED FIRST: today three
+          `plutil -extract` calls gate the entire diff block, so under Linux they fail, session
+          and cwd come back empty, and diffs are SILENTLY SKIPPED while the raw append succeeds.
+        verify: automated
+        status: done
+        specs: [ts-int-01]
+        tests:
+          - SichAppTests.ForwarderPortabilityTests/testForwarderNamesNoMacOnlyTool
+          - SichAppTests.ForwarderPortabilityTests/testTurnDiffIsWellFormedUnderGnuUserland
+      - id: AC-2
+        text: >-
+          A human sign-off run against a real Linux host: drill into a remote card, take a turn,
+          see the diff render. Recorded with the date.
+        verify: manual
+        manual_instructions: >-
+          On a real Linux box reachable over ssh: install hooks from the app, open a remote card,
+          run a real agent turn that edits a file, drill in and confirm the turn diff renders.
+          Record the date and host in this file. This AC is not auto-passable and must NEVER be
+          marked done by a test.
+        status: pending
+        specs: [ts-e2e-06]
+        tests: []
+    edge_cases:
+      - name: base64 line wrapping
+        trigger: GNU base64 wraps at 76 columns where macOS does not
+        expected: the decoder tolerates wrapped payloads rather than truncating at the first newline
+    depends_on: []
+    decisions: []
+
+  - id: US-003
+    title: Remote hook events reach the laptop
+    view: us-003-flow
+    priority: must
+    status: done
+    story: >-
+      As the operator, I want hook events written on a remote host to reach the board, so that
+      a remote agent is observable at all.
+    acceptance_criteria:
+      - id: AC-1
+        text: >-
+          With a per-host relay running, a hook event appended to ~/.sich/events.jsonl on a
+          remote host is normalised on the laptop and reaches the board's session state.
+          WRITTEN RED FIRST: nothing today reads any file but the local one.
+        verify: automated
+        status: done
+        specs: [ts-e2e-01]
+        tests:
+          - SichAppTests.RemoteRelayE2ETests/remoteHookLineMovesTheCard
+      - id: AC-2
+        text: >-
+          Every relayed line is stamped with sich_host AT INGESTION, before normalisation. The
+          hook payload has NO hostname field, so host provenance exists for exactly one instant
+          — the channel opened to a known host — and is unrecoverable afterwards.
+        verify: automated
+        status: done
+        specs: [ts-e2e-01]
+        tests:
+          - SichAppTests.RemoteRelayE2ETests/hostIsStampedByTheChannelNotParsedFromThePayload
+          - SichAppTests.RemoteRelayE2ETests/aClaimedHostIsOverwritten
+          - SichAppTests.RemoteRelayE2ETests/identicalLinesFromTwoHostsAreDistinguishable
+          - SichAppTests.RemoteRelayE2ETests/theStampIsOnTheNormalizerInput
+      - id: AC-3
+        text: >-
+          Relayed lines are NEVER written into the local ~/.sich/events.jsonl. The relay feeds
+          the normalizer in memory; assert the local file's byte length is unchanged across a
+          relay session.
+        verify: automated
+        status: done
+        specs: [ts-e2e-01]
+        tests:
+          - SichAppTests.RemoteRelayE2ETests/relayedLinesNeverReachTheLocalSink
+      - id: AC-4
+        text: >-
+          No inbound listener is added and no new remote binary is distributed. Assert
+          STRUCTURALLY, not by inspection: the only NWListener in the app remains the LikeC4
+          pane's StaticFileServer, and the remote side of this story is ssh + tail and nothing else.
+        verify: automated
+        status: done
+        specs: [ts-int-03]
+        tests:
+          - SichAppTests.RemoteRelayE2ETests/theOnlyListenerRemainsTheLikeC4FileServer
+          - SichAppTests.RemoteRelayE2ETests/theRelayPathBindsNothingAndInstallsNothing
+          - SichCoreTests.RemoteEventRelayTests/relayAsksSSHForNoListenerAndNoRemoteBinary
+      - id: AC-5
+        text: >-
+          The relay argv passes PoolFirewall (US-001) and is generated from a constrained spec,
+          never composed from free text.
+        verify: automated
+        status: done
+        specs: [ts-int-02]
+        tests:
+          - SichCoreTests.RemoteEventRelayTests/relayArgvIsSpecGeneratedAndFirewallClean
+          - SichCoreTests.RemoteEventRelayTests/relayArgvCarriesOnlySpecFields
+          - SichCoreTests.RemoteEventRelayTests/optionShapedDestinationIsRefused
+    edge_cases:
+      - name: remote log rotation
+        trigger: the forwarder rotates events.jsonl with mv -f at 5 MiB
+        expected: "`tail -F` (--follow=name --retry) follows the new file; no byte cursor is kept"
+      - name: bounded replay on connect
+        trigger: the relay reconnects after a drop
+        expected: "`-n 200` bounds the history replayed; older remote history is not re-ingested"
+      - name: the remote file does not exist yet
+        trigger: hooks installed but no agent has run
+        expected: NOT unreachable — no telemetry is not a dead link
+    depends_on: [US-001, US-002]
+    decisions: [DD-001, DD-004]
+
+  - id: US-004
+    title: Remote state lands on the right card
+    view: us-004-flow
+    priority: must
+    status: done
+    story: >-
+      As the operator, I want a remote agent's state to move the card it belongs to, so that the
+      board is trustworthy when work runs on more than one machine.
+    acceptance_criteria:
+      - id: AC-1
+        text: >-
+          A card started against a remote host moves running -> waiting -> done as the remote
+          session progresses, driven by relayed hooks. The join is by SICH_CARD_ID matched
+          against card.id.uuidString in BoardShell.applySessions — ZERO read-side change.
+        verify: automated
+        status: done
+        specs: [ts-e2e-01]
+        tests:
+          - SichAppTests.RemoteTmuxCardTests/remoteCardMovesOnRelayedHooks
+          - SichAppTests.RemoteTmuxCardTests/seedBindsItsOwnCardID
+          - SichAppTests.RemoteRelayE2ETests/remoteHookLineMovesTheCard
+      - id: AC-2
+        text: >-
+          A pane the user opens LATER inside the same tmux session (Ctrl-b c) is also bound.
+          THE LOAD-BEARING HALF: a launch command sets one shell's process env, not the tmux
+          SESSION env, so binding only the launch command leaves the second pane unbound — the
+          card silently reads "not observed" while the terminal works fine. Test the SECOND
+          pane; testing the launch argv alone ships this green and broken.
+        verify: automated
+        status: done
+        specs: [ts-int-04]
+        tests:
+          - SichCoreTests.RemoteTmuxSessionEnvTests/laterPaneCarriesTheCardID
+      - id: AC-3
+        text: >-
+          Two hosts are never conflated: sessions and diffs from host A, host B and local remain
+          distinct even when their cwd strings are byte-identical. Uses sich_host from US-003 AC-2.
+        verify: automated
+        status: done
+        specs: [ts-e2e-01]
+        tests:
+          - SichAppTests.RemoteRelayE2ETests/hostsWithIdenticalPayloadsStayDistinct
+          - SichAppTests.RemoteRelayE2ETests/diffsFromTwoHostsAreNotDeduplicated
+      - id: AC-4
+        text: >-
+          Two cards cannot silently become one tmux session: (host, sanitized session name) is
+          unique across cards. Today the name is free text, sanitizeSessionName is lossy, and a
+          blank name defaults to a constant — so two cards with that name on one host genuinely
+          ARE one session, because -A attaches.
+        verify: automated
+        status: done
+        specs: [ts-int-04]
+        tests:
+          - SichCoreTests.RemoteTmuxSessionEnvTests/keyIsHostPlusSanitizedName
+          - SichCoreTests.RemoteTmuxSessionEnvTests/attachToLiveSessionIgnoresTheBinding
+          - SichCoreTests.RemoteTmuxSessionEnvTests/handMadeSessionIsSurfaced
+    edge_cases:
+      - name: "-A attaches a session Sich did not create"
+        trigger: name reuse — an existing session of the same name
+        expected: >-
+          the command argument is ignored so set-environment never runs; probe for the collision
+          and surface it rather than binding to nothing (stale env is a name-reuse bug, not an
+          identity one)
+      - name: a hand-made pre-existing session
+        trigger: the operator already had a tmux session with that name
+        expected: not bound silently — surfaced
+    depends_on: [US-003]
+    decisions: [DD-002]
+
+  - id: US-005
+    title: Hooks install on a remote host
+    view: us-005-flow
+    priority: must
+    status: done
+    story: >-
+      As the operator, I want to install the hook forwarder on a remote host from the app and
+      see honestly whether it is there, so that a remote card is observable without me sshing in
+      to set it up by hand.
+    acceptance_criteria:
+      - id: AC-1
+        text: >-
+          installRemote(host:) pushes the forwarder and patches the remote ~/.claude/settings.json,
+          mirroring what HookInstaller.installGlobal does for the local home. Today nothing
+          installs hooks anywhere but locally. Bytes ride stdin with NO PTY — a PTY rewrites
+          LF to CRLF and every host then reads stale forever.
+        verify: automated
+        status: done
+        specs: [ts-int-02]
+        tests:
+          - SichAppTests.RemoteHookInstallTests/installedBytesAreIdenticalToOurs
+          - SichAppTests.RemoteHookInstallTests/theChannelIsPtyFreeAndCarriesBytesOnStdin
+          - SichAppTests.RemoteHookInstallTests/remoteInstallPreservesTheUsersOwnHooks
+      - id: AC-2
+        text: >-
+          Per-host install state comes from an ACTUAL REMOTE PROBE — reading the remote settings
+          and the forwarder bytes back over ssh and comparing sha256(remote bytes) against
+          sha256(our embedded forwarderScript) — and NEVER from a locally cached "I ran
+          installRemote once" flag. Assert it by making the probe fail after a successful install
+          and requiring the state to change.
+        verify: automated
+        status: done
+        specs: [ts-int-02]
+        tests:
+          - SichAppTests.RemoteHookInstallTests/stateIsProbeDerivedNeverCached
+      - id: AC-3
+        text: >-
+          The state set is installed / not-installed / stale-version / unknown (probe failed).
+          `unknown` is distinct and visible, NEVER collapsed into installed. Assert the negative.
+        verify: automated
+        status: done
+        specs: [ts-int-02]
+        tests:
+          - SichAppTests.RemoteHookInstallTests/allFourStatesAreReachableAndUnknownIsDistinct
+          - SichAppTests.RemoteHookInstallTests/failedProbeAndAbsentFileAreDifferentFacts
+      - id: AC-4
+        text: >-
+          The state is shown on a HOST CHIP on SessionCard, built the same custom-drawn
+          layer-backed way as repoChip() — not a stock NSButton, which was the lone outlier
+          behind the invisible-pill defect. When the state is not-installed or stale-version the
+          chip is actionable, and a test proves it by DISPATCHING A REAL NSEvent at the chip,
+          red -> green.
+        verify: automated
+        status: done
+        specs: [ts-e2e-05]
+        tests:
+          - SichAppTests.HostChipRenderTests/everyInstallStateRendersItsOwnSentence
+          - SichAppTests.HostChipRenderTests/aRealClickOnAnActionableChipRequestsTheInstall
+          - SichAppTests.HostChipRenderTests/aRealClickAlsoUpdatesAStaleHost
+          - SichAppTests.HostChipRenderTests/anInertChipNeitherInstallsNorSwallowsTheClick
+      - id: AC-5
+        text: >-
+          Installation adds NO new remote binary and no new trust surface — it reuses the
+          existing ssh identity, and what lands on the host is the same shell forwarder the
+          local install writes.
+        verify: automated
+        status: done
+        specs: [ts-int-02]
+        tests:
+          - SichAppTests.RemoteHookInstallTests/installAddsNoRemoteBinary
+      - id: AC-6
+        text: The installRemote argv passes PoolFirewall (US-001) and is generated from a constrained spec.
+        verify: automated
+        status: done
+        specs: [ts-int-02]
+        tests:
+          - SichAppTests.RemoteHookInstallTests/argvsAreSpecGeneratedAndFirewallClean
+          - SichAppTests.RemoteHookInstallTests/optionShapedDestinationIsRefusedOnBothChannels
+      - id: AC-7
+        text: >-
+          "Not observed" is never shown bare. The chip distinguishes "hooks not installed on
+          <host>" (actionable) from "not started by Sich" (not actionable). Moved here from
+          US-004 AC-5: it is install-state messaging and belongs with the state machine that
+          owns it.
+        verify: automated
+        status: done
+        specs: [ts-e2e-05]
+        tests:
+          - SichAppTests.HostChipRenderTests/aSessionSichDidNotStartSaysSoInsteadOfLookingBroken
+          - SichAppTests.HostChipRenderTests/unknownIsNeverRenderedAsInstalled
+    edge_cases:
+      - name: the probe itself fails
+        trigger: ssh refuses, times out, or the host is down
+        expected: state is `unknown` — inert, visibly distinct, and NOT installed
+      - name: the remote forwarder differs by a byte
+        trigger: an older install, or a CRLF rewrite from a PTY channel
+        expected: staleVersion, actionable — which is why both channels must stay PTY-free
+    depends_on: [US-001, US-002]
+    decisions: [DD-004]
+
+  - id: US-006
+    title: A remote card survives restart
+    view: us-006-flow
+    priority: must
+    status: done
+    story: >-
+      As the operator, I want a remote card to come back as a remote card after I restart the
+      app, so that my board survives a reboot the way my tmux session does.
+    acceptance_criteria:
+      - id: AC-1
+        text: >-
+          A remote card restored from disk reconnects to its running remote tmux session. PROVEN
+          RED BEFORE GREEN: today the seed persists projectDir: spec.target, so the card persists
+          cwd = "roman@host"; the restore does directoryExists(cwd) ? cwd : homeDirectory, the
+          check fails, and reopenShell launches a LOCAL $SHELL in $HOME — still titled
+          "roman@host - agent".
+        verify: automated
+        status: done
+        specs: [ts-e2e-02]
+        tests:
+          - SichCoreTests.RemotePaneRestoreTests/remotePaneRebuildsItsSSHCommand
+          - SichAppTests.RemoteCardRestartTests/restoredRemotePaneReattaches
+          - SichAppTests.RemoteCardRestartTests/restoredCardIsRemote
+      - id: AC-2
+        text: >-
+          What is persisted is the SPEC, NOT THE ARGV: remote: RemoteSpecSnapshot? =
+          {host, user?, sessionName, port?, identityFile?, remoteDir?}, and restore rebuilds the
+          command through the same RemoteTmuxCommand.argv(for:) constructor the create path uses.
+          Assert the persisted format CANNOT NAME A COMMAND — no field holds one.
+        verify: automated
+        status: done
+        specs: [ts-e2e-02]
+        tests:
+          - SichCoreTests.RemotePaneRestoreTests/rebuildUsesTheSharedConstructor
+          - SichCoreTests.RemotePaneRestoreTests/persistedRemoteBlockCannotNameACommand
+          - SichCoreTests.RemotePaneRestoreTests/remoteBlockRoundTrips
+          - SichAppTests.RemoteCardRestartTests/remoteCardPersistsItsSpec
+      - id: AC-3
+        text: >-
+          NO PaneSnapshot version bump. Optional fields decode nil (the claudeSessionID
+          precedent), and a version mismatch is IGNORED rather than migrated — so a bump is not a
+          migration, it DISCARDS EVERY USER'S PANES. The behaviour lives in
+          SessionRegistry.decodeUsable. Assert an old snapshot still restores; the test targets
+          SessionRegistry.
+        verify: automated
+        status: done
+        specs: [ts-e2e-02]
+        tests:
+          - SichCoreTests.RemotePaneRestoreTests/oldSnapshotStillLoads
+          - SichCoreTests.RemotePaneRestoreTests/versionMismatchIsIgnored
+      - id: AC-4
+        text: >-
+          A restored remote card rebinds to its session's telemetry (US-004), rather than
+          restoring as an unobserved terminal.
+        verify: automated
+        status: done
+        specs: [ts-e2e-02]
+        tests:
+          - SichAppTests.RemoteCardRestartTests/restoredRemoteCardRebindsToTelemetry
+          - SichAppTests.RemoteCardRestartTests/restoreAttachesTheBoardsOwnRelay
+      - id: AC-5
+        text: >-
+          The rebuilt argv passes PoolFirewall (US-001). This is the sharpest of the ssh call
+          sites: it runs AT LAUNCH, FROM DATA ON DISK, WITH NO HUMAN PRESENT. reopenShell already
+          routes through classify, but has never been handed an ssh argv (shellCommand always
+          returns a local /bin/sh -c), so this is a TIGHTENING of an existing gate: the new
+          remote branch routes through that same chokepoint rather than composing an argv beside it.
+        verify: automated
+        status: done
+        specs: [ts-e2e-02]
+        tests:
+          - SichCoreTests.RemotePaneRestoreTests/rebuiltArgvIsFirewallClean
+          - SichAppTests.RemoteCardRestartTests/restoredRemotePaneReattaches
+    edge_cases:
+      - name: an old snapshot with no remote field
+        trigger: a pane persisted before this task
+        expected: decodes nil, restores as a local pane — unchanged behaviour
+      - name: a persisted host that fails the destination grammar
+        trigger: a tampered or corrupted snapshot
+        expected: the pane is DROPPED, not restored as a local shell (falling back to local IS the bug)
+    depends_on: [US-001, US-004]
+    decisions: [DD-003, DD-004]
+
+  - id: US-007
+    title: A dead connection is visible
+    view: us-007-flow
+    priority: must
+    status: done
+    story: >-
+      As the operator, I want a card whose host I can no longer reach to say so, so that the
+      board never shows me a frozen `running` I would read as progress.
+    acceptance_criteria:
+      - id: AC-1
+        text: >-
+          When the per-host ssh transport process exits, affected cards read `unreachable` within
+          X = 5s (one board poll cycle of detection; on this path there is no keepalive delay).
+        verify: automated
+        status: done
+        specs: [ts-e2e-04]
+        tests:
+          - SichAppTests.LinkHealthTests/aDeadChildTurnsARunningCardUnreachable
+          - SichAppTests.LinkHealthTests/theBoardsShareOfTheDelayIsOnePollCycle
+      - id: AC-2
+        text: >-
+          When the connection silently partitions, ssh keepalives (ServerAliveInterval=15 x
+          ServerAliveCountMax=3, ~45s worst case) trigger the same transition. Detection latency
+          and X are distinct quantities and are asserted separately.
+        verify: automated
+        status: done
+        specs: [ts-int-03, ts-e2e-06]
+        tests:
+          - SichAppTests.LinkHealthTests/theRelayArgvAsksSshToNoticeASilentPartition
+          - SichAppTests.LinkHealthTests/detectionLatencyIsNotTheBoardsDelay
+          - SichAppTests.LinkHealthTests/aKeepaliveTimeoutTakesTheSameTransition
+          - SichAppTests.LinkHealthTests/aRemoteCommandFailureIsNotADeadLink
+      - id: AC-3
+        text: >-
+          THE NEGATIVE ASSERTION, WHICH IS THE LOAD-BEARING HALF: a card whose host is
+          unreachable must NOT read running or waiting. It reads a distinct `unreachable`. Assert
+          the negative — not merely that some flag flipped.
+        verify: automated
+        status: done
+        specs: [ts-e2e-04]
+        tests:
+          - SichAppTests.LinkHealthTests/unreachableIsNeitherWorkingNorAttention
+          - SichAppTests.LinkHealthTests/aWaitingCardOnADeadHostStopsReadingWaiting
+          - SichAppTests.LinkHealthTests/theLinkComingBackRestoresTheObservedState
+      - id: AC-4
+        text: >-
+          `unreachable` is visible on the card, distinguishable from `done` and from "not
+          observed". Asserted on real state on the layer-backed custom-drawn surface, never via
+          cacheDisplay or CALayer.render. needsAttention stays FALSE: a dead host is not an agent
+          asking for you, and lighting attention for it would dilute the one signal the product
+          exists to protect.
+        verify: automated
+        status: done
+        specs: [ts-e2e-04]
+        tests:
+          - SichAppTests.LinkHealthTests/theDeadLinkIsVisibleOnTheMountedCard
+          - SichAppTests.LinkHealthTests/unreachableIsDistinctFromDoneAndFromNotObserved
+    edge_cases:
+      - name: hooks are simply not installed
+        trigger: a reachable host with no forwarder
+        expected: that is an install-state message (US-005 AC-7), never `unreachable`
+    depends_on: [US-003]
+    decisions: [DD-001]
+
+  - id: US-008
+    title: A reconnect does not duplicate history
+    view: us-008-flow
+    priority: must
+    status: done
+    story: >-
+      As the operator, I want a reconnect to replay history without rewinding or doubling
+      anything on my board, so that the bounded replay that makes the relay resilient does not
+      cost me the truth.
+    acceptance_criteria:
+      - id: AC-1
+        text: >-
+          A transport reconnect that re-sends already-seen lines NEVER moves the card backwards;
+          the card's state sequence is unchanged versus a connection that never dropped. Written
+          from this replay: a stale SessionStart/PostToolUse arriving against a .waitingForInput
+          prior must NOT resolve to .running — a replay must not extinguish the attention signal.
+          Secondary: a stale Stop must not move .running -> .idle. (The obvious example — a stale
+          UserPromptSubmit re-opening a done session — is FALSE and cannot be made red: done is
+          deliberately sticky. The real hole is that waitingForInput.detectorFallback is nil.)
+        verify: automated
+        status: done
+        specs: [ts-e2e-04]
+        tests:
+          - SichAppTests.RemoteReconnectTests/aReplayLeavesTheStateSequenceUnchanged
+          - SichAppTests.RemoteReconnectTests/aStaleToolCallDoesNotClearAttention
+          - SichAppTests.RemoteReconnectTests/aReplayedStopDoesNotSettleTheCard
+      - id: AC-2
+        text: >-
+          The same reconnect produces NO duplicate diffs in drill-in. Key:
+          (host, session_id, iteration, sha256(diff_base64)). The sha256 tiebreak is LOAD-BEARING,
+          not defensive: iteration increments only on UserPromptSubmit while turn_diff emits on
+          Stop reading it without incrementing, and the checkpoint is never cleared — so two Stops
+          in one turn emit two different diffs under one iteration. Assert that case; keyed on the
+          triple alone the second diff is silently eaten.
+        verify: automated
+        status: done
+        specs: [ts-unit-02]
+        tests:
+          - SichCoreTests.RemoteDedupTests/twoStopsInOneIterationAreTwoDistinctKeys
+          - SichCoreTests.RemoteDedupTests/theDiffKeyIsHostAndSessionQualified
+          - SichCoreTests.RemoteDedupTests/theDiffKeyIgnoresTimestampAndCwd
+          - SichAppTests.RemoteReconnectTests/twoStopsInOneIterationBothReachDrillIn
+          - SichAppTests.RemoteReconnectTests/aReShippedDiffIsNotADuplicateTurn
+      - id: AC-3
+        text: >-
+          State-hook dedup is CONTENT-BASED over the raw line bytes, keyed (host, sha256(line)).
+          Two look-alike implementations must be excluded by test: a BYTE CURSOR (tail -n 200 -F
+          reopens with no memory of the previous offset and the remote file may have rotated —
+          assert against a replay starting at a different offset) and the NORMALIZED SignalEvent
+          (SignalTimestamp.parse falls back to ARRIVAL time when timestamp is absent, so one
+          byte-identical line replayed later normalizes to a different Date — hash BEFORE
+          normalization; assert with a timestamp-less line replayed at a later arrival).
+        verify: automated
+        status: done
+        specs: [ts-unit-02]
+        tests:
+          - SichCoreTests.RemoteDedupTests/stateHookKeysOnRawLineBytes
+          - SichCoreTests.RemoteDedupTests/theKeyIsHostQualified
+          - SichCoreTests.RemoteDedupTests/aReplayAtADifferentOffsetIsDeduped
+          - SichCoreTests.RemoteDedupTests/aTimestampLessReplayIsDeduped
+          - SichCoreTests.RemoteDedupTests/theDedupMemoryIsBounded
+    edge_cases:
+      - name: unbounded dedup memory
+        trigger: a long-lived relay over many reconnects
+        expected: the dedup memory is bounded, and the bound is asserted
+    depends_on: [US-003]
+    decisions: [DD-001]
+
+  - id: US-009
+    title: Choose a remote host and folder at card creation
+    view: us-009-flow
+    priority: must
+    status: done
+    story: >-
+      As the operator, I want to pick where a card runs and which folder it runs in when I create
+      it, so that starting remote work is a first-class action instead of a hidden keystroke.
+    acceptance_criteria:
+      - id: AC-1
+        text: >-
+          CreateCardPalette offers a "where does this run?" stage with remote as a FIRST-CLASS
+          choice, not a hidden alternate path.
+        verify: automated
+        status: done
+        specs: [ts-e2e-03]
+        tests:
+          - SichAppTests.RemoteCardPaletteTests/remoteIsAFirstClassChoiceOnTheOpeningStage
+      - id: AC-2
+        text: >-
+          Choosing a host offers a per-host recents list of previously used folders. Recents are
+          HOST-QUALIFIED (Codable {host: String?, path: String}) — a path from host A never
+          appears under host B, and never under local.
+        verify: automated
+        status: done
+        specs: [ts-e2e-03]
+        tests:
+          - SichAppTests.RemoteCardPaletteTests/recentFoldersAreHostQualified
+          - SichAppTests.RemoteCardPaletteTests/legacyFlatRecentsDecodeAsLocal
+          - SichAppTests.RemoteCardPaletteTests/creatingARemoteCardRemembersTheFolderPerHost
+          - SichAppTests.RemoteCardPaletteTests/unknownHostFallsBackToHandEntry
+      - id: AC-3
+        text: >-
+          A card created through the palette is indistinguishable, downstream, from one created
+          via the Cmd-Shift-R alert: same spec, same identity binding, same restore behaviour.
+        verify: automated
+        status: done
+        specs: [ts-e2e-03]
+        tests:
+          - SichAppTests.RemoteCardPaletteTests/paletteCardMatchesTheDirectlyConstructedCard
+      - id: AC-4
+        text: >-
+          The palette flow is verified by DISPATCHING REAL INPUT EVENTS (NSEvent / keyDown)
+          against the real surface — never by calling handlers directly. This repo has shipped an
+          interaction green and broken three times by testing the method instead of the path.
+        verify: automated
+        status: done
+        specs: [ts-e2e-03]
+        tests:
+          - SichAppTests.RemoteCardPaletteTests/remoteIsAFirstClassChoiceOnTheOpeningStage
+          - SichAppTests.RemoteCardPaletteTests/recentFoldersAreHostQualified
+          - SichAppTests.RemoteCardPaletteTests/creatingARemoteCardRemembersTheFolderPerHost
+          - SichAppTests.RemoteCardPaletteTests/unknownHostFallsBackToHandEntry
+          - SichAppTests.RemoteCardPaletteTests/paletteCardMatchesTheDirectlyConstructedCard
+          - SichAppTests.RemoteCardPaletteTests/theRemoteAlertIsRetiredAndThePaletteCarriesIt
+      - id: AC-5
+        text: The Cmd-Shift-R NSAlert is retired only after this stage is proven, and is removed LAST.
+        verify: automated
+        status: done
+        specs: [ts-e2e-03]
+        tests:
+          - SichAppTests.RemoteCardPaletteTests/theRemoteAlertIsRetiredAndThePaletteCarriesIt
+    edge_cases:
+      - name: a host with no recents yet
+        trigger: first card on a new box
+        expected: hand-entry fallback, not an empty dead end
+    depends_on: [US-004, US-006]
+    decisions: [DD-003]
+
+phases:
+  - id: phase-01
+    title: "ssh Command Firewall"
+    view: phases
+    stories: [US-001]
+    status: done
+    dod: >-
+      US-001 all six ACs green; AC-1 and AC-2 proven RED BEFORE GREEN; `swift test` count
+      strictly increases (no test deleted to make the suite pass); `swift build` warning-clean.
+    steps:
+      - name: "Constrain the constructor's inputs — destination(for:) + Invalid.invalidDestination"
+        files: [app/Sources/SichCore/RemoteTmuxCommand.swift]
+        status: done
+      - name: "Teach PoolFirewall to look behind ssh (tokenized, labelled best-effort)"
+        files: [app/Sources/SichCore/PoolFirewall.swift]
+        status: done
+      - name: "Route every generated argv through the chokepoint; tests TC-UNIT-001..007"
+        files:
+          - app/Tests/SichCoreTests/RemoteTmuxCommandTests.swift
+          - app/Tests/SichCoreTests/PoolFirewallTests.swift
+          - app/Tests/SichAppTests/RemoteTmuxCardTests.swift
+        status: done
+
+  - id: phase-02
+    title: "Portable Forwarder & Remote Install"
+    view: phases
+    stories: [US-002, US-005]
+    status: done
+    steps:
+      - name: Make the forwarder script GNU-portable (drop the plutil gate)
+        files: [app/Sources/SichApp/HookInstaller.swift]
+        status: done
+      - name: Install + probe over a PTY-free channel (sha256 comparand)
+        files:
+          - app/Sources/SichApp/HookInstaller.swift
+          - app/Sources/SichCore/RemoteHookInstallState.swift
+        status: done
+      - name: The host chip on SessionCard (custom-drawn, layer-backed, real NSEvent test)
+        files: [app/Sources/SichApp/SessionCard.swift]
+        status: done
+
+  - id: phase-03
+    title: The Relay
+    view: phases
+    stories: [US-003]
+    status: done
+    steps:
+      - name: "The per-host `ssh tail -F` supervisor; stamp sich_host at ingestion"
+        files:
+          - app/Sources/SichCore/HookNormalizer.swift
+          - app/Sources/SichCore/HookSessionStore.swift
+        status: done
+      - name: Prove there is no second listener (structural assertion)
+        files: [app/Tests/SichAppTests/]
+        status: done
+
+  - id: phase-04
+    title: The Card Join
+    view: phases
+    stories: [US-004]
+    status: done
+    steps:
+      - name: "Stamp the card identity onto the pane (launch command + tmux set-environment)"
+        files: [app/Sources/SichCore/RemoteTmuxCommand.swift]
+        status: done
+      - name: Namespace state by host
+        files: [app/Sources/SichCore/SessionRegistry.swift]
+        status: done
+
+  - id: phase-05
+    title: "Resilience — dead connections, replay, restart"
+    view: phases
+    stories: [US-006, US-007, US-008]
+    status: done
+    steps:
+      - name: "`unreachable` — a state that reaches the screen"
+        files:
+          - app/Sources/SichCore/BoardCard.swift
+          - app/Sources/SichApp/BoardTheme.swift
+        status: done
+      - name: "Dedup keys — a reconnect cannot rewind or double a card"
+        files: [app/Sources/SichCore/SignalEvent.swift]
+        status: done
+      - name: "Persist the spec, rebuild the argv — restart survival"
+        files: [app/Sources/SichCore/SessionRegistry.swift]
+        status: done
+
+  - id: phase-06
+    title: "The Door — remote host & folder picker"
+    view: phases
+    stories: [US-009]
+    status: done
+    steps:
+      - name: A "where does this run?" stage in the palette
+        files: [app/Sources/SichApp/CreateCardPalette.swift]
+        status: done
+      - name: Host-qualified recents (the folder picker)
+        files: [app/Sources/SichApp/CreateCardPalette.swift]
+        status: done
+      - name: Retire Cmd-Shift-R last
+        files: [app/Sources/SichApp/BoardShell.swift]
+        status: done
+
+iterations:
+  - iteration: 6
+    phase: phase-06
+    result: passed
+    notes: >-
+      US-009 complete; remote host & folder picker now a first-class palette stage. All 5 ACs
+      automated and green (destination selector, host-qualified recents, spec/palette equivalence,
+      real event dispatch, alert retirement). 617 swift tests green (+7 from phase-05 baseline),
+      build clean under -warnings-as-errors, periphery ratchet unwidened. All stories (US-001..009)
+      and all phases (01..06) now complete.
+    files_changed:
+      - app/Sources/SichApp/CreateCardPalette.swift
+      - app/Sources/SichApp/BoardShell.swift
+      - app/Tests/SichAppTests/CreateCardPaletteTests.swift
+      - app/Tests/SichAppTests/RemoteCardPaletteTests.swift
+  - iteration: 5
+    phase: phase-05
+    result: passed
+    notes: >-
+      Phase-05 complete; US-006/007/008 all 12 ACs automated and green (restart survival, dead-link
+      detection, reconnect dedup). 610 swift tests green (+41 from phase-04 baseline, 569), build
+      clean under -warnings-as-errors, periphery ratchet unwidened. All ACs proven; no manual sign-off
+      required. Phase-06 (remote host/folder picker UI) now active.
+    files_changed:
+      - app/Sources/SichApp/BoardShell.swift
+      - app/Sources/SichApp/BoardTheme.swift
+      - app/Sources/SichApp/BoardView.swift
+      - app/Sources/SichApp/DrillInPanel.swift
+      - app/Sources/SichApp/SessionCard.swift
+      - app/Sources/SichApp/SessionsFeed.swift
+      - app/Sources/SichApp/TaskSwitcherOverlay.swift
+      - app/Sources/SichCore/AgentTaskTally.swift
+      - app/Sources/SichCore/BoardCard.swift
+      - app/Sources/SichCore/BoardColumn.swift
+      - app/Sources/SichCore/DiffModel.swift
+      - app/Sources/SichCore/HookSessionStore.swift
+      - app/Sources/SichCore/Session.swift
+      - app/Sources/SichCore/SessionRegistry.swift
+      - app/Sources/SichCore/SessionSnapshot.swift
+      - app/Tests/SichAppTests/RemoteRelayE2ETests.swift
+      - app/Tests/SichAppTests/LinkHealthTests.swift
+      - app/Tests/SichAppTests/RemoteCardRestartTests.swift
+      - app/Tests/SichAppTests/RemoteReconnectTests.swift
+      - app/Tests/SichCoreTests/RemoteDedupTests.swift
+      - app/Tests/SichCoreTests/RemotePaneRestoreTests.swift
+  - iteration: 4
+    phase: phase-04
+    result: passed
+    notes: >-
+      US-004 complete; remote state now moves the right card. Phase-04 implemented the card-identity
+      binding via SICH_CARD_ID in launch command + tmux set-environment, and host-namespaced state
+      via per-host HookSessionStore maps + RemoteSessionKey composite key. Files deviate from spec:
+      step 2 spec names SessionRegistry.swift (PTY process lifecycle keeper) but host-namespacing
+      landed in HookSessionStore, SessionsFeed, BoardShell, and new RemoteSessionKey.swift; intent
+      verified end-to-end (mutation proof: removing BoardShell.applySessions card join turned remote
+      test red, restoring returned green). 569 swift tests green (+21 from phase-03 baseline, 548),
+      build clean under -warnings-as-errors, periphery ratchet unmodified. All US-004 ACs (1-4)
+      automated and green; AC-1 binding proved via mutation. No manual sign-off needed.
+    files_changed:
+      - app/Sources/SichCore/RemoteTmuxCommand.swift
+      - app/Sources/SichCore/SignalEvent.swift
+      - app/Sources/SichCore/HookNormalizer.swift
+      - app/Sources/SichCore/JSONLNormalizer.swift
+      - app/Sources/SichCore/HookSessionStore.swift
+      - app/Sources/SichCore/BoardCard.swift
+      - app/Sources/SichCore/DiffModel.swift
+      - app/Sources/SichCore/PoolFirewall.swift
+      - app/Sources/SichCore/RemoteSessionKey.swift
+      - app/Sources/SichApp/BoardSeed.swift
+      - app/Sources/SichApp/BoardShell.swift
+      - app/Sources/SichApp/SessionsFeed.swift
+      - app/Sources/SichApp/DrillInPanel.swift
+      - app/Sources/SichApp/SessionCard.swift
+      - app/Tests/SichAppTests/RemoteTmuxCardTests.swift
+      - app/Tests/SichAppTests/RemoteRelayE2ETests.swift
+      - app/Tests/SichCoreTests/RemoteTmuxCommandTests.swift
+      - app/Tests/SichCoreTests/RemoteTmuxSessionEnvTests.swift
+      - app/Tests/SichCoreTests/PoolFirewallTests.swift
+  - iteration: 3
+    phase: phase-03
+    result: passed
+    notes: >-
+      US-003 complete; remote hook events now reach the board. Phase-03 implemented the per-host
+      relay (ssh tail -F) with sich_host stamped at ingestion, ProcessLineStream for line parsing,
+      and SessionsFeed intake wiring. Files deviate from spec: HookNormalizer and HookSessionStore
+      were reused unmodified (constraint: "no parallel pipeline"), while relay logic landed in
+      new RemoteEventRelay.swift + ProcessLineStream.swift; intent verified end-to-end. 548 swift
+      tests green (+22 from phase-02 baseline), build clean under -warnings-as-errors, periphery
+      ratchet untouched. All US-003 ACs (1-5) automated and green; no manual sign-off needed.
+    files_changed:
+      - app/Sources/SichCore/RemoteTmuxCommand.swift
+      - app/Sources/SichApp/SessionsFeed.swift
+      - app/Sources/SichApp/BoardShell.swift
+      - app/Sources/sich/main.swift
+      - app/Sources/SichCore/RemoteEventRelay.swift
+      - app/Sources/SichCore/ProcessLineStream.swift
+      - app/Tests/SichAppTests/RemoteRelayE2ETests.swift
+      - app/Tests/SichCoreTests/RemoteEventRelayTests.swift
+  - iteration: 2
+    phase: phase-02
+    result: passed
+    notes: >-
+      US-002 and US-005 complete. Phase-02 shipped the portable forwarder (GNU coreutils,
+      no plutil dependency) + remote hook install state machine (sha256 probe, 4 states, unknown
+      is distinct) + host chip UI (custom-drawn layer-backed NSView, real NSEvent dispatch tests).
+      526 swift tests green (baseline 505, +21 new, strictly increasing); build clean under
+      -warnings-as-errors; periphery ratchet 0 new findings.
+      Three implementation deviations from contracts.c4 are recorded for spec divergence tracking:
+      (1) forwarder path: spec names ~/.claude/sich-forward.sh but implementation mirrors
+      installGlobal pattern and installs ~/.sich/sich-forward.sh + patches ~/.claude/settings.json;
+      (2) installArgv contract name: installArgv(for:script:) shipped as installArgv(for:file:) —
+      bytes ride stdin, never argv;
+      (3) phase-02 step list omits Sources/sich/main.swift + BoardShell.swift edits (required for
+      host chip reachability, step visibility gap). US-002.AC-2 (manual sign-off on real Linux)
+      stays pending — it blocks nothing since all automated ACs passed.
+    files_changed:
+      - .claude/scripts/sich-forward.sh
+      - app/Sources/SichApp/HookInstaller.swift
+      - app/Sources/SichApp/SessionCard.swift
+      - app/Sources/SichApp/BoardShell.swift
+      - app/Sources/SichCore/RemoteTmuxCommand.swift
+      - app/Sources/sich/main.swift
+      - app/Sources/SichCore/RemoteHookInstallState.swift
+      - app/Tests/SichAppTests/ForwarderPortabilityTests.swift
+      - app/Tests/SichAppTests/RemoteHookInstallTests.swift
+      - app/Tests/SichAppTests/HostChipRenderTests.swift
+  - iteration: 1
+    phase: phase-01
+    result: passed
+    notes: >-
+      US-001 complete. AC-1 and AC-2 were proven RED behaviorally (against today's API, not by
+      compile error) before the fix: the AC-2 probe printed the live hole verbatim —
+      ["/usr/bin/ssh", "-t", "-oProxyCommand=sh -c 'claude -p x'", "tmux new-session -A -s 'sich'"]
+      — an ssh OPTION in the destination position, which ssh executes LOCALLY.
+      Fixes: (1) RemoteTmuxCommand.destination(for:) is now the single chokepoint producing an
+      ssh destination token, validated POST-TRIM on the exact string appended (never spec.target,
+      which composes the untrimmed host), accepting bracketed IPv6 incl. a %zone id;
+      (2) PoolFirewall.classify gained an ssh branch that skips options + destination and scans
+      the remote command tokenized on shell word boundaries — explicitly labelled BEST-EFFORT and
+      not sound, since the far-side login shell re-parses the string. The real guarantee stays
+      structural (argvs generated only from a constrained RemoteTmuxSpec).
+      Step 3 needed no new production code: PTYSession.init and SessionRegistry.reopenShell already
+      route every spawn through classify — but that claim is now bound to tests instead of asserted.
+      Gates: swift test 505 passed (baseline 494, strictly increasing, nothing deleted);
+      swift build -Xswiftc -warnings-as-errors clean; periphery ratchet "No unused code detected";
+      swiftlint clean on the changed files except pre-existing identifier_name/trailing_comma
+      violations in untouched parse()/remoteQuoted() code (CI does not run swiftlint).
+    files_changed:
+      - app/Sources/SichCore/RemoteTmuxCommand.swift
+      - app/Sources/SichCore/PoolFirewall.swift
+      - app/Tests/SichCoreTests/RemoteTmuxCommandTests.swift
+      - app/Tests/SichCoreTests/PoolFirewallTests.swift
+      - app/Tests/SichAppTests/RemoteTmuxCardTests.swift
+
+notes:
+  tooling:
+    - "`brew install tmux` is a NEW dev-machine dependency for ts-int-04 (TC-INT-007..011).
+       Those tests must SKIP LOUDLY when tmux is absent — never silently pass."
+  human_signoff:
+    - "ts-e2e-06 (TC-E2E-017/018/019/021) needs a real Linux host, real tmux and a real network
+       partition. Only US-002.AC-2 is verify:manual; the other three re-run automated ACs against
+       reality and add confidence, not coverage."
+  open_confirmations:
+    - "The host chip on SessionCard as the install-state surface (US-005 AC-4) was my proposal at
+       /saha:contracts, per the coverage matrix — not the user's explicit choice."
+    - "Bracketed IPv6 acceptance is recorded as user-confirmed in the phase-01 notes, while the
+       coverage matrix still flags it as a proposal. Implemented as accepted."

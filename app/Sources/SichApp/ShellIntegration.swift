@@ -131,8 +131,8 @@ enum ShellIntegrationInstaller {
     // MARK: - Bundled integration payloads
 
     /// The bundled zsh integration: report cwd (OSC 7) and mark command boundaries
-    /// (OSC 133) on every prompt so the board reads them semantically. Standalone and
-    /// idempotent — sourced from the operator's rc by the marker block above.
+    /// (OSC 133 A/C/D) so the board and the emulator read them semantically. Standalone
+    /// and idempotent — sourced from the operator's rc by the marker block above.
     static let integrationScript = """
         #!/usr/bin/env zsh
         # Sich shell-integration (zsh). Reports cwd + command boundaries to the
@@ -155,15 +155,28 @@ enum ShellIntegrationInstaller {
           printf '\\033]7;file://%s%s\\033\\\\' "${HOST}" "${PWD}"
         }
 
-        # OSC 133;A: mark the start of each prompt so command boundaries are semantic.
+        # OSC 133: mark command boundaries so they are semantic. All three marks are
+        # required, not just A. libghostty erases everything from the prompt-start row
+        # down on every resize (the shell is expected to redraw its prompt) — so a
+        # prompt that is never CLOSED by 133;C makes the emulator treat the whole
+        # screen as "prompt" and blank a running TUI the moment the surface resizes.
+        # Claude Code repaints and hides that; Ink-style TUIs (Cursor, Gemini) do not.
+        #   A: prompt starts   (precmd, after D)
+        #   C: command starts  (preexec) — output from here on is command output
+        #   D: command ended   (precmd, before the next A)
         _sich_prompt_mark() {
-          printf '\\033]133;A\\033\\\\'
+          printf '\\033]133;D\\033\\\\\\033]133;A\\033\\\\'
+        }
+
+        _sich_command_mark() {
+          printf '\\033]133;C\\033\\\\'
         }
 
         autoload -Uz add-zsh-hook 2>/dev/null || true
         if command -v add-zsh-hook >/dev/null 2>&1; then
           add-zsh-hook precmd _sich_report_cwd
           add-zsh-hook precmd _sich_prompt_mark
+          add-zsh-hook preexec _sich_command_mark
         fi
 
         """

@@ -130,20 +130,21 @@ struct HarnessBadgeTests {
         })
     }
 
-    @Test("other columns show cumulative active work with a clock")
+    @Test("resting columns keep cumulative work off the face and on the card's tooltip")
     func cumulativeDurationOutsideWorking() throws {
         let now = Date(timeIntervalSince1970: 10_000)
-        let waiting = SessionCard(card: BoardCard(
-            sessionID: "waiting", title: "Waiting task", projectDir: "/tmp/p",
-            agent: .codex, flow: .b, state: .waitingForInput,
-            accumulatedWorkingTime: 2 * 3_600 + 7 * 60
-        ), now: { now })
-        let timer = try #require(allSubviews(of: waiting).compactMap { $0 as? NSTextField }
-            .first { $0.identifier?.rawValue == "task-duration" })
-        #expect(timer.stringValue == "2h 07m")
-        #expect(allSubviews(of: waiting).contains {
-            $0.identifier?.rawValue == "duration-clock"
-        })
+        for state in [CardState.idle, .waitingForInput, .done] {
+            let resting = SessionCard(card: BoardCard(
+                sessionID: "resting-\(state)", title: "Resting task", projectDir: "/tmp/p",
+                agent: .codex, flow: .b, state: state,
+                accumulatedWorkingTime: 2 * 3_600 + 7 * 60
+            ), now: { now })
+            // On a resting card a bare `2h 07m` read as "waiting for two hours".
+            #expect(!allSubviews(of: resting).contains {
+                $0.identifier?.rawValue == "task-duration"
+            })
+            #expect(resting.toolTip == "Worked 2h 07m in total")
+        }
     }
 
     @Test("working duration formatting stays compact from minutes through days")
@@ -154,14 +155,19 @@ struct HarnessBadgeTests {
         #expect(SessionCard.formatDuration((2 * 24 + 3) * 3_600) == "2d 3h")
     }
 
-    @Test("neutral and done cards use surface separation, while attention and focus own edges")
+    @Test("resting and working cards are fill-only; outlines belong to attention, blocked and focus")
     func cardEdgesAreSemantic() {
-        let neutral = sessionCard(state: .running)
+        let neutral = sessionCard(state: .idle)
         #expect(neutral.layer?.borderWidth == 0)
         #expect((neutral.layer?.shadowOpacity ?? 0) > 0)
 
+        let working = sessionCard(state: .running)
+        #expect(working.layer?.borderWidth == 0)
+        #expect(working.themedBackground == BoardTheme.workingCard)
+
         let done = sessionCard(state: .done)
-        #expect(done.layer?.borderWidth == 0, "the check row already communicates done")
+        #expect(done.layer?.borderWidth == 0)
+        #expect(done.themedBackground == BoardTheme.doneCard)
 
         let waiting = sessionCard(state: .waitingForInput)
         #expect(waiting.layer?.borderWidth == 1)

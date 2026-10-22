@@ -258,18 +258,14 @@ private final class RealCardHarness {
     /// Launch an agent CLI with the harness's forwarder overrides riding the command
     /// line itself, so every hook the agent (and its subagents) fires inherits them:
     ///  - SICH_EVENTS_FILE — this run's private events file;
-    ///  - SICH_EVENTS_MAX_BYTES — rotation OFF for the run. The default 5 MiB
-    ///    threshold was the runs-3/4/5 "hooks vanished" mystery: in a dirty repo one
-    ///    Stop appends a multi-MB `turn_diff` line, the forwarder rotates the live
-    ///    file to `.1`, and every cumulative eventCount() silently resets to zero
-    ///    mid-journey while the poller (inode-tailing) keeps moving the card;
-    ///  - SICH_DIFF_MAX_BYTES — truncates those turn_diff payloads, keeping the
-    ///    file KB-scale and the Stop hook itself fast.
+    ///  - SICH_EVENTS_MAX_BYTES — rotation OFF for the run: once the forwarder
+    ///    rotates the live file to `.1`, every cumulative eventCount() silently
+    ///    resets to zero mid-journey while the poller (inode-tailing) keeps moving
+    ///    the card.
     func launchAgent(_ command: String) {
         typeShellLine(
             "SICH_EVENTS_FILE='\(events.path)' "
                 + "SICH_EVENTS_MAX_BYTES=1073741824 "
-                + "SICH_DIFF_MAX_BYTES=4096 "
                 + command)
     }
 

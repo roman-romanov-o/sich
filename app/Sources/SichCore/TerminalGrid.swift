@@ -39,7 +39,7 @@ public struct TerminalCellStyle: Hashable, Sendable {
 /// One rendered cell: a base character (nil = blank) plus its resolved fg/bg.
 /// ponytail: base codepoint only — combining marks / ZWJ emoji sequences render as
 /// their base glyph; carry the full grapheme buffer if a TUI ever needs it.
-public struct TerminalCell: Equatable, Sendable {
+public struct TerminalCell: Hashable, Sendable {
     public let scalar: Unicode.Scalar?
     public let fg: RGB?
     public let bg: RGB?
@@ -59,17 +59,23 @@ public struct GridCursor: Equatable, Sendable {
 }
 
 /// A full viewport snapshot: a `cols × rows` row-major grid of cells, the cursor,
-/// and the terminal's default foreground (fallback for cells with no explicit fg).
-/// A value type so it crosses to the AppKit surface without sharing the emulator.
+/// whether the viewport sits on the live bottom, and the terminal's default
+/// colours (fallback for cells with no explicit fg/bg). A value type so it crosses
+/// to the AppKit surface without sharing the emulator.
 public struct TerminalGrid: Equatable, Sendable {
     public let cols: Int
     public let rows: Int
     public let cells: [TerminalCell]   // row-major, exactly cols*rows
     public let cursor: GridCursor?
+    /// The viewport is at the bottom of the scrollable area — the emulator's own
+    /// scrollbar position, not "is the cursor on screen": a viewport scrolled less
+    /// than a screen into history still shows most of the active area, and a TUI's
+    /// repaint walks its cursor through exactly those rows.
+    public let live: Bool
     public let defaultFg: RGB?
     public let defaultBg: RGB?
 
-    public static let empty = TerminalGrid(cols: 0, rows: 0, cells: [], cursor: nil,
+    public static let empty = TerminalGrid(cols: 0, rows: 0, cells: [], cursor: nil, live: true,
                                            defaultFg: nil, defaultBg: nil)
 
     public func cell(col: Int, row: Int) -> TerminalCell {
@@ -142,6 +148,7 @@ final class RenderState {
         }
         return TerminalGrid(cols: cols, rows: rows, cells: cells,
                             cursor: readCursor(),
+                            live: viewportIsLive(terminal),
                             defaultFg: defaultColor(GHOSTTY_RENDER_STATE_DATA_COLOR_FOREGROUND),
                             defaultBg: defaultColor(GHOSTTY_RENDER_STATE_DATA_COLOR_BACKGROUND))
     }
@@ -212,7 +219,17 @@ final class RenderState {
         return RGB(r: c.r, g: c.g, b: c.b)
     }
 
-    // MARK: - Cursor + scalar reads
+    // MARK: - Cursor + viewport + scalar reads
+
+    /// Bottom of the scrollable area ⇔ the live screen. Read from the terminal's
+    /// scrollbar (offset + visible length against the total), which is exact for a
+    /// viewport parked on an arbitrary history pin.
+    private func viewportIsLive(_ terminal: GhosttyTerminal) -> Bool {
+        var bar = GhosttyTerminalScrollbar()
+        guard ghostty_terminal_get(terminal, GHOSTTY_TERMINAL_DATA_SCROLLBAR, &bar) == GHOSTTY_SUCCESS
+        else { return true }
+        return bar.offset + bar.len >= bar.total
+    }
 
     private func readCursor() -> GridCursor? {
         guard boolValue(GHOSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_HAS_VALUE) else { return nil }

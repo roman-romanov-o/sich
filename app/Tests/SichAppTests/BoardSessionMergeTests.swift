@@ -1,3 +1,4 @@
+import Foundation
 import SichCore
 import Testing
 
@@ -13,9 +14,9 @@ import Testing
 struct BoardSessionMergeTests {
     /// A light owned seed: the demo-stub PTY (a real `/bin/sh`, cheap to launch),
     /// standing in for the live terminal whose PTY we own.
-    private func ownedShell() -> BoardShell {
+    private func ownedShell(dir: String = "/work") -> BoardShell {
         let seed = BoardSeed(
-            sessionID: "live-terminal", projectDir: "/work",
+            sessionID: "live-terminal", projectDir: dir,
             agent: .claude, flow: .b, state: .idle, scrollback: "ready"
         )
         let shell = BoardShell(seeds: [seed])
@@ -77,9 +78,16 @@ struct BoardSessionMergeTests {
     /// completion remains an operator decision. An observed session end cannot move the
     /// task into DONE. One card throughout, PTY preserved (still drillable).
     @Test func ownedTerminalMovesAcrossColumnsAsTheModelWorks() throws {
-        let shell = ownedShell()
+        // A REAL dir: moving to DONE closes the pty (checklist 18.08 item 1), so the
+        // final drill-in goes through revival — whose dir-exists guard a fictional
+        // "/work" would fail, leaving the click inert.
+        let work = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sich-merge-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: work) }
+        let shell = ownedShell(dir: work.path)
         func claude(_ state: CardState) -> BoardCard {
-            BoardCard(sessionID: "claude-xyz", projectDir: "/work",
+            BoardCard(sessionID: "claude-xyz", projectDir: work.path,
                       agent: .claude, flow: .b, state: state)
         }
 
@@ -98,10 +106,12 @@ struct BoardSessionMergeTests {
         shell.move(cardID: cardID, to: .done)
         #expect(shell.cards.first?.state == .done)
 
-        // One card the whole way through, still ours, still drillable.
+        // One card the whole way through, still ours, still drillable — DONE freed
+        // the terminal, so drilling back in revives a shell rather than reusing one.
         #expect(shell.cards.count == 1)
         shell.drill(into: shell.cards.first!)
         #expect(shell.boardView.isHidden)
+        shell.e2eTeardown()
     }
 
     /// Hook sessions in a dir that no owned card matches belong to some other terminal

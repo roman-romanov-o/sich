@@ -153,7 +153,7 @@ struct BacklogPersistenceE2ETests {
         #expect(restored.state == .idle)
     }
 
-    @Test("manual DONE survives via the task book alone")
+    @Test("manual DONE survives via the task book alone — as an archived record")
     func manualDoneSurvivesViaTaskBookAlone() throws {
         let taskDir = makeTempDir()
         let sessionDir = makeTempDir()
@@ -165,9 +165,15 @@ struct BacklogPersistenceE2ETests {
         let card = try #require(shell.createSession(title: "Ship it", projectDir: work.path))
         shell.move(cardID: card.id, to: .done)
 
+        // The record is never lost — but a task finished in a PREVIOUS session
+        // no longer rents a DONE card; it sweeps into the archive on launch
+        // (checklist: "DONE column need to be archived time to time").
         let relaunched = relaunch(taskDir: taskDir, sessionDir: sessionDir)
         defer { relaunched.e2eTeardown() }
-        #expect(relaunched.cards.first { $0.id == card.id }?.state == .done)
+        #expect(!relaunched.cards.contains { $0.id == card.id })
+        let archived = try #require(relaunched.archivedTasks.first { $0.id == card.id })
+        #expect(archived.title == "Ship it")
+        #expect(archived.archivedAt != nil)
     }
 
     @Test("cumulative working time survives task-book hydration")
@@ -211,7 +217,7 @@ struct BacklogPersistenceE2ETests {
         #expect(card.title == "Build the feature")
         // The claude start line was actually typed into the fresh shell's pty —
         // interactive pool, never `claude -p`.
-        #expect(typed.text.contains("claude --session-id"))
+        #expect(typed.text.contains("/.sich/bin/claude\" --session-id"), "local start names the shim by absolute path")
         #expect(!typed.text.contains("claude -p"))
 
         let relaunched = relaunch(taskDir: taskDir, sessionDir: sessionDir)
@@ -372,7 +378,7 @@ struct BacklogPersistenceE2ETests {
         shell.drill(into: card)
 
         #expect(!shell.drillIn.isHidden, "the click lands in the drill-in, not a silent no-op")
-        #expect(typed.text.contains("claude --resume \(resumeID.uuidString.lowercased())"),
+        #expect(typed.text.contains("/.sich/bin/claude\" --resume \(resumeID.uuidString.lowercased())"),
                 "the pinned conversation resumes rather than restarting")
         #expect(!typed.text.contains("claude -p"))
     }

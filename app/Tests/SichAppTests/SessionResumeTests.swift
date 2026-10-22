@@ -282,10 +282,19 @@ struct SessionResumeTests {
     func claudeResumeCommandsArePinnedAndReversible() {
         let id = UUID(uuidString: "AABBCCDD-1122-3344-5566-778899AABBCC")!
         let lower = id.uuidString.lowercased()
-        let start = BoardShell.startClaudeCommand(sessionID: id)
-        let resume = BoardShell.resumeClaudeCommand(sessionID: id)
-        #expect(start == "claude --session-id \(lower)\n")
-        #expect(resume == "claude --resume \(lower) 2>/dev/null || claude\n")
+        let start = BoardShell.startClaudeCommand(sessionID: id, via: .localShim)
+        let resume = BoardShell.resumeClaudeCommand(sessionID: id, via: .localShim)
+        // Local launches name the Sich shim by ABSOLUTE path: the hook feed rides the
+        // shim, and PATH order is not ours to trust (another installer's rc line can
+        // put a real `claude` ahead of `~/.sich/bin` — the card then never updates).
+        let shim = "\"$HOME/.sich/bin/claude\""
+        #expect(start == "\(shim) --session-id \(lower)\n")
+        #expect(resume == "\(shim) --resume \(lower) 2>/dev/null || \(shim)\n")
+        // A far-side shell has no shim: remote launches stay a bare PATH lookup.
+        #expect(BoardShell.startClaudeCommand(sessionID: id, via: .remotePath)
+                == "claude --session-id \(lower)\n")
+        #expect(BoardShell.resumeClaudeCommand(sessionID: id, via: .remotePath)
+                == "claude --resume \(lower) 2>/dev/null || claude\n")
         // Firewall stays clean: we never auto-spawn a headless print-mode agent.
         #expect(!start.contains("--print") && !start.contains(" -p"))
         #expect(!resume.contains("--print") && !resume.contains(" -p"))
@@ -295,8 +304,37 @@ struct SessionResumeTests {
     func codexRestoreCommandUsesCodexResumeLast() {
         let resume = BoardShell.resumeCodexCommand()
         #expect(resume == "\(HookInstaller.codexShimPath())/codex resume --last\n")
+        #expect(BoardShell.startCodexCommand(via: .remotePath) == "codex\n")
         #expect(!resume.contains(" exec "))
         #expect(!resume.contains("--print"))
+    }
+
+    @Test("cursor start and restore run the shimmed agent CLI interactively")
+    func cursorCommandsUseShimAndResume() {
+        let start = BoardShell.startCursorCommand()
+        let resume = BoardShell.resumeCursorCommand()
+        #expect(start == "\(HookInstaller.codexShimPath())/agent\n")
+        #expect(resume == "\(HookInstaller.codexShimPath())/agent resume\n")
+        #expect(!resume.contains("--print") && !resume.contains(" -p"))
+        let cursor = PaneSnapshot(
+            sessionID: UUID(), cwd: "/w", agentType: .cursor,
+            flowTag: .interactive, childPID: 1
+        )
+        #expect(BoardShell.restoredAgentCommand(for: cursor) == resume)
+    }
+
+    @Test("antigravity start and restore run the shimmed agy interactively")
+    func antigravityCommandsUseShimAndContinue() {
+        let start = BoardShell.startAntigravityCommand()
+        let resume = BoardShell.resumeAntigravityCommand()
+        #expect(start == "\(HookInstaller.codexShimPath())/agy\n")
+        #expect(resume == "\(HookInstaller.codexShimPath())/agy --continue\n")
+        #expect(!resume.contains("--print") && !resume.contains(" -p"))
+        let pane = PaneSnapshot(
+            sessionID: UUID(), cwd: "/w", agentType: .antigravity,
+            flowTag: .interactive, childPID: 1
+        )
+        #expect(BoardShell.restoredAgentCommand(for: pane) == resume)
     }
 
     @Test("restored agent command chooses Claude ids or Codex resume")
@@ -315,7 +353,7 @@ struct SessionResumeTests {
             flowTag: .interactive, childPID: 1
         )
 
-        #expect(BoardShell.restoredAgentCommand(for: claude) == BoardShell.resumeClaudeCommand(sessionID: claudeID))
+        #expect(BoardShell.restoredAgentCommand(for: claude) == BoardShell.resumeClaudeCommand(sessionID: claudeID, via: .localShim))
         #expect(BoardShell.restoredAgentCommand(for: codex) == BoardShell.resumeCodexCommand())
         #expect(BoardShell.restoredAgentCommand(for: shell) == nil)
     }

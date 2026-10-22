@@ -107,4 +107,150 @@ struct HookSessionStoreTests {
         store.sweepStale(now: base.addingTimeInterval(31))
         #expect(store.entry(for: "killed")?.state == .waitingForInput)
     }
+
+    // MARK: - Compaction is WORK, never NEED YOU (checklist item 5)
+
+    /// A manual `/compact` is typed exactly on a Stop-ended card: the card must show
+    /// WORKING while claude rewrites its context (not NEED YOU, and no stall flip),
+    /// then return to the truthful NEED YOU when the re-emitted SessionStart closes
+    /// the parenthesis — with the turn latch intact, so a replayed tool line still
+    /// cannot re-open the ended turn but the operator's own prompt does.
+    @Test func manualCompactShowsWorkingThenRestoresThePromptWait() {
+        let store = HookSessionStore(stallThreshold: 30)
+        store.ingest([normalized(#"{"hook_event_name":"Stop","session_id":"s"}"#,
+                                 arrival: base)])
+        #expect(store.entry(for: "s")?.state == .waitingForInput)
+
+        store.ingest([normalized(#"{"hook_event_name":"PreCompact","session_id":"s"}"#,
+                                 arrival: base.addingTimeInterval(10))])
+        #expect(store.entry(for: "s")?.state == .running,
+                "compacting is work, not a request for the operator")
+        store.sweepStale(now: base.addingTimeInterval(35))
+        #expect(store.entry(for: "s")?.state == .running,
+                "an in-flight compaction inside the stall budget is not a stall")
+
+        store.ingest([normalized(#"{"hook_event_name":"SessionStart","session_id":"s"}"#,
+                                 arrival: base.addingTimeInterval(40))])
+        #expect(store.entry(for: "s")?.state == .waitingForInput,
+                "compaction done → claude is again waiting on the operator")
+        store.ingest([normalized(#"{"hook_event_name":"PostToolUse","session_id":"s"}"#,
+                                 arrival: base.addingTimeInterval(45))])
+        #expect(store.entry(for: "s")?.state == .waitingForInput,
+                "the restored turn latch still blocks replayed tool lines (US-008 AC-1)")
+        store.ingest([normalized(#"{"hook_event_name":"UserPromptSubmit","session_id":"s"}"#,
+                                 arrival: base.addingTimeInterval(50))])
+        #expect(store.entry(for: "s")?.state == .running)
+    }
+
+    /// Auto-compact fires mid-turn: WORKING before, during, and after — and the
+    /// completing SessionStart must not disturb the running state (it restores
+    /// `running`, the pre-compaction memory, not QUEUE).
+    @Test func autoCompactMidTurnStaysWorkingThroughout() {
+        let store = HookSessionStore(stallThreshold: 30)
+        for (offset, event) in [
+            (0.0, "UserPromptSubmit"), (5.0, "PreCompact"),
+            (10.0, "SessionStart"), (15.0, "PreToolUse"),
+        ] {
+            store.ingest([normalized(
+                #"{"hook_event_name":"\#(event)","session_id":"auto"}"#,
+                arrival: base.addingTimeInterval(offset))])
+            #expect(store.entry(for: "auto")?.state == .running,
+                    "\(event) must leave a mid-turn compaction WORKING")
+        }
+    }
+
+    /// A SessionStart with NO pending compaction keeps its long-standing neutrality:
+    /// a signal between PreCompact and SessionStart cancels the restore memory, so a
+    /// later resume cannot be hijacked into a stale state.
+    @Test func interveningSignalCancelsTheCompactionRestore() {
+        let store = HookSessionStore(stallThreshold: 30)
+        store.ingest([normalized(#"{"hook_event_name":"Stop","session_id":"c"}"#,
+                                 arrival: base)])
+        store.ingest([normalized(#"{"hook_event_name":"PreCompact","session_id":"c"}"#,
+                                 arrival: base.addingTimeInterval(5))])
+        // The operator types a real prompt before compaction reports completion:
+        // the prompt wins, and the SessionStart that follows must stay neutral
+        // (running survives) instead of restoring the remembered prompt-wait.
+        store.ingest([normalized(#"{"hook_event_name":"UserPromptSubmit","session_id":"c"}"#,
+                                 arrival: base.addingTimeInterval(8))])
+        store.ingest([normalized(#"{"hook_event_name":"SessionStart","session_id":"c"}"#,
+                                 arrival: base.addingTimeInterval(12))])
+        #expect(store.entry(for: "c")?.state == .running,
+                "a cancelled restore must not drag the card back to NEED YOU")
+    }
+
+    // MARK: - Background parenthesis (CARD-STATUS.md rule 2.3)
+
+    /// The operator report: a backgrounded subagent kept working after the main
+    /// turn parked, and the card flipped to NEEDS YOU anyway. Sequence taken
+    /// verbatim from a live events.jsonl — the Stop payload itself declares the
+    /// still-running child in `background_tasks`, so the card must stay WORKING
+    /// until the FINAL Stop whose payload reports the background drained.
+    @Test func stopWithRunningBackgroundTaskStaysWorking() {
+        let store = HookSessionStore(stallThreshold: 600)
+        let running = #"[{"id":"bg1","type":"subagent","status":"running"}]"#
+        for (offset, json) in [
+            (0.0, #"{"hook_event_name":"UserPromptSubmit","session_id":"bg"}"#),
+            (2.0, #"{"hook_event_name":"SubagentStart","session_id":"bg","agent_id":"bg1"}"#),
+            (5.0, #"{"hook_event_name":"Stop","session_id":"bg","background_tasks":\#(running)}"#),
+        ] {
+            store.ingest([normalized(json, arrival: base.addingTimeInterval(offset))])
+        }
+        #expect(store.entry(for: "bg")?.state == .running,
+                "a Stop that leaves a background subagent running parked the prompt, not the work")
+
+        // The child's own tool calls keep flowing after the parked Stop — they must
+        // not be swallowed by the turn latch (no turn ended: nothing was latched).
+        store.ingest([normalized(
+            #"{"hook_event_name":"PreToolUse","session_id":"bg","agent_id":"bg1","tool_name":"Read"}"#,
+            arrival: base.addingTimeInterval(10))])
+        #expect(store.entry(for: "bg")?.state == .running)
+
+        // The ~60s idle nudge fires while the REPL sits parked ("Claude is waiting
+        // for your input"). Its payload carries no background_tasks — the store's
+        // remembered parenthesis must mask it.
+        store.ingest([normalized(
+            #"{"hook_event_name":"Notification","session_id":"bg","notification_type":"idle_prompt"}"#,
+            arrival: base.addingTimeInterval(70))])
+        #expect(store.entry(for: "bg")?.state == .running,
+                "an idle nudge inside the background parenthesis is not an operator wait")
+
+        // Child finishes (its SubagentStop lists ITSELF as running — excluded), the
+        // root loop resumes, and the FINAL Stop lands with the background drained:
+        // now NEEDS YOU is the truth, and the turn latch arms as usual.
+        let selfOnly = #"[{"id":"bg1","type":"subagent","status":"running"}]"#
+        for (offset, json) in [
+            (80.0, #"{"hook_event_name":"SubagentStop","session_id":"bg","agent_id":"bg1","background_tasks":\#(selfOnly)}"#),
+            (85.0, #"{"hook_event_name":"PostToolUse","session_id":"bg","tool_name":"Read"}"#),
+            (90.0, #"{"hook_event_name":"Stop","session_id":"bg","background_tasks":[]}"#),
+        ] {
+            store.ingest([normalized(json, arrival: base.addingTimeInterval(offset))])
+        }
+        #expect(store.entry(for: "bg")?.state == .waitingForInput,
+                "the final Stop (background drained) is the real turn end")
+        store.ingest([normalized(
+            #"{"hook_event_name":"PreToolUse","session_id":"bg","tool_name":"Bash"}"#,
+            arrival: base.addingTimeInterval(95))])
+        #expect(store.entry(for: "bg")?.state == .waitingForInput,
+                "after the real turn end the replay guard is back in force (US-008 AC-1)")
+    }
+
+    /// A plain Stop (no background_tasks field at all — pre-background-agent Claude)
+    /// and a plain idle nudge keep today's behavior: straight to NEEDS YOU.
+    @Test func plainStopAndIdleNudgeStillPark() {
+        let store = HookSessionStore(stallThreshold: 600)
+        store.ingest([normalized(#"{"hook_event_name":"UserPromptSubmit","session_id":"p"}"#,
+                                 arrival: base)])
+        store.ingest([normalized(#"{"hook_event_name":"Stop","session_id":"p"}"#,
+                                 arrival: base.addingTimeInterval(5))])
+        #expect(store.entry(for: "p")?.state == .waitingForInput)
+
+        store.ingest([normalized(#"{"hook_event_name":"UserPromptSubmit","session_id":"n"}"#,
+                                 arrival: base)])
+        store.ingest([normalized(
+            #"{"hook_event_name":"Notification","session_id":"n","notification_type":"idle_prompt"}"#,
+            arrival: base.addingTimeInterval(5))])
+        #expect(store.entry(for: "n")?.state == .waitingForInput,
+                "an idle nudge with no background parenthesis is a real operator wait")
+    }
 }

@@ -147,11 +147,9 @@ final class WorktreePill: NSTextField {
 
 /// The drill-in surface (US-002): when a card is selected, this panel takes over
 /// the full window (Altitude-1) hosting that session's embedded ``TerminalSurface``
-/// — in-app focus, not an OS window jump (DD-001). Reworked to the Task View POC:
-/// a breadcrumb header with a live status pill, an amber "waiting on you" banner,
-/// the terminal on the left, and a persistent sidebar with the working-tree change
-/// list on the right. Single responsibility: present one focused session and a
-/// way back.
+/// — in-app focus, not an OS window jump (DD-001). A breadcrumb header with a
+/// live status pill, an amber "waiting on you" banner, and the terminal filling
+/// the rest. Single responsibility: present one focused session and a way back.
 ///
 /// Built to mirror ``SessionCard`` exactly — `wantsLayer` + a `themedBackground`
 /// layer fill + stacks of label fields — because that is the render path the
@@ -160,8 +158,6 @@ final class WorktreePill: NSTextField {
 final class DrillInPanel: NSView {
     /// Invoked when the operator returns to the board (US-002 AC#2).
     var onClose: (() -> Void)?
-    var onTerminalSmaller: (() -> Void)?
-    var onTerminalLarger: (() -> Void)?
 
     // Internal so a real mouseDown-event test can drive the click path (the
     // Interaction-AC Binding Rule: a click AC must be exercised by a dispatched
@@ -174,46 +170,38 @@ final class DrillInPanel: NSView {
     private let tagField = NSTextField(labelWithString: "")
     /// Which harness runs in the focused terminal — the visual chip beside the tag.
     private let harnessBadge = HarnessBadge(agent: .claude)
-    private let terminalFontControls = FontSizeControls()
     // Internal so a focus test can assert the worktree indicator is shown/hidden.
     let worktreeTag = WorktreePill()
     private let banner = NSView()
     private let bannerField = NSTextField(labelWithString:
         "Waiting on you — answer in the terminal below")
     private let termContainer = NSView()
-    private let sidebar = DrillInSidebar()
-    private let terminalBody = NSView()
-    private let changesView = ChangesView()
     private var surface: TerminalSurface?
+
+    /// The mounted terminal, so an E2E can read what the operator actually sees.
+    var surfaceForTesting: TerminalSurface? { surface }
     private var focusedCard: BoardCard?
     private var terminalFontSize: CGFloat = 20
-    private var availableDiffs: [TurnDiff] = []
-    /// The breadcrumb header (← board / status pill / quota). Collapsed while the
-    /// diff pane is open so ChangesView's own "← Terminal" is the only nav there.
-    private var headerHolder: NSView?
 
-    override init(frame frameRect: NSRect) {
+    /// Item 8 (18.08): true only in the production shell — drill-in surfaces then
+    /// teach TerminalGeometry their settled grid so future spawns are born pre-sized.
+    /// Tests and E2E captures leave it false and never touch the real defaults.
+    var teachesGeometry = false
+
+    override init(frame frameRect: NSRect = .zero) {
         super.init(frame: frameRect)
         wantsLayer = true
         themedBackground = BoardTheme.canvas
         backPill.onClick = { [weak self] in self?.goBack() }
-        terminalFontControls.onTerminalSmaller = { [weak self] in self?.onTerminalSmaller?() }
-        terminalFontControls.onTerminalLarger = { [weak self] in self?.onTerminalLarger?() }
-        sidebar.onOpenDiff = { [weak self] turns, iteration, file in
-            self?.openDiff(turns: turns, iteration: iteration, file: file)
-        }
-        changesView.onClose = { [weak self] in self?.closeDiff() }
         build()
     }
 
     required init?(coder: NSCoder) { nil }
 
     /// Root column: header / banner (collapses when hidden — NSStackView detaches
-    /// hidden arranged views) / body row of terminal + sidebar.
+    /// hidden arranged views) / the terminal.
     private func build() {
-        let header = buildHeader()
-        headerHolder = header
-        let column = NSStackView(views: [header, buildBanner(), buildBody()])
+        let column = NSStackView(views: [buildHeader(), buildBanner(), termContainer])
         column.orientation = .vertical
         column.alignment = .leading
         column.spacing = 0
@@ -233,12 +221,17 @@ final class DrillInPanel: NSView {
     /// POC header: ← board / dir · title, the live status pill, then quota and the
     /// `libghostty · agent` tag on the right.
     private func buildHeader() -> NSView {
-        configure(dirField, font: BoardTheme.sansTiny, color: BoardTheme.textFaint)
-        configure(titleField, font: BoardTheme.cardTitle, color: BoardTheme.textPrimary)
-        configure(quotaField, font: BoardTheme.monoSmall, color: BoardTheme.textMuted)
+        // Long paths and the live quota readout must truncate — default 750 compression
+        // resistance on label fields pins the window wider than a laptop screen (the
+        // drill-in header showed "interactive … antigravity … co…" cut off with no
+        // way to edge-resize smaller).
+        configure(dirField, font: BoardTheme.sansTiny, color: BoardTheme.textFaint,
+                  yieldPriority: .defaultLow)
+        configure(titleField, font: BoardTheme.cardTitle, color: BoardTheme.textPrimary,
+                  yieldPriority: .defaultLow)
+        configure(quotaField, font: BoardTheme.monoSmall, color: BoardTheme.textMuted,
+                  yieldPriority: .defaultLow)
         configure(tagField, font: BoardTheme.monoSmall, color: BoardTheme.textDim)
-        titleField.lineBreakMode = .byTruncatingTail
-        titleField.setContentCompressionResistancePriority(.init(2), for: .horizontal)
 
         let slash = NSTextField(labelWithString: "/")
         configure(slash, font: BoardTheme.sansSmall, color: BoardTheme.textDim)
@@ -248,7 +241,7 @@ final class DrillInPanel: NSView {
         worktreeTag.isHidden = true
         let header = NSStackView(views: [
             backPill, slash, dirField, titleField, statusPill, spring,
-            worktreeTag, terminalFontControls, quotaField, tagField, harnessBadge,
+            worktreeTag, quotaField, tagField, harnessBadge,
         ])
         header.orientation = .horizontal
         header.alignment = .centerY
@@ -275,41 +268,12 @@ final class DrillInPanel: NSView {
         return banner
     }
 
-    /// Body row: the terminal container fills the left, the 300pt sidebar rides right.
-    private func buildBody() -> NSView {
-        sidebar.translatesAutoresizingMaskIntoConstraints = false
-        let terminalRow = NSStackView(views: [termContainer, sidebar])
-        terminalRow.orientation = .horizontal
-        terminalRow.alignment = .top
-        terminalRow.spacing = 0
-        terminalRow.translatesAutoresizingMaskIntoConstraints = false
-        terminalBody.addSubview(terminalRow)
-        changesView.translatesAutoresizingMaskIntoConstraints = false
-        terminalBody.addSubview(changesView)
-        NSLayoutConstraint.activate([
-            sidebar.widthAnchor.constraint(equalToConstant: 300),
-            sidebar.heightAnchor.constraint(equalTo: terminalRow.heightAnchor),
-            termContainer.heightAnchor.constraint(equalTo: terminalRow.heightAnchor),
-            terminalRow.leadingAnchor.constraint(equalTo: terminalBody.leadingAnchor),
-            terminalRow.trailingAnchor.constraint(equalTo: terminalBody.trailingAnchor),
-            terminalRow.topAnchor.constraint(equalTo: terminalBody.topAnchor),
-            terminalRow.bottomAnchor.constraint(equalTo: terminalBody.bottomAnchor),
-            changesView.leadingAnchor.constraint(equalTo: terminalBody.leadingAnchor),
-            changesView.trailingAnchor.constraint(equalTo: terminalBody.trailingAnchor),
-            changesView.topAnchor.constraint(equalTo: terminalBody.topAnchor),
-            changesView.bottomAnchor.constraint(equalTo: terminalBody.bottomAnchor),
-        ])
-        changesView.isHidden = true
-        return terminalBody
-    }
-
     /// Focus a card's session: show its live embedded terminal, ready for input
     /// (US-002 AC#1). The previous surface is detached first so only the focused
     /// terminal is foreground-rendered (US-002 edge case #2 / TC-E2E-007).
     func focus(card: BoardCard, pty: PTYSession, terminalFontSize: CGFloat = 20) {
         focusedCard = card
         self.terminalFontSize = terminalFontSize
-        closeDiff()
         titleField.stringValue = card.title ?? BoardTheme.shortPath(card.projectDir)
         dirField.stringValue = BoardTheme.projectLabel(card.projectDir)
         tagField.stringValue = "libghostty"
@@ -318,6 +282,8 @@ final class DrillInPanel: NSView {
         update(state: card.state)
         detachSurface()
         let surface = TerminalSurface(session: pty, fontSize: terminalFontSize)
+        surface.teachesGeometry = teachesGeometry
+        surface.workingDirectory = card.projectDir   // relative file links resolve here
         // Esc belongs to the child (Claude Code interrupt / edit), so "back to board"
         // is ⌘[ — routed via the surface's `performKeyEquivalent`. The click pill is
         // the other way back.
@@ -326,7 +292,6 @@ final class DrillInPanel: NSView {
         surface.startReading()
         window?.makeFirstResponder(surface)   // ready for typed input
         self.surface = surface
-        renderAvailableDiffs()
     }
 
     /// Surface the amber worktree pill (with the branch name when readable) only when
@@ -354,53 +319,20 @@ final class DrillInPanel: NSView {
         banner.isHidden = state != .waitingForInput
     }
 
-    private static func statusLabel(_ state: CardState) -> String {
+    /// The word in the drill-in pill. Internal (not private) so US-007 can assert the
+    /// dead-link reading is its own sentence here too, not a borrowed one.
+    static func statusLabel(_ state: CardState) -> String {
         switch state {
         case .idle: return "idle"
+        case .parked: return "parked"
         case .running: return "working"
         case .runningTests: return "testing"
         case .waitingForInput: return "needs you"
         case .blocked: return "blocked"
         case .done: return "done"
         case .unknown: return "unknown"
+        case .unreachable: return "unreachable"
         }
-    }
-
-    func update(diffs: [TurnDiff]) {
-        availableDiffs = diffs
-        renderAvailableDiffs()
-    }
-
-    private func renderAvailableDiffs() {
-        guard let card = focusedCard else { return }
-        let path = (card.projectDir as NSString).standardizingPath
-        let turns = availableDiffs.filter {
-            $0.cardID == card.id.uuidString
-                || $0.sessionID == card.sessionID
-                || $0.cwd.map { ($0 as NSString).standardizingPath == path } == true
-        }
-        sidebar.render(turns: turns)
-    }
-
-    private func openDiff(turns: [TurnDiff], iteration: Int?, file: String?) {
-        changesView.render(turns: turns, filePath: file, selectedIteration: iteration)
-        changesView.isHidden = false
-        termContainer.superview?.isHidden = true
-        // Collapse the drill-in chrome so the diff is a clean full-window review:
-        // the header's "← board" and the waiting banner both go, leaving
-        // ChangesView's "← Terminal" as the single, unambiguous way back.
-        headerHolder?.isHidden = true
-        banner.isHidden = true
-    }
-
-    private func closeDiff() {
-        changesView.isHidden = true
-        termContainer.superview?.isHidden = false
-        headerHolder?.isHidden = false
-        // Restore the banner to whatever the live state dictates (it's driven by
-        // update(state:)) instead of leaving it force-hidden.
-        if let state = focusedCard?.state { banner.isHidden = state != .waitingForInput }
-        if let surface { window?.makeFirstResponder(surface) }
     }
 
     private func mount(_ surface: TerminalSurface) {
@@ -474,11 +406,16 @@ final class DrillInPanel: NSView {
         return holder
     }
 
-    private func configure(_ field: NSTextField, font: NSFont, color: NSColor) {
+    private func configure(
+        _ field: NSTextField, font: NSFont, color: NSColor,
+        yieldPriority: NSLayoutConstraint.Priority = .init(490)
+    ) {
         field.font = font
         field.textColor = color
         field.isBezeled = false
         field.drawsBackground = false
         field.isEditable = false
+        field.lineBreakMode = .byTruncatingTail
+        field.yieldWidthToWindow(yieldPriority)
     }
 }

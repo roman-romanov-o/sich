@@ -66,10 +66,10 @@ struct BoardPlacementTests {
         #expect(c.state == .waitingForInput)
     }
 
-    @Test("waiting and blocked are merged into one attention group, distinct states")
+    @Test("only waiting-for-input is attention; an external block is its own column")
     func attentionGroupingIsRenderOnly() {
         #expect(BoardColumn.waitingForInput.isAttention)
-        #expect(BoardColumn.blocked.isAttention)
+        #expect(!BoardColumn.blocked.isAttention)
         #expect(!BoardColumn.running.isAttention)
         #expect(!BoardColumn.idle.isAttention)
         // The states themselves stay distinct (not collapsed in placement).
@@ -80,16 +80,16 @@ struct BoardPlacementTests {
 @Suite("Who-needs-me attention signal (US-005)")
 struct AttentionSignalTests {
 
-    @Test("count equals waiting + blocked (US-005 AC#1)")
-    func countEqualsWaitingPlusBlocked() {
+    @Test("count equals waiting-for-input only — external block is its own column (US-005 AC#1)")
+    func countEqualsWaitingOnly() {
         let cards = [
             card("a", "~/a", state: .waitingForInput),
             card("b", "~/b", state: .blocked),
             card("c", "~/c", state: .running),
             card("d", "~/d", state: .idle),
         ]
-        #expect(Attention.count(cards) == 2)
-        #expect(Attention.cards(cards).map(\.sessionID) == ["a", "b"])
+        #expect(Attention.count(cards) == 1)
+        #expect(Attention.cards(cards).map(\.sessionID) == ["a"])
     }
 
     @Test("reads exactly 0 when all running/idle — no false alarm (US-005 AC#3)")
@@ -124,43 +124,5 @@ struct BoardSelectionTests {
 
         selection.returnToBoard()
         #expect(selection.focusedCardID == nil)
-    }
-
-    @Test("activating attention filters the board to waiting/blocked (US-005 AC#2)")
-    func activateAttentionFilters() {
-        let cards = [
-            card("a", "~/a", state: .waitingForInput),
-            card("b", "~/b", state: .blocked),
-            card("c", "~/c", state: .running),
-        ]
-        var selection = BoardSelection()
-        selection.activateAttention(cards)
-
-        #expect(selection.attentionFilterActive)
-        #expect(selection.visibleCards(from: cards).map(\.sessionID) == ["a", "b"])
-    }
-
-    @Test("activating attention with nothing waiting does not engage the filter")
-    func activateAttentionQuietNoOp() {
-        let cards = [card("c", "~/c", state: .running)]
-        var selection = BoardSelection()
-        selection.activateAttention(cards)
-
-        #expect(!selection.attentionFilterActive)
-        #expect(selection.visibleCards(from: cards).count == 1)
-    }
-
-    @Test("clearing the filter shows the full board again")
-    func clearFilter() {
-        let cards = [
-            card("a", "~/a", state: .blocked),
-            card("c", "~/c", state: .running),
-        ]
-        var selection = BoardSelection()
-        selection.activateAttention(cards)
-        selection.clearAttentionFilter()
-
-        #expect(!selection.attentionFilterActive)
-        #expect(selection.visibleCards(from: cards).count == 2)
     }
 }

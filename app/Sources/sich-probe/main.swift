@@ -31,7 +31,7 @@ if argv.first == "quota" {
 // end (spawn claude → trust/ready → type /usage → parse panel): the manual smoke
 // for the shipped measured-quota path. Prints the parsed reading or the fallback.
 if argv.first == "usage" {
-    ClaudeUsageProbe.spawningEnabled = true
+    HiddenTUIProbe.spawningEnabled = true
     print("scraping /usage via hidden pty (up to ~75s)...")
     if let r = ClaudeUsageProbe.scrape() {
         print("session: \(r.sessionUsedPercent)% used · resets \(r.sessionResetsAt.map { "\($0)" } ?? "—")")
@@ -43,6 +43,50 @@ if argv.first == "usage" {
     }
     print("scrape failed — the gauge would fall back to the JSONL estimate")
     exit(1)
+}
+
+// `swift run sich-probe cursor` — one hidden-pty `agent --trust` `/usage` scrape.
+if argv.first == "cursor" {
+    HiddenTUIProbe.spawningEnabled = true
+    print("scraping Cursor /usage via hidden pty (up to ~75s)...")
+    if let r = CursorUsageProbe.scrape() {
+        let src = CursorUsagePanel.source(from: r)
+        let pct = src.reading.remainingFraction.map { String(format: "%.0f%%", $0 * 100) } ?? "—"
+        print("cursor: MEASURED (usage scrape) · included \(r.includedUsedPercent)% used "
+            + "· remaining \(pct) · reset \(r.resetsAt.map { "\($0)" } ?? "—")")
+        exit(0)
+    }
+    print("scrape failed — the cursor gauge stays unknown")
+    exit(1)
+}
+
+// `swift run sich-probe antigravity` — one hidden-pty `agy` `/usage` scrape.
+if argv.first == "antigravity" {
+    HiddenTUIProbe.spawningEnabled = true
+    print("scraping Antigravity /usage via hidden pty (up to ~75s)...")
+    if let r = AntigravityUsageProbe.scrape() {
+        let src = AntigravityUsagePanel.source(from: r)
+        let pct = src.reading.remainingFraction.map { String(format: "%.0f%%", $0 * 100) } ?? "—"
+        for b in r.buckets {
+            print("  \(b.label): \(b.usedPercent)% used · reset \(b.resetsAt.map { "\($0)" } ?? "—")")
+        }
+        print("antigravity: MEASURED (usage scrape) · remaining \(pct) (tightest bucket)")
+        exit(0)
+    }
+    print("scrape failed — the antigravity gauge stays unknown")
+    exit(1)
+}
+
+// `swift run sich-probe screen <shell command> [seconds]` — launch a TUI in the
+// same hidden pty the usage probes use and print its rendered screen every few
+// seconds until the deadline: the way to discover a new agent's ready marker,
+// trust dialog, and `/usage` layout before writing its probe spec.
+if argv.first == "screen", argv.count >= 2 {
+    HiddenTUIProbe.spawningEnabled = true
+    let seconds = argv.count >= 3 ? Double(argv[2]) ?? 20 : 20
+    let keys = ProcessInfo.processInfo.environment["SICH_PROBE_KEYS"] ?? ""
+    TUIUsageProbe<String>.dumpScreens(launch: argv[1], seconds: seconds, keysAfterHalf: keys)
+    exit(0)
 }
 
 // `swift run sich-probe codex` — read the real on-disk Codex rate-limit

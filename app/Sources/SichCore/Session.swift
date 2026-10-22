@@ -6,8 +6,24 @@ public enum AgentType: String, Codable, Sendable, Equatable, CaseIterable {
     case claude
     case codex
     case gemini
+    /// Cursor's terminal agent (`agent` / `cursor-agent`).
+    case cursor
+    /// Google's Antigravity CLI (`agy`).
+    case antigravity
     /// A plain interactive shell (no agent), e.g. the default `TerminalSurface`.
     case shell
+
+    /// Maps to the board's ``CardAgent`` for account env exports on restore.
+    public var cardAgent: CardAgent {
+        switch self {
+        case .claude: return .claude
+        case .codex: return .codex
+        case .gemini: return .gemini
+        case .cursor: return .cursor
+        case .antigravity: return .antigravity
+        case .shell: return .claude
+        }
+    }
 }
 
 /// Which scheduling flow launched the session — the two-pool distinction the
@@ -52,6 +68,11 @@ public final class Session: Identifiable {
     /// with `claude --resume <uuid>` — and it survives across restarts unchanged (a
     /// restored session keeps the ORIGINAL id, not its own new ``id``).
     public private(set) var claudeSessionID: UUID?
+    /// The remote session this pane is attached to (US-006), or nil for a local one.
+    /// Held as the SPEC the argv was built from — never the argv — so a snapshot
+    /// persists coordinates a restore feeds back through the shared constructor,
+    /// rather than a command a launch could replay.
+    public private(set) var remoteSpec: RemoteTmuxSpec?
 
     public init(
         id: UUID = UUID(),
@@ -84,5 +105,11 @@ public final class Session: Identifiable {
     /// persist it and a restart can `claude --resume` it.
     public func recordClaudeSession(_ id: UUID) {
         claudeSessionID = id
+    }
+
+    /// Bind the remote session this pane attached to, so a snapshot can persist the
+    /// spec and the next launch can rebuild the same ssh/tmux attach.
+    public func recordRemoteSpec(_ spec: RemoteTmuxSpec) {
+        remoteSpec = spec
     }
 }

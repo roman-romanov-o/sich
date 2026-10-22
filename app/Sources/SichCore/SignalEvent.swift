@@ -15,6 +15,9 @@ public enum SignalKind: String, Sendable, Equatable {
     case subagentStop = "subagent-stop"
     case testRunStart = "test-run-start"
     case errorExit = "error-exit"
+    /// `PreCompact`: the agent is rewriting its own context — WORK, not a wait.
+    /// The `SessionStart` re-emitted when compaction completes closes the parenthesis.
+    case compaction
     case stop
     /// A clean end-of-session hook (`SessionEnd`): the run closed itself, so it goes
     /// straight to `done` with no 30s stale-decay wait. Distinct from a hard kill,
@@ -49,6 +52,17 @@ public struct SignalEvent: Sendable, Equatable {
     /// the pty environment. Binds an observed session to its owned card even when
     /// several owned cards share one project dir (the dir join is ambiguous there).
     public let cardID: String?
+    /// The machine this signal was observed on (`sich_host`), stamped by the relay
+    /// at ingestion — `nil` for a local session. A hook payload carries no hostname
+    /// field, so this is the ONLY thing separating two machines that happen to run
+    /// the same session id in the same cwd (US-004 AC-3).
+    public let host: String?
+    /// What the payload's `background_tasks` array reports: `true` when a background
+    /// subagent is still running, `false` when none are, `nil` when the payload
+    /// carries no such array (most hooks, and pre-background-agent Claude versions).
+    /// A `Stop` with `true` is NOT an operator wait — the turn parked while a child
+    /// keeps working (CARD-STATUS.md rule 2.3).
+    public let backgroundBusy: Bool?
 
     public init(
         kind: SignalKind,
@@ -57,7 +71,9 @@ public struct SignalEvent: Sendable, Equatable {
         sessionID: String,
         timestamp: Date,
         cwd: String? = nil,
-        cardID: String? = nil
+        cardID: String? = nil,
+        host: String? = nil,
+        backgroundBusy: Bool? = nil
     ) {
         self.kind = kind
         self.source = source
@@ -66,6 +82,8 @@ public struct SignalEvent: Sendable, Equatable {
         self.timestamp = timestamp
         self.cwd = cwd
         self.cardID = cardID
+        self.host = host
+        self.backgroundBusy = backgroundBusy
     }
 }
 

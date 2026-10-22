@@ -1,0 +1,108 @@
+format: saha/v2
+task: "task-11-concurrency-telemetry"
+title: "Work-interval log: make parallelism measurable"
+created: "2026-08-14"
+mode: minimal
+
+status: planning
+
+planning:
+  research:            { status: skipped, artifacts: [] }
+  task_description:    { status: done, views: [task-context] }
+  user_stories:        { status: done, views: [us-001-flow, us-002-flow] }
+  design_decisions:    { status: skipped, views: [] }
+  code_changes:        { status: skipped, views: [] }
+  test_specs:          { status: skipped, views: [], gaps: [] }
+  implementation_plan: { status: done, views: [phases] }
+  verify:              { status: pending }
+
+stories:
+  - id: US-001
+    title: "Record every WORKING interval durably"
+    view: us-001-flow
+    priority: must
+    kind: enabler
+    status: ready
+    story: "As the board runtime, I want every completed WORKING interval appended to a durable log so that the operator can later see how many agents actually ran in parallel instead of trusting a single accumulated total."
+    acceptance_criteria:
+      - id: AC-1
+        text: "Given a card enters WORKING and later leaves it, when the transition happens, then a durable record with the card's identity, interval start, and interval end exists and is still readable after an app restart"
+        verify: automated
+        status: pending
+        specs: []
+        tests: []
+      - id: AC-2
+        text: "Given two cards whose WORKING intervals overlap in time, when both intervals close, then the log holds two separate records preserving each interval's true boundaries"
+        verify: automated
+        status: pending
+        specs: []
+        tests: []
+      - id: AC-3
+        text: "Given a remote card, when its WORKING interval closes, then its record carries the session's host so per-machine concurrency stays separable"
+        verify: automated
+        status: pending
+        specs: []
+        tests: []
+      - id: AC-4
+        text: "Given the app terminates while a card is WORKING, when the app shuts down, then the open interval is closed at termination time and recorded rather than silently lost"
+        verify: automated
+        status: pending
+        specs: []
+        tests: []
+    edge_cases:
+      - { name: "rapid re-entry", trigger: "one card leaves and re-enters WORKING many times in a session", expected: "one record per completed visit, none coalesced" }
+      - { name: "hydrated card", trigger: "launch hydration restores a card that the book says was WORKING at last quit", expected: "no fabricated interval for the downtime between sessions" }
+    depends_on: []
+    decisions: []
+
+  - id: US-002
+    title: "Read a day of concurrency stats"
+    view: us-002-flow
+    priority: must
+    kind: story
+    status: ready
+    story: "As an operator, I want to ask for any day's peak concurrency and agent-hours so that capacity planning rests on measured parallelism."
+    acceptance_criteria:
+      - id: AC-1
+        text: "Given recorded intervals touching day X, when the operator asks for day X's stats, then the answer reports peak concurrency (maximum simultaneously open intervals) and agent-hours (summed durations clipped to the day) consistent with the log"
+        verify: automated
+        status: pending
+        specs: []
+        tests: []
+      - id: AC-2
+        text: "Given a day with no recorded intervals, when the operator asks for its stats, then the answer reports zeros rather than failing"
+        verify: automated
+        status: pending
+        specs: []
+        tests: []
+      - id: AC-3
+        text: "The readout is reachable by an operator from the installed app's command-line entry point, not only from tests"
+        verify: manual
+        manual_instructions: "Run the sich CLI stats subcommand for yesterday (e.g. `sich stats 2026-08-13`) after a day of board use and confirm it prints peak concurrency and agent-hours."
+        status: pending
+        tests: []
+    edge_cases:
+      - { name: "midnight span", trigger: "an interval starts before midnight and ends after", expected: "each day counts only its clipped portion" }
+      - { name: "duplicate card overlap", trigger: "restart races leave one card with overlapping records", expected: "concurrency counts open records as-is; no dedup guessing" }
+    depends_on: [US-001]
+    decisions: []
+
+phases:
+  - id: phase-01
+    title: "Interval log capture"
+    view: phases
+    stories: [US-001]
+    status: pending
+    steps:
+      - { name: "WorkIntervalLog append-only JSONL store beside the task book", files: ["app/Sources/SichCore/WorkIntervalLog.swift"], status: pending }
+      - { name: "Route every WORKING-interval close through one BoardShell choke point into the log (state transitions, manual drops, teardown, app termination)", files: ["app/Sources/SichApp/BoardShell.swift"], status: pending }
+  - id: phase-02
+    title: "Concurrency readout"
+    view: phases
+    stories: [US-002]
+    status: pending
+    steps:
+      - { name: "Sweep-line day stats (peak concurrency, clipped agent-hours) over the log", files: ["app/Sources/SichCore/WorkIntervalLog.swift"], status: pending }
+      - { name: "sich CLI stats subcommand", files: ["app/Sources/sich/main.swift"], status: pending }
+
+iterations: []

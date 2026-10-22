@@ -26,7 +26,8 @@ enum SessionsFeed {
             flow: .b,        // hook-observed == human-launched interactive (flow B)
             state: CardState(rawValue: entry.state.rawValue) ?? .unknown,
             updatedAt: entry.updatedAt,  // freshness key: newest observation wins on a dir join
-            boundCardID: entry.cardID    // identity binding to the owned card, if spawned by us
+            boundCardID: entry.cardID,   // identity binding to the owned card, if spawned by us
+            host: entry.host             // provenance: which machine observed it (US-004 AC-3)
         )
     }
 
@@ -44,26 +45,37 @@ enum SessionsFeed {
         parse(lines, arrival: arrival).events
     }
 
-    /// One drained batch, classified: turn diffs for the drill-in review, signal
-    /// events for the reconciler. `Sendable` because the parse runs OFF the main
-    /// actor and only this result crosses back.
+    /// One drained batch: the signal events for the reconciler. `Sendable` because
+    /// the parse runs OFF the main actor and only this result crosses back.
     struct ParsedEventBatch: Sendable {
-        let diffs: [TurnDiff]
         let events: [SignalEvent]
     }
 
     /// Classify every drained line from ONE `JSONSerialization` pass. This used to
-    /// be normalize-to-exclude — each line was fully parsed 2–4 times (a multi-MB
-    /// `turn_diff` line twice, base64 decode included) — which, on the main actor,
-    /// was the typing-glitch stall. A line routes to exactly one normalizer:
-    /// `sich_event_type == "turn_diff"` → diff; `"source":"jsonl"` (the transcript
-    /// fallback stream's self-identifying tag) → JSONL; anything else → hook. A
-    /// turn-diff line with an undecodable payload falls through to the hook
-    /// normalizer as an unknown-kind signal, same as before.
+    /// be normalize-to-exclude — each line was fully parsed 2–4 times — which, on
+    /// the main actor, was the typing-glitch stall. A line routes to exactly one
+    /// normalizer: `"source":"jsonl"` (the transcript fallback stream's
+    /// self-identifying tag) → JSONL; anything else → hook.
     static func parse(_ lines: [Data], arrival: Date) -> ParsedEventBatch {
-        var diffs: [TurnDiff] = []
+        collect(lines.count, arrival: arrival) { index in
+            (try? JSONSerialization.jsonObject(with: lines[index])) as? [String: Any]
+        }
+    }
+
+    /// The REMOTE intake (US-003 AC-2): the same classification, over lines whose
+    /// payload is stamped with `sich_host` first. The stamp happens here, at
+    /// ingestion, BEFORE any normalizer sees the payload — the host is knowledge the
+    /// channel has and the bytes do not.
+    static func parse(_ lines: [RemoteEventLine], arrival: Date) -> ParsedEventBatch {
+        collect(lines.count, arrival: arrival) { index in lines[index].stampedPayload() }
+    }
+
+    /// Shared body of the two intakes: stamp arrival order, then route.
+    private static func collect(
+        _ count: Int, arrival: Date, payload: (Int) -> [String: Any]?
+    ) -> ParsedEventBatch {
         var events: [SignalEvent] = []
-        for (index, line) in lines.enumerated() {
+        for index in 0..<count {
             // File order IS arrival order. Hook payloads carry no timestamp, so a
             // whole poll batch would share one `arrival` stamp, coalesce into one
             // burst, and let the reconciler's tie-break pick an ARBITRARY event of
@@ -71,17 +83,18 @@ enum SessionsFeed {
             // Notification hiding behind a SubagentStop). A strictly increasing
             // sub-second offset per line keeps the last-written event dominant.
             let stamped = arrival.addingTimeInterval(Double(index) / 1_000)
-            guard let payload = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any]
-            else { continue }   // non-JSON line: skipped, not fatal (US-003 edge 4)
-            if let diff = TurnDiffNormalizer.normalize(payload: payload, arrival: stamped) {
-                diffs.append(diff)
-            } else if payload["source"] as? String == "jsonl" {
-                events.append(JSONLNormalizer.normalize(payload: payload, arrival: stamped))
-            } else {
-                events.append(HookNormalizer.normalize(payload: payload, arrival: stamped))
-            }
+            guard let payload = payload(index) else { continue }
+            // non-JSON line: skipped, not fatal (US-003 edge 4)
+            events.append(normalize(payload, arrival: stamped))
         }
-        return ParsedEventBatch(diffs: diffs, events: events)
+        return ParsedEventBatch(events: events)
+    }
+
+    private static func normalize(_ payload: [String: Any], arrival: Date) -> SignalEvent {
+        if payload["source"] as? String == "jsonl" {
+            return JSONLNormalizer.normalize(payload: payload, arrival: arrival)
+        }
+        return HookNormalizer.normalize(payload: payload, arrival: arrival)
     }
 }
 
@@ -98,14 +111,13 @@ enum SessionsFeed {
 /// `Timer` is a BACKSTOP that covers a missed FS event or a rotation re-arm gap. Both
 /// call the same incremental `poll()`.
 ///
-/// The drain (file read + JSON parse) runs OFF the main actor: a dirty-repo `Stop`
-/// hook appends a multi-MB `turn_diff` line, and parsing it on the main actor stalled
-/// typing in the drilled-in terminal for hundreds of ms; a rotation or a cold start
-/// re-reads a whole file the same way (the launch stutter). Only the cheap tail —
-/// store ingest + the two sinks — hops back to the main actor. The `inFlight` guard
-/// keeps exactly one drain alive (the tail's offset file is read-modify-write, so
-/// drains must never overlap), and a trigger that lands mid-drain coalesces into one
-/// follow-up poll instead of being dropped.
+/// The drain (file read + JSON parse) runs OFF the main actor: parsing a big batch
+/// on the main actor stalled typing in the drilled-in terminal for hundreds of ms,
+/// and a rotation or a cold start re-reads a whole file the same way (the launch
+/// stutter). Only the cheap tail — store ingest + the sink — hops back to the main
+/// actor. The `inFlight` guard keeps exactly one drain alive (the tail's offset file
+/// is read-modify-write, so drains must never overlap), and a trigger that lands
+/// mid-drain coalesces into one follow-up poll instead of being dropped.
 ///
 /// Watcher-not-spawner: the file is read-only to the app; this loop spawns nothing,
 /// binds no port, and never replies.
@@ -116,28 +128,31 @@ public final class SessionsPoller {
     private let store: HookSessionStore
     private let backstopInterval: TimeInterval
     private let sink: ([BoardCard]) -> Void
-    private let diffSink: ([TurnDiff]) -> Void
-    private var diffsBySession: [String: [TurnDiff]] = [:]
     private var timer: Timer?
     private var watcher: FileWatcher?
+    private var relays: [String: RemoteEventRelay] = [:]   // one per followed host
     private var inFlight = false      // exactly one drain at a time (offset-file safety)
     private var pendingPoll = false   // a trigger landed mid-drain → re-poll after apply
     private var currentDrain: Task<Void, Never>?
 
     /// `stallThreshold` rides through to the store's rule-2.1 stall guard (default
     /// 10 min); injectable so an E2E test can provoke a real stall in seconds.
+    /// The backstop poll cadence. Also the bound on how long a change the board
+    /// derives from poller state — a host's link health (US-007 AC-1) — can take to
+    /// reach the screen, since every backstop tick pushes cards to the sink whether
+    /// or not any line arrived.
+    public static let defaultInterval: TimeInterval = 3
+
     public init(
         eventsFile: URL = SessionsPoller.defaultEventsFile,
-        interval: TimeInterval = 3,
+        interval: TimeInterval = SessionsPoller.defaultInterval,
         stallThreshold: TimeInterval = 600,
-        diffSink: @escaping ([TurnDiff]) -> Void = { _ in },
         sink: @escaping ([BoardCard]) -> Void
     ) {
         self.eventsFile = eventsFile
         self.tail = HookEventTail(file: eventsFile)
         self.store = HookSessionStore(stallThreshold: stallThreshold)
         self.backstopInterval = interval
-        self.diffSink = diffSink
         self.sink = sink
     }
 
@@ -162,6 +177,8 @@ public final class SessionsPoller {
         timer = nil
         watcher?.stop()
         watcher = nil
+        relays.values.forEach { $0.stop() }
+        relays.removeAll()
     }
 
     private func armWatch() {
@@ -206,33 +223,60 @@ public final class SessionsPoller {
         }
     }
 
-    /// The main-actor tail of a drain: ingest + sweep + sinks — cheap, no parsing.
+    /// The main-actor tail of a LOCAL drain: release the drain guard, fold the batch,
+    /// then honour a trigger that landed while the drain was running.
     private func apply(_ batch: SessionsFeed.ParsedEventBatch, now: Date) {
         inFlight = false
-        for diff in batch.diffs {
-            var turns = diffsBySession[diff.sessionID, default: []]
-            if let index = turns.firstIndex(where: { $0.iteration == diff.iteration }) {
-                turns[index] = diff
-            } else {
-                turns.append(diff)
-                turns.sort { $0.iteration < $1.iteration }
-            }
-            diffsBySession[diff.sessionID] = turns
-        }
-        store.ingest(batch.events)
-        store.sweepStale(now: now)
-        // Redeliver the diff set only when this batch actually changed it — the full
-        // flatMap used to run on EVERY poll (any hook line), re-rendering the
-        // drill-in's diff sidebar for nothing.
-        if !batch.diffs.isEmpty {
-            diffSink(diffsBySession.values.flatMap { $0 })
-        }
-        sink(SessionsFeed.cards(from: store.entries))
+        applyBatch(batch, now: now)
         if pendingPoll {
             pendingPoll = false
             poll()
         }
     }
+
+    /// Fold one batch — from either intake — into the store and out to the sink.
+    /// Cheap, no parsing.
+    private func applyBatch(_ batch: SessionsFeed.ParsedEventBatch, now: Date) {
+        store.ingest(batch.events)
+        store.sweepStale(now: now)
+        sink(SessionsFeed.cards(from: store.entries))
+    }
+
+    // MARK: - Remote intake (US-003)
+
+    /// Follow one remote host's event log and fold its lines into the SAME store the
+    /// local sink feeds (DD-001). In memory the whole way: a relayed line is never
+    /// written into the local `~/.sich/events.jsonl` and never touches the local
+    /// tail's offset file — there is one writer of that file, the local forwarder.
+    ///
+    /// Idempotent per host, so re-opening a card on a host already followed does not
+    /// start a second ssh. Inert unless the real executable enabled spawning.
+    public func attachRemoteHost(
+        _ spec: RemoteTmuxSpec, transport: RemoteLineTransport = SSHLineTransport()
+    ) {
+        guard let host = try? RemoteTmuxCommand.hostToken(for: spec),
+              relays[host] == nil,
+              let relay = try? RemoteEventRelay(spec: spec, transport: transport, sink: { [weak self] lines in
+                  self?.receiveRemote(lines)
+              })
+        else { return }
+        relays[host] = relay
+        relay.start()
+    }
+
+    /// The relay reads on its own thread; parse there (a big batch would stall
+    /// typing on the main actor) and hop back with the finished batch, exactly like
+    /// the local drain does.
+    private nonisolated func receiveRemote(_ lines: [RemoteEventLine]) {
+        let now = Date()
+        let batch = SessionsFeed.parse(lines, arrival: now)
+        Task { @MainActor [weak self] in self?.applyBatch(batch, now: now) }
+    }
+
+    /// Health of one followed host — `unreachable` only when ssh itself failed. `nil`
+    /// for a host no relay follows, which is not a verdict about the host at all.
+    /// The board reads this every render to overlay `CardState.unreachable` (US-007).
+    func relayHealth(for host: String) -> RemoteRelayHealth? { relays[host]?.health }
 
     /// Test seam (TC-INT-002, DD-002 anti-flake): deliver a file-write through the
     /// SAME watcher handler the kernel source uses, deterministically — no real FS

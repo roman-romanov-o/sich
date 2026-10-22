@@ -32,6 +32,8 @@ public enum QuotaSeed {
             unavailable(provider: "anthropic", pool: "agent_sdk_credit"),
             unavailable(provider: "codex", pool: "codex"),
             unavailable(provider: "gemini", pool: "gemini"),
+            unavailable(provider: "cursor", pool: "cursor"),
+            unavailable(provider: "antigravity", pool: "antigravity"),
         ]
     }
 

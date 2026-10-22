@@ -228,7 +228,6 @@ final class PlanningModeView: NSView {
     let reviewLeftField = NSTextField(labelWithString: "")
     let terminalStatusField = NSTextField(labelWithString: "")
     let railDraftField = NSTextField(labelWithString: "")
-    private let terminalFontControls = FontSizeControls()
     /// The design's span-comment composer, scoped to the selected file. Editable —
     /// the one stock text field here; typing is not a custom-drawn interaction.
     let commentField = NSTextField()
@@ -240,6 +239,15 @@ final class PlanningModeView: NSView {
         title: "⌘J terminal ▸", fill: BoardTheme.attention.withAlphaComponent(0.08),
         text: BoardTheme.attention
     )
+    /// Header toggle folding the left REVIEW NOW rail away so the reader (or the
+    /// terminal, via the divider) can take the whole width.
+    let railToggle = PlanningActionPill(
+        title: "◂ rail", fill: BoardTheme.cardFill, text: BoardTheme.textDim
+    )
+    /// The draggable boundary between the reader and the terminal panel. Dragging
+    /// mutates `terminalWidthConstraint`; the terminal's own `setFrameSize` keeps
+    /// the PTY winsize in sync, so no extra plumbing is needed here.
+    let paneDivider = PaneDivider()
     /// Header toggle for the optional LikeC4 Architecture pane (spec:
     /// docs/proposals/likec4-architecture-pane.md). Off by default — the pane costs 0 RAM
     /// until this is clicked, and 0 again after it's clicked off.
@@ -269,6 +277,7 @@ final class PlanningModeView: NSView {
         text: BoardTheme.stateColor(.done)
     )
     private let reader: PlanningStateReader
+    private let paneLayout: PaneLayoutStore
     private let mermaid = MermaidRenderer()
     private lazy var renderer = NativeMarkdownRenderer(
         renderMermaid: { [weak self] in self?.mermaid.image(for: $0) })
@@ -277,6 +286,9 @@ final class PlanningModeView: NSView {
     private var terminalWidthConstraint: NSLayoutConstraint?
     private var terminalRailWidthConstraint: NSLayoutConstraint?
     private var terminalCollapsed = true
+    private weak var reviewRail: NSView?
+    /// Terminal width when the current divider drag began; nil outside a drag.
+    private var dragStartWidth: CGFloat?
     private(set) var reviewStore: ReviewStore?
     private(set) var cardID: UUID?
     private(set) var state: PlanningState?
@@ -294,8 +306,6 @@ final class PlanningModeView: NSView {
     private(set) var isViewingFile = false
     var onReturn: (() -> Void)?
     var onSuggestCommand: ((String) -> Void)?
-    var onTerminalSmaller: (() -> Void)?
-    var onTerminalLarger: (() -> Void)?
 
     /// Test seam: the mounted terminal, so a registry/pool-firewall test can assert the
     /// planning pane hosts the very session registered elsewhere (US-004 AC2).
@@ -306,8 +316,10 @@ final class PlanningModeView: NSView {
     /// (US-003 AC3) via an injected `SahaPlanStatusRunner`, but production stays
     /// marker-only until that command ships saha-side — spawning a doomed subprocess on
     /// every file-watch tick would waste work and trip the no-python-child invariant.
-    init(reader: PlanningStateReader = PlanningStateReader()) {
+    init(reader: PlanningStateReader = PlanningStateReader(),
+         paneLayout: PaneLayoutStore = PaneLayoutStore()) {
         self.reader = reader
+        self.paneLayout = paneLayout
         super.init(frame: .zero)
         wantsLayer = true
         themedBackground = BoardTheme.documentChrome
@@ -364,8 +376,7 @@ final class PlanningModeView: NSView {
         commentField.target = self
         commentField.action = #selector(commentFieldEntered)
         terminalToggle.onClick = { [weak self] in self?.toggleTerminal() }
-        terminalFontControls.onTerminalSmaller = { [weak self] in self?.onTerminalSmaller?() }
-        terminalFontControls.onTerminalLarger = { [weak self] in self?.onTerminalLarger?() }
+        railToggle.onClick = { [weak self] in self?.toggleRail() }
         architectureToggle.toolTip = "Architecture"
         architectureToggle.onClick = { [weak self] in self?.toggleArchitecture() }
         sendFeedbackButton.onClick = { [weak self] in self?.sendFeedbackDraft() }
@@ -384,7 +395,7 @@ final class PlanningModeView: NSView {
         let spacer = NSView()
         let header = NSStackView(views: [
             returnButton, divider, title, stepperPane, progressField, spacer,
-            feedbackField, terminalToggle, architectureToggle,
+            feedbackField, railToggle, terminalToggle, architectureToggle,
         ])
         header.orientation = .horizontal
         header.alignment = .centerY
@@ -400,9 +411,10 @@ final class PlanningModeView: NSView {
         documentScroll.backgroundColor = BoardTheme.documentSurface
 
         let rail = makeReviewRail()
+        reviewRail = rail
         let reader = makeDocumentReader(scroll: documentScroll)
         let terminalPanel = makeTerminalPanel()
-        let panes = NSStackView(views: [rail, reader, terminalPanel, terminalRail])
+        let panes = NSStackView(views: [rail, reader, paneDivider, terminalPanel, terminalRail])
         panes.orientation = .horizontal
         panes.alignment = .top
         panes.spacing = 0
@@ -424,8 +436,12 @@ final class PlanningModeView: NSView {
         root.layer?.cornerRadius = 10
         addSubview(root)
         terminalRail.isHidden = true
-        terminalWidthConstraint = terminalPanel.widthAnchor.constraint(equalToConstant: 386)
+        rail.isHidden = paneLayout.bool(forKey: PaneLayoutStore.planningRailHiddenKey)
+        terminalWidthConstraint = terminalPanel.widthAnchor.constraint(
+            equalToConstant: paneLayout.width(
+                forKey: PaneLayoutStore.planningTerminalWidthKey, default: 386))
         terminalRailWidthConstraint = terminalRail.widthAnchor.constraint(equalToConstant: 44)
+        wireDividerDrag()
         NSLayoutConstraint.activate([
             root.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             root.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
@@ -447,6 +463,7 @@ final class PlanningModeView: NSView {
         ])
         buildTerminalRail()
         applyTerminalPresentation()
+        applyRailPresentation()
         // The saha/v2 story pane covers only the doc scroll area — the doc header
         // (approve) and comment composer stay interactive around it. It is frame-managed
         // (see `layout()`), NEVER constraint-pinned: any required equality onto the
@@ -580,7 +597,7 @@ final class PlanningModeView: NSView {
         )
         collapse.onClick = { [weak self] in self?.toggleTerminal() }
         let spacer = NSView()
-        let header = NSStackView(views: [dot, title, spacer, terminalFontControls, collapse])
+        let header = NSStackView(views: [dot, title, spacer, collapse])
         header.orientation = .horizontal
         header.alignment = .centerY
         header.spacing = 8
@@ -1009,9 +1026,59 @@ final class PlanningModeView: NSView {
 
     private func applyTerminalPresentation() {
         terminalContainer.superview?.isHidden = terminalCollapsed
+        // No expanded terminal → no boundary to drag.
+        paneDivider.isHidden = terminalCollapsed
         terminalRail.isHidden = !terminalCollapsed
         terminalToggle.stringValue = terminalCollapsed ? "◂ ⌘J terminal" : "⌘J terminal ▸"
         documentPane.setReadingMode(terminalCollapsed: terminalCollapsed)
+    }
+
+    // MARK: - Pane layout (rail fold + draggable reader/terminal boundary)
+
+    /// Test seam: the terminal panel's current width as the drag/persistence sees it.
+    var terminalPaneWidth: CGFloat { terminalWidthConstraint?.constant ?? 0 }
+    var isRailHidden: Bool { reviewRail?.isHidden ?? false }
+
+    /// Fold the REVIEW NOW rail away so the reader/terminal get its 270pt. Persisted —
+    /// an operator who reviews on a laptop shouldn't re-hide it every session.
+    func toggleRail() {
+        guard let reviewRail else { return }
+        reviewRail.isHidden.toggle()
+        paneLayout.setBool(reviewRail.isHidden, forKey: PaneLayoutStore.planningRailHiddenKey)
+        applyRailPresentation()
+    }
+
+    private func applyRailPresentation() {
+        railToggle.stringValue = isRailHidden ? "rail ▸" : "◂ rail"
+    }
+
+    private func wireDividerDrag() {
+        paneDivider.onDragStart = { [weak self] in
+            self?.dragStartWidth = self?.terminalWidthConstraint?.constant
+        }
+        paneDivider.onDrag = { [weak self] delta in
+            guard let self, let dragStartWidth else { return }
+            // The divider sits left of the terminal: dragging LEFT (negative delta)
+            // grows the terminal.
+            setTerminalWidth(dragStartWidth - delta)
+        }
+        paneDivider.onDragEnd = { [weak self] in
+            guard let self else { return }
+            dragStartWidth = nil
+            paneLayout.setWidth(terminalPaneWidth,
+                                forKey: PaneLayoutStore.planningTerminalWidthKey)
+        }
+    }
+
+    private func setTerminalWidth(_ proposed: CGFloat) {
+        guard let constraint = terminalWidthConstraint, let panesView else { return }
+        let minTerminal: CGFloat = 280
+        let minReader: CGFloat = 300
+        let railWidth: CGFloat = isRailHidden ? 0 : 270
+        let ceiling = panesView.bounds.width - PaneDivider.thickness - railWidth - minReader
+        guard ceiling > minTerminal else { return }
+        constraint.constant = min(max(proposed, minTerminal), ceiling)
+        panesView.layoutSubtreeIfNeeded()
     }
 
     // MARK: - Review actions (comments + approvals, persisted via ReviewStore)
@@ -1098,11 +1165,20 @@ final class PlanningModeView: NSView {
     override var acceptsFirstResponder: Bool { true }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        guard event.modifierFlags.contains(.command),
-              event.charactersIgnoringModifiers == "["
-        else { return super.performKeyEquivalent(with: event) }
-        onReturn?()
-        return true
+        guard event.modifierFlags.contains(.command) else {
+            return super.performKeyEquivalent(with: event)
+        }
+        switch event.charactersIgnoringModifiers {
+        case "[":
+            onReturn?()
+            return true
+        case "j":
+            // The chips have promised ⌘J since the first mockup — honor it.
+            toggleTerminal()
+            return true
+        default:
+            return super.performKeyEquivalent(with: event)
+        }
     }
 
     override func keyDown(with event: NSEvent) {

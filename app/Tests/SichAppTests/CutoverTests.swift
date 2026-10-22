@@ -86,8 +86,8 @@ struct CutoverTests {
         let sources = QuotaUsageReader.read(now: now, projectsDir: projects)
         let after = CutoverGuard.childCommands(of: getpid())
 
-        // The native read assembles the four never-netted pools entirely in-process.
-        #expect(sources.count == 4)
+        // The native read assembles the six never-netted pools entirely in-process.
+        #expect(sources.count == 6)
         #expect(QuotaProjection.gauge(for: sources[0]).state == .active)  // interactive live
         // Reading quota spawned NO new child — in particular no python interpreter.
         #expect(!after.contains { CutoverGuard.isPython($0) }, "native quota read must not spawn python")

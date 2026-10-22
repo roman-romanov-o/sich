@@ -1,0 +1,45 @@
+// spec.c4 — shared LikeC4 specification for a saha task model (write once per task).
+// All model/*.c4 files in the task folder form ONE LikeC4 project; the element kinds
+// and tags declared here are available in every other file.
+//
+// FROZEN SPEC RULE: once execution starts, model/*.c4 never changes. All status
+// tracking lives in ../progress.yaml.
+
+specification {
+  // People / external agents interacting with the system.
+  element actor {
+    style { shape person }
+  }
+  // Deployable/runtime unit (app, service, CLI).
+  element container
+  // Code-level building block inside a container.
+  element component
+  // Datastore / file / persisted state.
+  element store {
+    style { shape storage }
+  }
+  // System we depend on but don't own.
+  element external {
+    style { color muted }
+  }
+  // A user story (US-XXX). Its step-by-step flow lives in a dynamic view.
+  element story {
+    style { color green; shape browser }
+  }
+  // A design decision (DD-XXX) with rationale in description/metadata.
+  element decision {
+    style { color amber }
+  }
+  // An implementation phase (delivery slice) from the plan.
+  element phase {
+    style { color indigo }
+  }
+
+  // Priority tags for stories (mirror progress.yaml `priority`).
+  tag must
+  tag should
+  tag could
+  // Marks elements that already exist in the codebase (vs. to-be-built).
+  tag existing
+  tag new
+}

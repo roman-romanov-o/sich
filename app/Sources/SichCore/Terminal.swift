@@ -15,8 +15,14 @@ public struct TerminalError: Error, CustomStringConvertible {
 /// path proven by the Phase 00 spike.
 public final class Terminal {
     private let handle: GhosttyTerminal
+    /// libghostty's default scrollback budget. `max_scrollback` is a **byte** budget
+    /// (the header says "lines", the Zig source sizes `PageList` in bytes): the old
+    /// `1000` here clamped history to the two-page floor — ~130 rows of styled
+    /// Claude output — and every page prune then dragged a parked viewport along.
+    public static let defaultScrollbackBytes = 10_000_000
 
-    public init(cols: UInt16 = 80, rows: UInt16 = 24, maxScrollback: Int = 1000) throws {
+    public init(cols: UInt16 = 80, rows: UInt16 = 24,
+                maxScrollback: Int = Terminal.defaultScrollbackBytes) throws {
         var handle: GhosttyTerminal?
         let opts = GhosttyTerminalOptions(cols: cols, rows: rows, max_scrollback: maxScrollback)
         let r = ghostty_terminal_new(nil, &handle, opts)
@@ -77,8 +83,26 @@ public final class Terminal {
     /// Resize the emulator grid (reflows the primary screen when wraparound is on)
     /// and update its pixel dimensions. Pair with the pty's `TIOCSWINSZ` so the
     /// child and the emulator agree on geometry — the fix for a child stuck at 80×24.
+    /// Resize the emulator. Rows and columns are applied in two steps when both
+    /// change: libghostty (pinned rev) shrinks rows first and then reflows columns
+    /// using the cursor's *pre-resize* `y`, so a single 120×40 → 80×24 call
+    /// underflows its "rows below the cursor" math, blanks the screen and turns the
+    /// whole history into garbage — the "scrollback goes blank" defect. Rows-only
+    /// then cols-only calls each see a consistent cursor.
     public func resize(cols: UInt16, rows: UInt16, cellWidthPx: UInt32, cellHeightPx: UInt32) {
+        let current = size
+        if current.cols != cols, current.rows != rows {
+            ghostty_terminal_resize(handle, current.cols, rows, cellWidthPx, cellHeightPx)
+        }
         ghostty_terminal_resize(handle, cols, rows, cellWidthPx, cellHeightPx)
+    }
+
+    /// The emulator's current geometry (cols, rows).
+    public var size: (cols: UInt16, rows: UInt16) {
+        var cols: UInt16 = 0, rows: UInt16 = 0
+        _ = ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_COLS, &cols)
+        _ = ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_ROWS, &rows)
+        return (cols, rows)
     }
 
     /// A colour-aware viewport snapshot (resolved fg/bg per cell + the real cursor),
@@ -97,6 +121,34 @@ public final class Terminal {
         behavior.tag = GHOSTTY_SCROLL_VIEWPORT_DELTA
         behavior.value.delta = delta
         ghostty_terminal_scroll_viewport(handle, behavior)
+    }
+
+    /// How many rows of history sit above the active screen right now — the
+    /// emulator's own count (`GHOSTTY_TERMINAL_DATA_SCROLLBACK_ROWS`). Prompt jumps
+    /// use it to place the cursor in whole-screen row coordinates.
+    public var scrollbackRows: Int {
+        var rows = 0
+        let r = ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_SCROLLBACK_ROWS, &rows)
+        return r == GHOSTTY_SUCCESS ? rows : 0
+    }
+
+    /// Rows of history above the viewport's top edge — the emulator's own scrollbar
+    /// offset (`GHOSTTY_TERMINAL_DATA_SCROLLBAR`). Viewport moves are measured with
+    /// this rather than inferred from row contents: a TUI that repaints every frame
+    /// (Claude Code's spinner) changes the rows under any content comparison.
+    public var viewportOffset: Int {
+        var bar = GhosttyTerminalScrollbar()
+        let r = ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_SCROLLBAR, &bar)
+        return r == GHOSTTY_SUCCESS ? Int(bar.offset) : 0
+    }
+
+    /// The cursor's row within the active screen (0-indexed), independent of
+    /// where the viewport is. With ``scrollbackRows`` this locates the live
+    /// input line in whole-screen coordinates.
+    public var cursorRow: Int {
+        var row: UInt16 = 0
+        let r = ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_CURSOR_Y, &row)
+        return r == GHOSTTY_SUCCESS ? Int(row) : 0
     }
 
     /// Snap the viewport back to the live bottom (the active screen).

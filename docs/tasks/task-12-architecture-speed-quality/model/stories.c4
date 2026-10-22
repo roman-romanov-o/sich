@@ -1,0 +1,168 @@
+// stories.c4 — task-12 user stories, one dynamic view each.
+// AC text is authoritative in ../progress.yaml; the flows here show where each AC bites.
+
+model {
+  us-001 = story 'US-001: Board stays calm under hook traffic' {
+    #must
+    description '''
+      As an operator with many WORKING cards, I want a hook event to touch
+      only the card it belongs to, so that the board does not stutter and
+      re-animate every card on every observation.
+    '''
+    metadata {
+      priority 'must'
+      depends_on ''
+      decisions ''
+      edge_cases 'card changes column -> still moves; chip status change alone -> only that card redraws; archive/backlog untouched by board writes'
+    }
+  }
+  us-002 = story 'US-002: Drill-in terminal repaints only what changed' {
+    #must
+    description '''
+      As an operator typing into a busy agent terminal, I want each frame
+      to cost less than a display refresh, so that keystrokes and agent
+      output never lag.
+    '''
+    metadata {
+      priority 'must'
+      depends_on ''
+      decisions ''
+      edge_cases 'links still underline on hover after caching; full-screen redraw on resize/theme change still correct; wide glyphs and combining marks render as before'
+    }
+  }
+  us-003 = story 'US-003: Remote cards never block the window' {
+    #must
+    description '''
+      As an operator with remote cards, I want every ssh probe to run off
+      the main actor with a hard upper bound, so that a slow or dead host
+      can never freeze Sich.
+    '''
+    metadata {
+      priority 'must'
+      depends_on ''
+      decisions ''
+      edge_cases 'grandchild keeps stdout open after SIGKILL -> runner still returns; host unreachable -> relay backs off and the chip says so; last card for a host removed -> relay stops'
+    }
+  }
+  us-004 = story 'US-004: User config and task book are never silently damaged' {
+    #must
+    description '''
+      As a user, I want Sich to refuse to overwrite a settings.json it
+      cannot parse and to tell me when the task book failed to save, so
+      that my configuration and my board are never lost quietly.
+    '''
+    metadata {
+      priority 'must'
+      depends_on ''
+      decisions ''
+      edge_cases 'empty or missing settings.json -> create as today; unparsable non-empty -> leave alone + report; disk full during task-book save -> banner once, no crash'
+    }
+  }
+  us-005 = story 'US-005: Sessions release their fds and children' {
+    #should
+    description '''
+      As an operator running Sich for days, I want every closed session to
+      release its pty fd and child, so that recycled fds never deliver
+      another session's bytes and the process table stays clean.
+    '''
+    metadata {
+      priority 'should'
+      depends_on ''
+      decisions ''
+      edge_cases 'terminate() called twice -> no-op; source cancelled while a read is in flight -> fd closed only in the cancel handler; zombie reaping itself is task-100'
+    }
+  }
+  us-006 = story 'US-006: One reducer decides card state' {
+    #should
+    description '''
+      As a maintainer, I want card state computed by one pure function from
+      its inputs, so that the eight side-maps in BoardShell cannot disagree
+      and refresh() can no longer re-fire notifications.
+    '''
+    metadata {
+      priority 'should'
+      depends_on 'US-001'
+      decisions ''
+      edge_cases 'manual DONE beats detector; idle hold expiry; background subagent keeps WORKING (rule 2.3); remote link lost -> lost state; every CARD-STATUS.md rule stays green'
+    }
+  }
+
+  us-001 -> sys.board 'delivered by'
+  us-002 -> sys.surface 'delivered by'
+  us-003 -> sys.remote 'delivered by'
+  us-004 -> sys.hooks 'delivered by'
+  us-005 -> sys.pty 'delivered by'
+  us-006 -> sys.shell 'delivered by'
+}
+
+views {
+  dynamic view us-001-flow {
+    title 'US-001: Board stays calm under hook traffic'
+    sys.shell -> sys.board 'renderColumn(faces)' {
+      notes '**AC-1** — face key excludes timestamps; unchanged cards keep their views.'
+    }
+    sys.board -> operator 'only the changed card redraws' {
+      notes '**AC-2** — a Stop event on card A leaves card B\'s view instance, timers and animations untouched.'
+    }
+    sys.shell -> sys.store 'persistTasks (debounced, off main)' {
+      notes '**AC-3 / AC-4** — coalesced writes; archive in its own file; codex scrape throttled so it cannot drive writes at pump cadence.'
+    }
+  }
+  dynamic view us-002-flow {
+    title 'US-002: Drill-in terminal repaints only what changed'
+    sys.surface -> sys.grid 'snapshot()' {
+      notes '**AC-1** — grid extracted into a reused buffer; rows compared by hash.'
+    }
+    sys.surface -> sys.surface 'draw(dirty rows)' {
+      notes '**AC-2** — only rows in the dirty set are drawn; a cursor move plus a status-line update does not repaint the whole viewport.'
+    }
+    sys.surface -> sys.grid 'links(in: row)' {
+      notes '**AC-3** — link detection cached per row content; regexes do not run on unchanged rows.'
+    }
+    sys.surface -> operator 'glyphs' {
+      notes '**AC-4** — glyph attrs cached on raw (fg,bg,style); contrast maths runs once per key.'
+    }
+  }
+  dynamic view us-003-flow {
+    title 'US-003: Remote cards never block the window'
+    sys.shell -> sys.remote 'presence(...) async' {
+      notes '**AC-1** — no synchronous ssh call remains on @MainActor.'
+    }
+    sys.remote -> sshd 'ssh with deadline' {
+      notes '**AC-2** — every wait in SSHCommandRunner.bounded is bounded, including after SIGKILL; pipes are closed on timeout.'
+    }
+    sys.remote -> sys.shell 'relay health' {
+      notes '**AC-3** — relay reconnect backs off exponentially with a cap and stops when the host has no cards.'
+    }
+  }
+  dynamic view us-004-flow {
+    title 'US-004: User config and task book are never silently damaged'
+    sys.hooks -> claudecfg 'read' {
+      notes '**AC-1** — non-empty but unparsable file: no write, error surfaced.'
+    }
+    sys.hooks -> claudecfg 'write (atomic, .bak)' {
+      notes '**AC-2** — parsable file: hooks block merged, all other keys preserved byte-for-byte, previous content kept as .bak.'
+    }
+    sys.shell -> sys.store 'save' {
+      notes '**AC-3** — a failed save is reported to the operator once and logged; never swallowed by try?.'
+    }
+  }
+  dynamic view us-005-flow {
+    title 'US-005: Sessions release their fds and children'
+    sys.shell -> sys.pty 'terminate()' {
+      notes '**AC-1** — PTYSession.deinit terminates and closes; no session outlives its owner.'
+    }
+    sys.surface -> sys.pty 'cancel read source' {
+      notes '**AC-2** — the fd is closed inside the cancel handler, never before the source is cancelled.'
+    }
+  }
+  dynamic view us-006-flow {
+    title 'US-006: One reducer decides card state'
+    sys.shell -> sys.shell 'CardStateReducer.reduce(inputs)' {
+      notes '**AC-1** — a pure function in SichCore computes CardState from detector state, manual override, liveness, link health, idle hold.'
+    }
+    sys.shell -> sys.board 'render()' {
+      notes '**AC-2** — render has no side effects; notifications/badge/work-log move to reconcile().'
+    }
+  }
+}

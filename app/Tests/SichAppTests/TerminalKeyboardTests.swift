@@ -131,4 +131,41 @@ struct TerminalKeyboardTests {
 
         #expect(sent == [0x09])
     }
+
+    /// fn+↑/↓ arrive as PageUp/PageDown with AppKit's private-use characters
+    /// (U+F72C/U+F72D). Unmapped they went down the pty as junk text — and they are
+    /// the ONLY scroll path into Claude Code on a ConPTY host below Windows build
+    /// 22523, where the wheel can never reach the child.
+    private func pageEvent(keyCode: UInt16, char: Character) throws -> NSEvent {
+        try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .function, timestamp: 0,
+            windowNumber: 0, context: nil,
+            characters: String(char), charactersIgnoringModifiers: String(char),
+            isARepeat: false, keyCode: keyCode
+        ))
+    }
+
+    @Test("PageUp (fn+↑) sends ESC[5~, not private-use junk")
+    func pageUpIsCSI5Tilde() throws {
+        let (surface, session) = try makeSurface()
+        defer { session.terminate() }
+        var sent: [UInt8] = []
+        session.onInput = { sent += $0 }
+
+        surface.keyDown(with: try pageEvent(keyCode: 116, char: "\u{F72C}"))
+
+        #expect(sent == Array("\u{1B}[5~".utf8), "PageUp must reach the child as CSI 5~")
+    }
+
+    @Test("PageDown (fn+↓) sends ESC[6~")
+    func pageDownIsCSI6Tilde() throws {
+        let (surface, session) = try makeSurface()
+        defer { session.terminate() }
+        var sent: [UInt8] = []
+        session.onInput = { sent += $0 }
+
+        surface.keyDown(with: try pageEvent(keyCode: 121, char: "\u{F72D}"))
+
+        #expect(sent == Array("\u{1B}[6~".utf8), "PageDown must reach the child as CSI 6~")
+    }
 }
