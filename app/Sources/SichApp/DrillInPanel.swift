@@ -178,7 +178,6 @@ final class DrillInPanel: NSView {
     private let termContainer = NSView()
     private var surface: TerminalSurface?
 
-    // periphery:ignore - test-only seam (scan runs with exclude_tests)
     /// The mounted terminal, so an E2E can read what the operator actually sees.
     var surfaceForTesting: TerminalSurface? { surface }
     private var focusedCard: BoardCard?

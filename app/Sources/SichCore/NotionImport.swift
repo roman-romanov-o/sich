@@ -11,11 +11,6 @@ public struct NotionConfig: Codable, Sendable, Equatable {
     public var token: String
     public var tasksDataSourceID: String
 
-    public init(token: String, tasksDataSourceID: String) {
-        self.token = token
-        self.tasksDataSourceID = tasksDataSourceID
-    }
-
     public static func load(from url: URL) -> NotionConfig? {
         guard let data = try? Data(contentsOf: url),
               let config = try? JSONDecoder().decode(NotionConfig.self, from: data),
@@ -115,7 +110,7 @@ public final class NotionImporter {
     }
 }
 
-public enum NotionError: Error, Equatable {
+enum NotionError: Error, Equatable {
     case http(status: Int, body: String)
     case malformedResponse
 }

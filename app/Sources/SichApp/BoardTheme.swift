@@ -78,9 +78,6 @@ enum BoardTheme {
     /// attention amber so "pool empty" reads at a glance without looking like
     /// "needs you".
     static let quotaBlocked = hex(0x9B7BB8)
-    /// Deeper crimson used ONLY as the global attention badge FILL, so its
-    /// white text clears WCAG AA (the bright `alert` red at white text falls short).
-    static let attentionBadge = hex(0xB0302A)
 
     // MARK: - Terminal surface (Ghostty's zero-config dark console; neutral paper
     // in the light appearance — resolved per system appearance).
@@ -192,7 +189,6 @@ enum BoardTheme {
     static var monoSmall: NSFont { .monospacedSystemFont(ofSize: scaled(10), weight: .regular) }
     /// Numeric data in SF Pro with tabular (fixed-width) digits.
     static var numeric: NSFont { .monospacedDigitSystemFont(ofSize: scaled(11), weight: .regular) }
-    static var numericBold: NSFont { .monospacedDigitSystemFont(ofSize: scaled(11), weight: .semibold) }
     static var numericSmall: NSFont { .monospacedDigitSystemFont(ofSize: scaled(10), weight: .regular) }
     /// The percent riding inside a quota bar — semibold so it holds up against the fill.
     static var gaugeLabel: NSFont { .monospacedDigitSystemFont(ofSize: scaled(11), weight: .semibold) }
@@ -208,8 +204,6 @@ enum BoardTheme {
     static var sansTiny: NSFont { .systemFont(ofSize: scaled(10), weight: .regular) }
     /// Sans prose emphasis — advisory headlines. Prose never sets in mono.
     static var sansStrong: NSFont { .systemFont(ofSize: scaled(12), weight: .semibold) }
-    /// Sans prose body — advisory detail lines.
-    static var sansBody: NSFont { .systemFont(ofSize: scaled(11), weight: .regular) }
     /// The project chip on a card — tiny; the project colour carries the identity.
     static var chip: NSFont { .systemFont(ofSize: scaled(10), weight: .medium) }
 
@@ -241,27 +235,6 @@ enum BoardTheme {
         ])
     }
 
-    /// Prose set in sans with its embedded tokens picked out: `/commands` in SF
-    /// Mono (they are code), percentages and durations in tabular-digit SF Pro
-    /// (they are numbers — same face as the prose, steady width).
-    static func prose(_ text: String, font: NSFont, color: NSColor) -> NSAttributedString {
-        let result = NSMutableAttributedString(
-            string: text, attributes: [.font: font, .foregroundColor: color])
-        let range = NSRange(text.startIndex..., in: text)
-        let styles: [(pattern: String, font: NSFont)] = [
-            (#"/[\w:-]+"#, .monospacedSystemFont(ofSize: font.pointSize, weight: .regular)),
-            (#"\d+(?:\.\d+)?%|\d+[dhm]\b"#,
-             .monospacedDigitSystemFont(ofSize: font.pointSize, weight: .regular)),
-        ]
-        for style in styles {
-            guard let regex = try? NSRegularExpression(pattern: style.pattern) else { continue }
-            for match in regex.matches(in: text, range: range) {
-                result.addAttribute(.font, value: style.font, range: match.range)
-            }
-        }
-        return result
-    }
-
     // MARK: - Semantic colour (the policy lives here)
 
     /// The colour for a card's state rail / chip — the at-a-glance lifecycle cue.
@@ -280,11 +253,6 @@ enum BoardTheme {
         // grey, which are the two readings it must never be mistaken for (US-007 AC-4).
         case .unreachable: return alert
         }
-    }
-
-    /// Flow-A (saha / SDK) violet vs Flow-B (interactive) cyan — the two-flow cue.
-    static func flowColor(_ flow: CardFlow) -> NSColor {
-        flow == .a ? hex(0x7A5FB8) : hex(0x20A896)
     }
 
     /// The harness's official brand mark — Anthropic's, OpenAI's, and Google

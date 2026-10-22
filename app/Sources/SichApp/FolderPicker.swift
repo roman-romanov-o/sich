@@ -244,7 +244,7 @@ final class FolderRow: ClickableRow {
         body.alignment = .leading
         body.spacing = 2
         check.font = BoardTheme.monoBold
-        check.textColor = BoardTheme.flowColor(.b)
+        check.textColor = BoardTheme.hex(0x20A896)
         let row = NSStackView(views: [tile(), body, NSView(), check])
         row.spacing = 10
         row.alignment = .centerY
@@ -258,9 +258,9 @@ final class FolderRow: ClickableRow {
         guard let branch = folder.branch else { return leaf }
         let chip = ChipLabel(text: branch)
         chip.font = BoardTheme.monoSmall
-        chip.textColor = BoardTheme.flowColor(.a)
+        chip.textColor = BoardTheme.hex(0x7A5FB8)
         chip.wantsLayer = true
-        chip.themedBackground = BoardTheme.flowColor(.a).withAlphaComponent(0.16)
+        chip.themedBackground = BoardTheme.hex(0x7A5FB8).withAlphaComponent(0.16)
         chip.layer?.cornerRadius = 3
         let stack = NSStackView(views: [leaf, chip])
         stack.spacing = 7
@@ -293,7 +293,7 @@ final class FolderRow: ClickableRow {
     func setSelected(_ on: Bool) {
         check.isHidden = !on
         layer?.borderWidth = on ? 1.5 : 1
-        themedBorder = on ? BoardTheme.flowColor(.b) : BoardTheme.cardStroke
+        themedBorder = on ? BoardTheme.hex(0x20A896) : BoardTheme.cardStroke
         themedBackground = on ? BoardTheme.cardFillRaised : BoardTheme.cardFill
     }
 }

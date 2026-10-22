@@ -119,7 +119,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// One-way Notion → backlog import. `nil` without a token in `notion.json`, and
     /// always in tests/E2E (same guard as the task store).
     var notionImporter: NotionImporter?
-    private var notionPullTimer: Timer?
     /// Backlog: durable task intent with no session yet. Array order = render order.
     private(set) var backlogTasks: [TaskRecord] = []
     /// Archived tasks: finished work that left the board but stays durable in the
@@ -2304,7 +2303,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             MainActor.assumeIsolated { self?.pullNotionTasks() }
         }
         RunLoop.main.add(timer, forMode: .common)
-        notionPullTimer = timer
     }
 
     private func pullNotionTasks() {

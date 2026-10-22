@@ -1,5 +1,5 @@
 import Foundation
-import SichCore
+@testable import SichCore
 import Testing
 
 /// The one-way Notion → backlog import: each Notion task arrives once, a dismissed
