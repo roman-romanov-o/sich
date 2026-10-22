@@ -28,10 +28,10 @@ struct NotionImportTests {
     private func cleanup(_ store: NotionImportStore) { try? FileManager.default.removeItem(at: store.url) }
 
     private let skills = NotionTask(
-        id: "page-1", title: "Поле skill agents у UI скіла", details: "Expose the field.",
+        id: "page-1", title: "Експорт звітів у CSV", details: "Expose the field.",
         url: "https://www.notion.so/page1")
     private let roles = NotionTask(
-        id: "page-2", title: "Рольова модель", details: "", url: "https://www.notion.so/page2")
+        id: "page-2", title: "Налаштування сповіщень", details: "", url: "https://www.notion.so/page2")
 
     @Test func eachTaskIsImportedOnce() async {
         let api = FakeNotion()
