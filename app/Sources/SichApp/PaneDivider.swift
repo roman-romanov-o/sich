@@ -9,7 +9,6 @@ struct PaneLayoutStore {
 
     static let planningTerminalWidthKey = "sich.planning.terminalWidth"
     static let planningRailHiddenKey = "sich.planning.reviewRailHidden"
-    static let drillInSidebarWidthKey = "sich.drillIn.sidebarWidth"
 
     func width(forKey key: String, default fallback: CGFloat) -> CGFloat {
         let stored = CGFloat(defaults.double(forKey: key))

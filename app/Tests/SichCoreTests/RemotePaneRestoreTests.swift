@@ -59,7 +59,7 @@ struct RemotePaneRestoreTests {
         // The bug: a local `/bin/sh -c "cd '/Users/tester' && … exec '/bin/zsh' -il"`.
         let argv = try #require(spawned.first)
         #expect(argv.first == "/usr/bin/ssh")
-        #expect(try #require(argv.last).hasPrefix("tmux new-session -A -D -s 'agent'"))
+        #expect(try #require(argv.last).hasPrefix("tmux -CC new-session -A -D -s 'agent'"))
         // …and the pane keeps its remote label instead of being sent home.
         #expect(restored.first?.cwd == "roman@host.invalid")
         #expect(restored.first?.cwdFellBackToHome == false)
@@ -127,7 +127,8 @@ struct RemotePaneRestoreTests {
         // Every field is a constrained *coordinate* of a session — none of them is,
         // or can hold, a command to run.
         #expect(Set(remote.keys)
-            == ["host", "user", "sessionName", "port", "identityFile", "remoteDir"])
+            == ["host", "user", "sessionName", "port", "identityFile", "remoteDir",
+                "hostKind"])
         // An argv is a LIST of words; every coordinate here is a single scalar, so the
         // shape itself refuses one.
         #expect(remote.values.allSatisfy { $0 is String || $0 is Int })

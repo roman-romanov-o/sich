@@ -25,9 +25,9 @@ public struct AgentTaskTally: Sendable, Equatable {
             switch card.state {
             case .running, .runningTests:
                 result[card.agent, default: AgentTaskTally()].working += 1
-            case .waitingForInput, .blocked:
+            case .waitingForInput:
                 result[card.agent, default: AgentTaskTally()].waiting += 1
-            case .idle, .done, .unknown, .unreachable:
+            case .idle, .parked, .blocked, .done, .unknown, .unreachable:
                 break
             }
         }

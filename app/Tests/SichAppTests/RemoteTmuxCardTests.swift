@@ -34,7 +34,7 @@ struct RemoteTmuxCardTests {
         let seed = try BoardSeed.remoteTmux(spec: spec)
         let remote = try #require(seed.command.last)
         #expect(seed.command.first == "/usr/bin/ssh")
-        #expect(remote.hasPrefix("tmux new-session -A -D -s 'agent' "))
+        #expect(remote.hasPrefix("tmux -CC new-session -A -D -s 'agent' "))
         #expect(try PoolFirewall.classify(seed.command) == .interactive)
     }
 
@@ -245,11 +245,12 @@ struct RemoteTmuxCardTests {
     /// claude is not starting, you just in bash". A brand-new card's tmux session is
     /// always CREATED (`-A` has nothing to attach to: the default name is minted from
     /// the card's own fresh id, and a foreign name is refused before launch), so the
-    /// pane came up as a bare login shell and stayed one. Creation must type the same
-    /// interactive `claude --session-id <uuid>` the local flow types — buffered by
-    /// the tty until the far shell reads it — and freeze that conversation id into
-    /// the task book so DONE→resume and revival keep working across machines.
-    @Test("a fresh remote card types claude into the pane and books the conversation")
+    /// pane came up as a bare login shell and stayed one. Creation must start the same
+    /// interactive `claude --session-id <uuid>` the local flow does — on the session's
+    /// own launch command, since the attach is a control-mode handshake nothing may be
+    /// typed into — and freeze that conversation id into the task book so DONE→resume
+    /// and revival keep working across machines.
+    @Test("a fresh remote card starts claude on the pane command and books the conversation")
     func freshRemoteCardStartsClaude() throws {
         let bookDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("sich-remote-start-\(UUID().uuidString)", isDirectory: true)
@@ -278,16 +279,19 @@ struct RemoteTmuxCardTests {
             host: "far.invalid", user: "roman", remoteDir: "~/MyProjects/spectre")
         let card = try #require(shell.createRemoteTmuxSession(spec: spec))
 
-        // The launched binary stays ssh — the agent start rides the tty, not the argv.
+        // The launched binary stays ssh; the agent start rides the far-side command.
         #expect(launched.argv.first == "/usr/bin/ssh")
+        let remote = try #require(launched.argv.last)
+        #expect(remote.contains("claude --session-id "),
+                "creation starts an interactive claude far-side — argv: \(remote)")
+        #expect(!remote.contains("claude -p"), "interactive pool only, firewall intact")
+        #expect(typed.text.isEmpty,
+                "nothing is typed into the control-mode handshake: \(typed.text)")
 
-        #expect(typed.text.contains("claude --session-id "),
-                "creation types an interactive claude — typed: \(typed.text)")
-        #expect(!typed.text.contains("claude -p"), "interactive pool only, firewall intact")
-
-        // The conversation typed into the pane is the one the durable book froze.
-        let uuidText = typed.text
+        // The conversation on the pane command is the one the durable book froze.
+        let uuidText = remote
             .components(separatedBy: "claude --session-id ").last?
+            .components(separatedBy: ";").first?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let conversation = try #require(UUID(uuidString: uuidText ?? ""))
         let record = try #require(

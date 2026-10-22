@@ -83,19 +83,16 @@ public struct BoardSeed: Sendable {
     ///   coexist on the board.
     public static func liveTerminal(
         projectDir: String, sessionID: String = "live-terminal", title: String? = nil,
-        cardID: String? = nil, agent: CardAgent = .claude
+        cardID: String? = nil, agent: CardAgent = .claude, claudeConfigDir: String? = nil,
+        accountEnv: String? = nil
     ) -> BoardSeed {
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-        // `cd` into the project dir first so the shell opens where the work is, then
-        // `exec` the login shell so it owns the PTY (no lingering /bin/sh wrapper).
-        // Identity binding: SICH_CARD_ID rides the environment into the shell and
-        // any claude run inside it; the hook forwarder stamps it onto every hook line
-        // so the board can bind the observed session back to THIS card, even when
-        // several task cards share one project dir.
-        let id = cardID ?? UUID().uuidString   // every live terminal is bindable
+        let id = cardID ?? UUID().uuidString
         let bind = "SICH_CARD_ID=\(shellQuoted(id)) "
+        let config = accountEnv
+            ?? ClaudeLaunchEnv.configDirExport(claudeConfigDir)
         let path = "PATH=\(shellQuoted(HookInstaller.codexShimPath())):\"$PATH\" "
-        let launch = "cd \(shellQuoted(projectDir)) && \(path)\(bind)exec \(shellQuoted(shell)) -il"
+        let launch = "cd \(shellQuoted(projectDir)) && \(path)\(config)\(bind)exec \(shellQuoted(shell)) -il"
         return BoardSeed(
             sessionID: sessionID, title: title, projectDir: projectDir,
             agent: agent, flow: .b, state: .idle, scrollback: "",
@@ -113,13 +110,17 @@ extension BoardSeed {
     /// `claude -p`. Flow B.
     public static func remoteTmux(
         spec: RemoteTmuxSpec, sessionID: String? = nil, title: String? = nil,
-        cardID: String? = nil, agent: CardAgent = .claude
+        cardID: String? = nil, agent: CardAgent = .claude,
+        tmuxEnvironment: [(String, String)] = [],
+        agentCommand: String? = nil
     ) throws -> BoardSeed {
         // One id: the card's, the pane's, and the one every relayed hook line carries
         // back. Minting it here and dropping it from the argv would leave the far side
         // exporting nothing to join on (US-004 AC-1).
         let id = cardID ?? UUID().uuidString
-        let argv = try RemoteTmuxCommand.argv(for: spec, cardID: id)
+        let argv = try RemoteTmuxCommand.argv(
+            for: spec, cardID: id, tmuxEnvironment: tmuxEnvironment,
+            agentCommand: agentCommand)
         let key = try RemoteSessionKey.make(for: spec)
         return BoardSeed(
             sessionID: sessionID ?? key.sessionID,

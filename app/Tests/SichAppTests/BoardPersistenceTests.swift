@@ -90,6 +90,33 @@ struct BoardPersistenceTests {
         #expect(card.state == .idle)
     }
 
+    @Test("a restored agent pane keeps its agent type through the NEXT quit (restart chain)")
+    func restoredPaneKeepsAgentTypeAcrossRestarts() throws {
+        // The user's "Test Cursor" card: after one restart its pane was persisted as
+        // `shell`, so the second launch never sent `agent resume` and showed the card as
+        // a bare `claude` shell. Every agent type must survive an unbounded restart chain.
+        let storeDir = makeTempDir()
+        let work = makeTempDir()
+        defer { cleanup(storeDir); cleanup(work) }
+        for agent in [AgentType.cursor, .codex, .antigravity, .gemini] {
+            let cardID = UUID()
+            let store = SessionSnapshotStore(directory: storeDir)
+            _ = try store.save(windows: [WindowSnapshot(panes: [PaneSnapshot(
+                sessionID: UUID(), cwd: work.path, agentType: agent, flowTag: .interactive,
+                childPID: nil, title: "Resume me", cardID: cardID, cardState: .idle,
+                wasAlive: true)])])
+
+            let relaunched = BoardShell()
+            defer { relaunched.e2eTeardown() }
+            let card = try #require(relaunched.restoreCardsForTesting(store: store).first)
+            #expect(card.agent.rawValue == agent.rawValue, "\(agent) card came back as \(card.agent)")
+
+            let saved = try #require(relaunched.persistOnTerminate(store: store))
+            let pane = try #require(saved.windows.flatMap(\.panes).first { $0.cardID == cardID })
+            #expect(pane.agentType == agent, "\(agent) pane was re-persisted as \(pane.agentType)")
+        }
+    }
+
     @Test("a card explicitly moved to DONE survives restart through the book, not a pane")
     func manuallyDoneCardSurvivesRestart() throws {
         let storeDir = makeTempDir()

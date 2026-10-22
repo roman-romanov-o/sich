@@ -217,7 +217,7 @@ struct BacklogPersistenceE2ETests {
         #expect(card.title == "Build the feature")
         // The claude start line was actually typed into the fresh shell's pty —
         // interactive pool, never `claude -p`.
-        #expect(typed.text.contains("claude --session-id"))
+        #expect(typed.text.contains("/.sich/bin/claude\" --session-id"), "local start names the shim by absolute path")
         #expect(!typed.text.contains("claude -p"))
 
         let relaunched = relaunch(taskDir: taskDir, sessionDir: sessionDir)
@@ -378,7 +378,7 @@ struct BacklogPersistenceE2ETests {
         shell.drill(into: card)
 
         #expect(!shell.drillIn.isHidden, "the click lands in the drill-in, not a silent no-op")
-        #expect(typed.text.contains("claude --resume \(resumeID.uuidString.lowercased())"),
+        #expect(typed.text.contains("/.sich/bin/claude\" --resume \(resumeID.uuidString.lowercased())"),
                 "the pinned conversation resumes rather than restarting")
         #expect(!typed.text.contains("claude -p"))
     }

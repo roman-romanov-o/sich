@@ -12,6 +12,15 @@ enum HookInstaller {
     static let codexShimName = "codex"
     static let claudeShimName = "claude"
     static let codexProfileName = "sich-hooks"
+    /// Cursor ships the CLI as both `agent` and `cursor-agent`; one wrapper body
+    /// serves both names so a human typing either inside a card is still observed.
+    static let cursorShimNames = ["agent", "cursor-agent"]
+    static let cursorHookScriptName = "sich-cursor.sh"
+    /// Google's Antigravity CLI ships as one binary, `agy`.
+    static let antigravityShimName = "agy"
+    static let antigravityHookScriptName = "sich-antigravity.sh"
+    /// The named entry Sich owns inside `~/.gemini/config/hooks.json`.
+    static let antigravityHookEntryName = "sich"
     /// Lifecycle events the board cares about: appear → run → wait (Stop = turn end) →
     /// done (SessionEnd = the session actually closed — the only real Done).
     static let events = [
@@ -49,6 +58,117 @@ enum HookInstaller {
         else { return false }
         return install(settings: home.appendingPathComponent(".claude/settings.json"),
                        command: "bash \(script.path)")
+    }
+
+    /// Install the forwarder into a named profile's config dir (`$CLAUDE_CONFIG_DIR/settings.json`).
+    @discardableResult
+    static func installProfileHooks(configDir: URL) -> Bool {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let script = home.appendingPathComponent(".sich/sich-forward.sh")
+        try? FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
+        guard (try? forwarderScript.write(to: script, atomically: true, encoding: .utf8)) != nil
+        else { return false }
+        return install(settings: configDir.appendingPathComponent("settings.json"),
+                       command: "bash \(script.path)")
+    }
+
+    /// Provision hooks and config scaffolding for a registered agent account (local).
+    @discardableResult
+    static func provisionAccount(_ account: AgentAccountProfile) -> Bool {
+        let root = URL(fileURLWithPath: account.resolvedConfigRoot, isDirectory: true)
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        switch account.agent {
+        case .claude:
+            return installProfileHooks(configDir: root)
+        case .codex:
+            _ = installCodexShim()
+            let profile = account.codexProfileName ?? codexProfileName
+            let profileURL = root.appendingPathComponent("\(profile).config.toml")
+            let hookDir = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(codexHookDirName, isDirectory: true)
+            return (try? codexProfile(hookDir: hookDir).write(
+                to: profileURL, atomically: true, encoding: .utf8)) != nil
+        case .cursor:
+            _ = installCursorHooks()
+            return installCursorAccountHooks(configDir: root)
+        case .gemini, .antigravity:
+            return false
+        }
+    }
+
+    /// Cursor hooks for an isolated `CURSOR_CONFIG_DIR` account root.
+    @discardableResult
+    static func installCursorAccountHooks(configDir: URL) -> Bool {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let hookScript = home.appendingPathComponent("\(codexHookDirName)/\(cursorHookScriptName)")
+        _ = installCursorHooks()
+        try? FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
+        let config = configDir.appendingPathComponent("hooks.json")
+        guard let patched = cursorPatched(readConfig(config), command: hookScript.path) else {
+            return FileManager.default.fileExists(atPath: config.path)
+        }
+        return writeConfig(patched, to: config)
+    }
+
+    /// Install account-scoped hooks on a remote host (Claude settings, Codex profile, Cursor hooks).
+    @discardableResult
+    static func installRemoteAccount(
+        spec: RemoteTmuxSpec, account: AgentAccountProfile, runner: RemoteCommandRunner
+    ) -> Bool {
+        guard push(Data(forwarderScript.utf8), to: .forwarder, spec: spec, runner: runner)
+        else { return false }
+        switch account.agent {
+        case .claude:
+            guard let relative = account.settingsRelativePath else { return false }
+            return patchRemoteSettings(relative: relative, spec: spec, runner: runner)
+        case .codex:
+            guard let relative = account.settingsRelativePath else { return false }
+            let hookDir = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(codexHookDirName, isDirectory: true)
+            let body = Data(codexProfile(hookDir: hookDir).utf8)
+            return push(body, relativePath: relative, mode: "644", spec: spec, runner: runner)
+        case .cursor:
+            guard let relative = account.settingsRelativePath else { return false }
+            let hookScript = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("\(codexHookDirName)/\(cursorHookScriptName)")
+            guard let patched = cursorPatched([:], command: hookScript.path),
+                  let data = configData(patched)
+            else { return false }
+            return push(data, relativePath: relative, mode: "644", spec: spec, runner: runner)
+        case .gemini, .antigravity:
+            return false
+        }
+    }
+
+    private static func patchRemoteSettings(
+        relative: String, spec: RemoteTmuxSpec, runner: RemoteCommandRunner
+    ) -> Bool {
+        guard case .bytes(let raw) = readRemote(relative: relative, spec: spec, runner: runner)
+        else { return false }
+        guard let patched = patched(config(from: raw), command: remoteForward),
+              let data = configData(patched)
+        else { return true }
+        return push(data, relativePath: relative, mode: "644", spec: spec, runner: runner)
+    }
+
+    private static func readRemote(
+        relative: String, spec: RemoteTmuxSpec, runner: RemoteCommandRunner
+    ) -> RemoteRead {
+        guard let argv = try? RemoteTmuxCommand.probeArgv(for: spec, relativePath: relative),
+              let result = runner.run(argv: argv, input: nil), result.succeeded
+        else { return .failed }
+        return .bytes(result.standardOutput)
+    }
+
+    private static func push(
+        _ bytes: Data, relativePath: String, mode: String,
+        spec: RemoteTmuxSpec, runner: RemoteCommandRunner
+    ) -> Bool {
+        guard let argv = try? RemoteTmuxCommand.installArgv(
+            for: spec, relativePath: relativePath, mode: mode),
+              let result = runner.run(argv: argv, input: bytes)
+        else { return false }
+        return result.succeeded
     }
 
     @discardableResult
@@ -126,6 +246,114 @@ enum HookInstaller {
         } catch {
             return false
         }
+    }
+
+    /// Cursor has no per-invocation settings flag (unlike `claude --settings` and
+    /// `codex --profile`), so observation is wired at the USER level: one hook script
+    /// merged into `~/.cursor/hooks.json` for every lifecycle event the board reads.
+    /// The script itself is scoped — it emits nothing unless `SICH_CARD_ID` is in its
+    /// environment — so Cursor runs outside a Sich terminal stay silent. The shim in
+    /// `~/.sich/bin` only pins the launch cwd/pid for the hook lines and execs the
+    /// real binary.
+    @discardableResult
+    static func installCursorHooks(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Bool {
+        let binDir = home.appendingPathComponent(codexBinDirName, isDirectory: true)
+        let hookDir = home.appendingPathComponent(codexHookDirName, isDirectory: true)
+        let script = hookDir.appendingPathComponent(cursorHookScriptName, isDirectory: false)
+        do {
+            try FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: hookDir, withIntermediateDirectories: true)
+            for name in cursorShimNames {
+                let shim = binDir.appendingPathComponent(name, isDirectory: false)
+                try cursorWrapperScript.write(to: shim, atomically: true, encoding: .utf8)
+                try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: shim.path)
+            }
+            try cursorHookScript.write(to: script, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        } catch {
+            return false
+        }
+        let config = home.appendingPathComponent(".cursor/hooks.json")
+        guard let patched = cursorPatched(readConfig(config), command: script.path) else { return true }
+        return writeConfig(patched, to: config)
+    }
+
+    /// Merge the Cursor hook script into every board event of a `hooks.json`
+    /// (`{"version":1,"hooks":{"<event>":[{"command":...}]}}`), preserving whatever
+    /// hooks the user already has. `nil` when it is already fully wired.
+    static func cursorPatched(_ config: [String: Any], command: String) -> [String: Any]? {
+        var cfg = config
+        var hooks = cfg["hooks"] as? [String: Any] ?? [:]
+        var changed = false
+        for event in cursorEvents {
+            var entries = hooks[event] as? [[String: Any]] ?? []
+            guard !entries.contains(where: { $0["command"] as? String == command }) else { continue }
+            entries.append(["command": command, "timeout": 10])
+            hooks[event] = entries
+            changed = true
+        }
+        guard changed else { return nil }
+        if cfg["version"] == nil { cfg["version"] = 1 }
+        cfg["hooks"] = hooks
+        return cfg
+    }
+
+    /// Antigravity is wired like Cursor — at the USER level, one script merged into
+    /// `~/.gemini/config/hooks.json` under a named entry — with two twists: its payload
+    /// carries NO event name, so the installed command names the event
+    /// (`sich-antigravity.sh Stop`) and the script stamps `hook_event_name`; and its
+    /// `PreToolUse` hook MUST answer a permission decision, so the board hooks only the
+    /// no-output events (`PostToolUse`, `PreInvocation`, `PostInvocation`, `Stop`).
+    /// `agy` runs hooks with the config directory as cwd, hence the absolute path.
+    @discardableResult
+    static func installAntigravityHooks(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Bool {
+        let binDir = home.appendingPathComponent(codexBinDirName, isDirectory: true)
+        let hookDir = home.appendingPathComponent(codexHookDirName, isDirectory: true)
+        let script = hookDir.appendingPathComponent(antigravityHookScriptName, isDirectory: false)
+        do {
+            try FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: hookDir, withIntermediateDirectories: true)
+            let shim = binDir.appendingPathComponent(antigravityShimName, isDirectory: false)
+            try antigravityWrapperScript.write(to: shim, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: shim.path)
+            try antigravityHookScript.write(to: script, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        } catch {
+            return false
+        }
+        let configDir = home.appendingPathComponent(".gemini/config", isDirectory: true)
+        try? FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
+        let config = configDir.appendingPathComponent("hooks.json", isDirectory: false)
+        guard let patched = antigravityPatched(readConfig(config), script: script.path) else { return true }
+        return writeConfig(patched, to: config)
+    }
+
+    /// Build Sich's named entry for an Antigravity `hooks.json` and merge it in,
+    /// leaving every other named entry untouched. `nil` when it is already current.
+    static func antigravityPatched(_ config: [String: Any], script: String) -> [String: Any]? {
+        let entry = antigravityHookEntry(script: script)
+        let existing = config[antigravityHookEntryName] as? [String: Any]
+        guard existing == nil || !NSDictionary(dictionary: existing!).isEqual(to: entry) else { return nil }
+        var cfg = config
+        cfg[antigravityHookEntryName] = entry
+        return cfg
+    }
+
+    static func antigravityHookEntry(script: String) -> [String: Any] {
+        func handler(_ event: String) -> [String: Any] {
+            ["type": "command", "command": "\(shellQuoted(script)) \(event)", "timeout": 10]
+        }
+        return [
+            "enabled": true,
+            "PostToolUse": [["matcher": "*", "hooks": [handler("PostToolUse")]]],
+            "PreInvocation": [handler("PreInvocation")],
+            "PostInvocation": [handler("PostInvocation")],
+            "Stop": [handler("Stop")],
+        ]
+    }
+
+    static func shellQuoted(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     static func codexShimPath(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String {
@@ -381,110 +609,21 @@ if [ -n "$SICH_CARD_ID" ]; then
 fi
 printf '%s\n' "$line" >> "$file" 2>/dev/null
 
-# Per-turn review data. The three fields are read with POSIX sed rather than
-# macOS' bundled property-list tool: this same script is installed on Linux
-# hosts (US-002), where that tool does not exist and every extraction failed
-# silently — gating the whole block below, so diffs were dropped while the raw
-# append still succeeded. For the same reason every tool here is resolved
-# through PATH, never by an absolute macOS path.
-json_field() {
-    printf '%s' "$line" | sed -n 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
-}
-event=$(json_field hook_event_name)
-session=$(json_field session_id)
-cwd=$(json_field cwd)
-if [ -n "$session" ] && [ -n "$cwd" ] && git -C "$cwd" rev-parse --git-dir >/dev/null 2>&1; then
-    safe_session=$(printf '%s' "$session" | tr -cd '[:alnum:]_.-')
-    state_dir="${SICH_DIFF_STATE_DIR:-$HOME/.sich/turn-diffs}/$safe_session"
-    mkdir -p "$state_dir" 2>/dev/null
-    snapshot_with_untracked() {
-        git_dir=$(git -C "$cwd" rev-parse --git-dir 2>/dev/null) || return
-        case "$git_dir" in /*) index="$git_dir/index" ;; *) index="$cwd/$git_dir/index" ;; esac
-        backup="$state_dir/index.$$"
-        had_index=0
-        if [ -f "$index" ]; then cp "$index" "$backup" 2>/dev/null && had_index=1; fi
-        git -C "$cwd" add -N -A >/dev/null 2>&1
-        "$@"
-        result=$?
-        if [ "$had_index" -eq 1 ]; then mv "$backup" "$index" 2>/dev/null
-        else rm -f "$index" "$backup" 2>/dev/null
-        fi
-        return "$result"
-    }
-    if [ "$event" = "UserPromptSubmit" ]; then
-        # A commit closes the review window: when HEAD moved since the last turn,
-        # the piled-up iterations are history the operator already kept, so the
-        # counter and the whole-session base both start over from the new HEAD.
-        head_now=$(git -C "$cwd" rev-parse HEAD 2>/dev/null)
-        head_seen=$(cat "$state_dir/head" 2>/dev/null)
-        if [ -n "$head_seen" ] && [ "$head_now" != "$head_seen" ]; then
-            rm -f "$state_dir/iteration" "$state_dir/session-checkpoint" 2>/dev/null
-        fi
-        printf '%s' "$head_now" > "$state_dir/head"
-        iteration=$(cat "$state_dir/iteration" 2>/dev/null)
-        iteration=$((${iteration:-0} + 1))
-        printf '%s' "$iteration" > "$state_dir/iteration"
-        snapshot_with_untracked sh -c \
-            'base=$(git -C "$1" stash create "sich-turn-$2"); \
-             if [ -z "$base" ]; then base=$(git -C "$1" rev-parse HEAD 2>/dev/null); fi; \
-             printf "%s" "$base" > "$3"' \
-            sh "$cwd" "$iteration" "$state_dir/checkpoint"
-        if [ ! -s "$state_dir/session-checkpoint" ]; then
-            cp "$state_dir/checkpoint" "$state_dir/session-checkpoint" 2>/dev/null
-        fi
-    elif [ "$event" = "Stop" ] && [ -s "$state_dir/checkpoint" ]; then
-        checkpoint=$(cat "$state_dir/checkpoint")
-        iteration=$(cat "$state_dir/iteration" 2>/dev/null)
-        diff_path="$state_dir/diff.$$"
-        snapshot_with_untracked sh -c \
-            'git -C "$1" diff --no-ext-diff --binary "$2" > "$3"' \
-            sh "$cwd" "$checkpoint" "$diff_path"
-        if [ -s "$diff_path" ]; then
-            max_diff_bytes="${SICH_DIFF_MAX_BYTES:-1572864}"
-            diff_size=$(wc -c < "$diff_path" 2>/dev/null | tr -d '[:space:]')
-            if [ "${diff_size:-0}" -gt "$max_diff_bytes" ]; then
-                head -c "$max_diff_bytes" "$diff_path" > "$diff_path.trim"
-                printf '\n\\ No newline: diff truncated by Sich at %s bytes\n' \
-                    "$max_diff_bytes" >> "$diff_path.trim"
-                mv "$diff_path.trim" "$diff_path"
-            fi
-            # GNU base64 wraps at 76 columns where macOS' does not; `tr -d` folds
-            # either shape back into the single JSON string field.
-            diff_b64=$(base64 < "$diff_path" | tr -d '\n')
-            session_b64=""
-            if [ -s "$state_dir/session-checkpoint" ]; then
-                session_checkpoint=$(cat "$state_dir/session-checkpoint")
-                session_path="$state_dir/session-diff.$$"
-                snapshot_with_untracked sh -c \
-                    'git -C "$1" diff --no-ext-diff --binary "$2" > "$3"' \
-                    sh "$cwd" "$session_checkpoint" "$session_path"
-                session_size=$(wc -c < "$session_path" 2>/dev/null | tr -d '[:space:]')
-                if [ "${session_size:-0}" -gt "$max_diff_bytes" ]; then
-                    head -c "$max_diff_bytes" "$session_path" > "$session_path.trim"
-                    mv "$session_path.trim" "$session_path"
-                fi
-                session_b64=$(base64 < "$session_path" | tr -d '\n')
-                rm -f "$session_path"
-            fi
-            cwd_b64=$(printf '%s' "$cwd" | base64 | tr -d '\n')
-            card_field=""
-            if [ -n "$SICH_CARD_ID" ]; then
-                card_field=",\"sich_card_id\":\"$SICH_CARD_ID\""
-            fi
-            printf '{"sich_event_type":"turn_diff","session_id":"%s","iteration":%s,"timestamp":%s,"cwd_base64":"%s","diff_base64":"%s","session_diff_base64":"%s"%s}\n' \
-                "$safe_session" "${iteration:-0}" "$(date +%s)" "$cwd_b64" "$diff_b64" "$session_b64" "$card_field" \
-                >> "$file" 2>/dev/null
-        fi
-        rm -f "$diff_path"
-    fi
-fi
-
 size=$(wc -c < "$file" 2>/dev/null | tr -d '[:space:]')
 if [ "${size:-0}" -gt "$max_bytes" ] 2>/dev/null; then
     mv -f "$file" "$file.1" 2>/dev/null
 fi
 exit 0
 """#
+
+/// Cursor's lifecycle events, in its camelCase vocabulary — `HookNormalizer` maps
+/// them onto the same signal kinds as the Claude/Codex names. `postToolUseFailure`
+/// stands in for the permission-denied path; Cursor has no permission-request hook.
+private let cursorEvents = [
+    "sessionStart", "beforeSubmitPrompt", "preToolUse", "postToolUse",
+    "postToolUseFailure", "subagentStart", "subagentStop", "preCompact",
+    "stop", "sessionEnd",
+]
 
 private let codexEvents = [
     "SessionStart", "UserPromptSubmit", "Stop",
@@ -754,6 +893,158 @@ if [ ! -f "$profile_path" ]; then
 fi
 
 exec "$REAL_CODEX" --profile "$profile" --dangerously-bypass-hook-trust "$@"
+"""#
+
+private let cursorWrapperScript = #"""
+#!/usr/bin/env bash
+# Sich Cursor wrapper: pin the launch facts the Sich hook script stamps on every
+# Cursor hook line, then exec the user's real Cursor CLI (`agent`/`cursor-agent`).
+# Observation itself lives in ~/.cursor/hooks.json; this wrapper never edits it.
+
+name="$(basename "$0")"
+
+is_self_or_shim() {
+    candidate="$1"
+    [ -n "$candidate" ] || return 1
+    [ -e "$candidate" ] && [ "$candidate" -ef "$0" ] && return 0
+    case "$candidate" in
+        */.sich/bin/agent|*/.sich/bin/cursor-agent) return 0 ;;
+    esac
+    return 1
+}
+
+find_real_agent() {
+    old_ifs="$IFS"
+    IFS=:
+    for d in $PATH; do
+        candidate="$d/$name"
+        is_self_or_shim "$candidate" && continue
+        if [ -x "$candidate" ]; then
+            IFS="$old_ifs"
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
+    IFS="$old_ifs"
+    return 1
+}
+
+REAL_AGENT="$(find_real_agent)" || { echo "Error: $name not found in PATH" >&2; exit 127; }
+
+if [ -n "$SICH_CARD_ID" ]; then
+    export SICH_CURSOR_PID=$$
+    export SICH_AGENT_LAUNCH_EXECUTABLE="$REAL_AGENT"
+    export SICH_AGENT_LAUNCH_CWD="$PWD"
+fi
+
+exec "$REAL_AGENT" "$@"
+"""#
+
+/// One script for every Cursor event: the event name already rides the payload's
+/// `hook_event_name`. Scoped by `SICH_CARD_ID` — outside a Sich terminal it answers
+/// `{}` without touching the event file.
+private let cursorHookScript = #"""
+#!/usr/bin/env bash
+# Append one Cursor hook event to Sich's observe-only event file.
+if [ -z "$SICH_CARD_ID" ]; then
+    cat > /dev/null
+    echo '{}'
+    exit 0
+fi
+file="${SICH_EVENTS_FILE:-$HOME/.sich/events.jsonl}"
+mkdir -p "$(dirname "$file")" 2>/dev/null
+payload=$(mktemp "${TMPDIR:-/tmp}/sich-cursor.XXXXXX" 2>/dev/null || mktemp -t sich-cursor)
+cat > "$payload" || true
+
+# Keep Cursor's canonical payload (conversation_id, workspace_roots, the event
+# fields) and add only Sich's binding metadata; plutil owns the JSON escaping.
+/usr/bin/plutil -replace sich_agent -string cursor "$payload" 2>/dev/null || true
+/usr/bin/plutil -replace sich_card_id -string "$SICH_CARD_ID" "$payload" 2>/dev/null || true
+/usr/bin/plutil -replace sich_pid -string "${SICH_CURSOR_PID:-$PPID}" "$payload" 2>/dev/null || true
+
+line=$(cat "$payload")
+printf '%s
+' "$line" >> "$file" 2>/dev/null
+rm -f "$payload"
+echo '{}'
+exit 0
+"""#
+
+private let antigravityWrapperScript = #"""
+#!/usr/bin/env bash
+# Sich Antigravity wrapper: pin the launch facts the Sich hook script stamps on
+# every Antigravity hook line, then exec the user's real `agy`. Observation
+# itself lives in ~/.gemini/config/hooks.json; this wrapper never edits it.
+
+name="$(basename "$0")"
+
+is_self_or_shim() {
+    candidate="$1"
+    [ -n "$candidate" ] || return 1
+    [ -e "$candidate" ] && [ "$candidate" -ef "$0" ] && return 0
+    case "$candidate" in
+        */.sich/bin/agy) return 0 ;;
+    esac
+    return 1
+}
+
+find_real_agent() {
+    old_ifs="$IFS"
+    IFS=:
+    for d in $PATH "$HOME/.local/bin"; do
+        candidate="$d/$name"
+        is_self_or_shim "$candidate" && continue
+        if [ -x "$candidate" ]; then
+            IFS="$old_ifs"
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
+    IFS="$old_ifs"
+    return 1
+}
+
+REAL_AGENT="$(find_real_agent)" || { echo "Error: $name not found in PATH (install: curl -fsSL https://antigravity.google/cli/install.sh | bash)" >&2; exit 127; }
+
+if [ -n "$SICH_CARD_ID" ]; then
+    export SICH_ANTIGRAVITY_PID=$$
+    export SICH_AGENT_LAUNCH_EXECUTABLE="$REAL_AGENT"
+    export SICH_AGENT_LAUNCH_CWD="$PWD"
+fi
+
+exec "$REAL_AGENT" "$@"
+"""#
+
+/// One script for every Antigravity event, the event name passed as `$1` because
+/// the payload carries none. Scoped by `SICH_CARD_ID` — outside a Sich terminal it
+/// answers `{}` without touching the event file.
+private let antigravityHookScript = #"""
+#!/usr/bin/env bash
+# Append one Antigravity hook event to Sich's observe-only event file.
+event="${1:-unknown}"
+if [ -z "$SICH_CARD_ID" ]; then
+    cat > /dev/null
+    echo '{}'
+    exit 0
+fi
+file="${SICH_EVENTS_FILE:-$HOME/.sich/events.jsonl}"
+mkdir -p "$(dirname "$file")" 2>/dev/null
+payload=$(mktemp "${TMPDIR:-/tmp}/sich-antigravity.XXXXXX" 2>/dev/null || mktemp -t sich-antigravity)
+cat > "$payload" || true
+[ -s "$payload" ] || printf '{}' > "$payload"
+
+# Keep Antigravity's canonical payload (conversationId, workspacePaths, tool
+# fields) and add the event name plus Sich's binding metadata.
+/usr/bin/plutil -replace hook_event_name -string "$event" "$payload" 2>/dev/null || true
+/usr/bin/plutil -replace sich_agent -string antigravity "$payload" 2>/dev/null || true
+/usr/bin/plutil -replace sich_card_id -string "$SICH_CARD_ID" "$payload" 2>/dev/null || true
+/usr/bin/plutil -replace sich_pid -string "${SICH_ANTIGRAVITY_PID:-$PPID}" "$payload" 2>/dev/null || true
+
+line=$(cat "$payload")
+printf '%s\n' "$line" >> "$file" 2>/dev/null
+rm -f "$payload"
+echo '{}'
+exit 0
 """#
 
 private func codexHookScript(event: String) -> String {

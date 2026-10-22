@@ -177,16 +177,16 @@ struct QuotaUsageReaderTests {
         #expect(abs((reading.remainingFraction ?? -1) - 0.75) < 1e-9)
     }
 
-    // MARK: - TC-INT-301: four sources, interactive inferred:true, three unknown
+    // MARK: - TC-INT-301: six sources, interactive inferred:true, five unknown
 
-    @Test("TC-INT-301: four sources out — interactive inferred:true, three (sdk/codex/gemini) unknown")
+    @Test("TC-INT-301: six sources out — interactive inferred:true, five (sdk/codex/gemini/cursor/antigravity) unknown")
     func fourSourcesInteractiveInferredThreeUnknown() throws {
         let dir = try makeProjectsDir()
         let now = date("2026-06-26T12:00:00Z")
         try writeTranscript([usageLine("2026-06-26T11:00:00Z", input: 100)], named: "s", under: dir)
 
         let sources = QuotaUsageReader.read(now: now, projectsDir: dir)
-        #expect(sources.count == 4)
+        #expect(sources.count == 6)
 
         #expect(sources[0].provider == "anthropic" && sources[0].pool == "interactive")
         #expect(sources[0].reading.inferred == true)
@@ -195,7 +195,9 @@ struct QuotaUsageReaderTests {
         #expect(sources[1].provider == "anthropic" && sources[1].pool == "agent_sdk_credit")
         #expect(sources[2].provider == "codex" && sources[2].pool == "codex")
         #expect(sources[3].provider == "gemini" && sources[3].pool == "gemini")
-        for i in 1...3 {
+        #expect(sources[4].provider == "cursor" && sources[4].pool == "cursor")
+        #expect(sources[5].provider == "antigravity" && sources[5].pool == "antigravity")
+        for i in 1...5 {
             #expect(sources[i].reading.available == false)            // unknown, not measured
             #expect(sources[i].reading.remainingFraction == nil)      // not 0
             #expect(QuotaProjection.gauge(for: sources[i]).state == .unknown)
@@ -212,8 +214,8 @@ struct QuotaUsageReaderTests {
 
         let gauges = QuotaProjection.gauges(from: QuotaUsageReader.read(now: now, projectsDir: dir))
         let pools = gauges.map(\.pool)
-        #expect(pools == ["interactive", "agent_sdk_credit", "codex", "gemini"])
-        #expect(Set(pools).count == 4)  // distinct — none folded into another
+        #expect(pools == ["interactive", "agent_sdk_credit", "codex", "gemini", "cursor", "antigravity"])
+        #expect(Set(pools).count == 6)  // distinct — none folded into another
     }
 
     // MARK: - TC-INT-303: absent projects_dir → real-zero, not unknown/full

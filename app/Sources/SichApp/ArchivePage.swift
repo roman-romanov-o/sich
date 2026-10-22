@@ -5,12 +5,14 @@ import SichCore
 /// be archived time to time". A task done in a previous app session auto-archives
 /// on the next launch: its record stays durable in the task book, but it stops
 /// renting a card (and a per-refresh rebuild) on the board. This page is where
-/// those records remain readable. Read-only on purpose: the archive is a ledger,
-/// not a work surface. Esc or the "← board" pill returns.
+/// those records remain readable. Revive puts one back on the board and reopens
+/// its session (local resume or remote re-attach). Esc or the "← board" pill returns.
 @MainActor
 final class ArchivePage: NSView {
     /// Leave the page (Esc / the back pill) — the host un-hides the board.
     var onReturn: (() -> Void)?
+    /// Bring this archived task back onto the board and reopen its session.
+    var onRevive: ((TaskRecord) -> Void)?
 
     private let back = BackPill()
     private let countLabel = NSTextField(labelWithString: "")
@@ -79,7 +81,7 @@ final class ArchivePage: NSView {
         title.attributedStringValue = BoardTheme.caps("ARCHIVE", color: BoardTheme.textFaint)
         header.addArrangedSubview(title)
         header.addArrangedSubview(NSView())   // flexible spacer
-        countLabel.font = BoardTheme.mono
+        countLabel.font = BoardTheme.numeric
         countLabel.textColor = BoardTheme.textFaint
         header.addArrangedSubview(countLabel)
         column.addArrangedSubview(header)
@@ -107,6 +109,7 @@ final class ArchivePage: NSView {
         }
         for record in ordered {
             let row = ArchiveRow(record: record)
+            row.onRevive = { [weak self] in self?.onRevive?($0) }
             rowStack.addArrangedSubview(row)
             row.widthAnchor.constraint(equalTo: rowStack.widthAnchor).isActive = true
         }
@@ -125,20 +128,22 @@ final class ArchivePage: NSView {
     // MARK: - Test seams
 
     /// The rendered archive rows, top→bottom.
+    // periphery:ignore - test-only seam (scan runs with exclude_tests)
     func rowsForTesting() -> [ArchiveRow] {
         rowStack.arrangedSubviews.compactMap { $0 as? ArchiveRow }
     }
-
-    /// The "← board" pill (interaction-AC dispatch tests).
-    func backPillForTesting() -> BackPill { back }
 }
 
-/// One archived task: title, project chip, and when it was archived. Custom-drawn
-/// layer-backed chrome like ``BacklogCard`` (stock controls composite unreliably
-/// on this hand-painted UI). No interactions — the archive is read-only.
+/// One archived task: title, project chip, when it was archived, and a Revive
+/// affordance. Custom-drawn layer-backed chrome like ``BacklogCard`` (stock
+/// controls composite unreliably on this hand-painted UI). Double-click or the
+/// pill asks the host to put the task back on the board and reopen its session.
 @MainActor
 final class ArchiveRow: NSView {
     let record: TaskRecord
+    /// Put this task back on the board and reopen its session.
+    var onRevive: ((TaskRecord) -> Void)?
+    private let revive = RevivePill()
 
     private static let archivedDate: DateFormatter = {
         let formatter = DateFormatter()
@@ -173,15 +178,25 @@ final class ArchiveRow: NSView {
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
 
+        stack.addArrangedSubview(titleField())
+        let meta = metaRow()
+        stack.addArrangedSubview(meta)
+        meta.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28).isActive = true
+    }
+
+    private func titleField() -> NSTextField {
         let title = NSTextField(labelWithAttributedString:
             BoardTheme.cardTitleText(record.title, color: BoardTheme.textPrimary))
         title.maximumNumberOfLines = 2
         title.lineBreakMode = .byTruncatingTail
         title.setContentCompressionResistancePriority(.init(490), for: .horizontal)
-        stack.addArrangedSubview(title)
+        return title
+    }
 
+    private func metaRow() -> NSStackView {
         let meta = NSStackView()
         meta.spacing = 10
+        meta.alignment = .centerY
         if let projectDir = record.projectDir {
             meta.addArrangedSubview(label(
                 BoardTheme.shortPath(projectDir), font: BoardTheme.monoSmall,
@@ -192,13 +207,94 @@ final class ArchiveRow: NSView {
                 "archived \(Self.archivedDate.string(from: archivedAt))",
                 font: BoardTheme.sansSmall, color: BoardTheme.textFaint))
         }
-        stack.addArrangedSubview(meta)
+        meta.addArrangedSubview(NSView())
+        revive.setContentHuggingPriority(.required, for: .horizontal)
+        revive.setContentCompressionResistancePriority(.required, for: .horizontal)
+        revive.onClick = { [weak self] in
+            guard let self else { return }
+            self.onRevive?(self.record)
+        }
+        meta.addArrangedSubview(revive)
+        return meta
     }
+
+    /// The pill owns its own clicks. Everywhere else on the row, a double-click
+    /// revives — the same gesture the backlog uses to start a task.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let local = convert(point, from: superview)
+        guard bounds.contains(local) else { return nil }
+        let inPill = revive.convert(point, from: superview)
+        return revive.bounds.contains(inPill) ? revive : self
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount >= 2 { onRevive?(record) }
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = NSMenu()
+        let item = NSMenuItem(
+            title: "Revive session", action: #selector(reviveTapped), keyEquivalent: "")
+        item.target = self
+        menu.addItem(item)
+        return menu
+    }
+
+    @objc private func reviveTapped() { onRevive?(record) }
+
+    /// The Revive pill (interaction tests dispatch a real click here).
+    // periphery:ignore - test-only seam (scan runs with exclude_tests)
+    func revivePillForTesting() -> RevivePill { revive }
 
     private func label(_ text: String, font: NSFont, color: NSColor) -> NSTextField {
         let field = NSTextField(labelWithString: text)
         field.font = font
         field.textColor = color
         return field
+    }
+}
+
+/// "Revive" on an archive row. Same single layer-backed text-field path as
+/// ``BackPill`` — the only click target proven to paint on this dark UI.
+@MainActor
+final class RevivePill: NSTextField {
+    var onClick: (() -> Void)?
+
+    init() {
+        super.init(frame: .zero)
+        useCenteredTextCell()
+        stringValue = "Revive"
+        font = BoardTheme.monoBold
+        textColor = BoardTheme.textPrimary
+        alignment = .center
+        isBezeled = false
+        isEditable = false
+        isSelectable = false
+        drawsBackground = false
+        wantsLayer = true
+        themedBackground = BoardTheme.cardFillRaised
+        layer?.cornerRadius = 6
+        layer?.borderWidth = 0
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
+    override var intrinsicContentSize: NSSize {
+        var size = super.intrinsicContentSize
+        size.width += 20
+        size.height = 22
+        return size
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        bounds.contains(convert(point, from: superview)) ? self : nil
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        onClick?()
     }
 }

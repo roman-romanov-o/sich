@@ -26,6 +26,28 @@ public final class PTYSession {
     /// without racing a live child's tty echo. nil by default.
     public var onInput: (([UInt8]) -> Void)?
 
+    /// Transforms child output before it reaches the emulator and ``onOutput`` —
+    /// the seam a wire protocol (psmux control mode) uses to turn protocol frames
+    /// into pane bytes. Runs on every ingestion path; returning `[]` swallows the
+    /// chunk (still counted by ``outputGeneration``). nil = plain terminal.
+    public var interceptOutput: (([UInt8]) -> [UInt8])?
+
+    /// Transforms keystrokes into wire bytes before the pty write; ``onInput``
+    /// then observes the TRANSFORMED bytes — wire truth, what actually went to
+    /// the child. Protocol writes that are already wire-shaped bypass this via
+    /// ``sendRaw(_:)``. nil = plain terminal.
+    public var interceptInput: (([UInt8]) -> [UInt8])?
+
+    /// Where ``sendWhenReady(_:)`` routes while a wire protocol holds the input
+    /// path: the bridge delivers these bytes once the far pane can take them.
+    /// nil = plain terminal, where "ready" is now.
+    public var queueInput: (([UInt8]) -> Void)?
+
+    /// Fired after ``resize(rows:cols:cellWidthPx:cellHeightPx:)`` changes the
+    /// grid, with the new (rows, cols) — the seam a remote protocol forwards
+    /// viewport changes through (a local TIOCSWINSZ cannot reach a far pane).
+    public var onResize: ((_ rows: UInt16, _ cols: UInt16) -> Void)?
+
     /// Monotonically increasing evidence that terminal output changed. Semantic
     /// detectors can use this to avoid formatting an unchanged screen every tick.
     public private(set) var outputGeneration: UInt64 = 0
@@ -55,6 +77,7 @@ public final class PTYSession {
         guard fd >= 0 else { throw SessionError.spawnFailed(errno: errno) }
         masterFD = fd
         childPID = child
+        input.attach(fd: fd)
     }
 
     /// Resize the pty (`TIOCSWINSZ` → SIGWINCH to the child's foreground group) AND
@@ -67,6 +90,7 @@ public final class PTYSession {
         self.cols = cols
         if masterFD >= 0 { _ = gl_set_winsize(masterFD, rows, cols) }
         terminal.resize(cols: cols, rows: rows, cellWidthPx: cellWidthPx, cellHeightPx: cellHeightPx)
+        onResize?(rows, cols)
     }
 
     /// While true, bytes read from the pty are buffered instead of fed to the
@@ -100,6 +124,8 @@ public final class PTYSession {
     public func ingest(_ bytes: [UInt8]) {
         guard !bytes.isEmpty else { return }
         outputGeneration &+= 1
+        let bytes = interceptOutput?(bytes) ?? bytes
+        guard !bytes.isEmpty else { return }
         if holdOutput {
             heldBytes += bytes
             heldByteCount = heldBytes.count
@@ -184,13 +210,53 @@ public final class PTYSession {
         }
     }
 
-    /// Write raw bytes to the child via the pty master (the keystroke path).
-    /// Returns the number of bytes written, or -1 on error.
+    /// Write bytes to the child via the pty master (the keystroke path), through
+    /// ``interceptInput`` when one is installed. Returns the number of bytes
+    /// written, or -1 on error.
     @discardableResult
     public func send(_ bytes: [UInt8]) -> Int {
+        guard let interceptInput else { return sendRaw(bytes) }
+        return sendRaw(interceptInput(bytes))
+    }
+
+    /// Programmatic keystrokes for the far-side program (an agent start, a login):
+    /// ``send(_:)`` on a plain terminal, where the tty buffers them until a shell
+    /// reads; handed to the protocol bridge on a remote control-mode card, where
+    /// typing them now would feed the handshake instead of a pane.
+    public func sendWhenReady(_ bytes: [UInt8]) {
+        if let queueInput { queueInput(bytes) } else { _ = send(bytes) }
+    }
+
+    /// Write bytes to the child bypassing ``interceptInput`` — for writes that
+    /// are already wire-shaped (protocol commands). ``onInput`` still observes.
+    /// Bytes the pty will not take yet are queued and delivered in order by
+    /// ``PTYInputQueue`` (a big paste used to be silently cropped at ~1KB).
+    /// Returns the number of bytes accepted.
+    @discardableResult
+    public func sendRaw(_ bytes: [UInt8]) -> Int {
         guard masterFD >= 0, !bytes.isEmpty else { return 0 }
         onInput?(bytes)
-        return bytes.withUnsafeBytes { write(masterFD, $0.baseAddress, bytes.count) }
+        input.enqueue(bytes)
+        return bytes.count
+    }
+
+    /// Bytes accepted by ``sendRaw(_:)`` that the pty has not taken yet.
+    // periphery:ignore - test-only seam (scan runs with exclude_tests)
+    public var pendingInputCount: Int { input.count }
+
+    private let input = PTYInputQueue()
+
+    /// Switch the local pty to raw mode (`cfmakeraw`). A wire-protocol child
+    /// needs this: the cooked line discipline echoes master-side writes back
+    /// into master reads, which would feed our own commands into the parser.
+    /// Left cooked until then so interactive auth (ssh's password prompt) keeps
+    /// canonical editing and echo control.
+    public func setRawMode() {
+        guard masterFD >= 0 else { return }
+        var raw = termios()
+        guard tcgetattr(masterFD, &raw) == 0 else { return }
+        cfmakeraw(&raw)
+        _ = tcsetattr(masterFD, TCSANOW, &raw)
     }
 
     /// Non-blocking check for child termination, used by ``SessionRegistry`` to
@@ -219,6 +285,7 @@ public final class PTYSession {
             childPID = -1
         }
         if masterFD >= 0 {
+            input.detach()
             close(masterFD)
             masterFD = -1
         }
@@ -242,6 +309,7 @@ public final class PTYSession {
             childPID = -1
         }
         if masterFD >= 0 {
+            input.detach()
             close(masterFD)
             masterFD = -1
         }

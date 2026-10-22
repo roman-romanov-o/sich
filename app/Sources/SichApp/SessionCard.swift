@@ -7,9 +7,24 @@ import SichCore
 /// cards collapse to a compact ✓ row. Single responsibility: present one
 /// ``BoardCard``, report clicks for drill-in (US-002 AC#1), and act as the drag
 /// source for a manual column move. Board logic stays in `SichCore`.
+/// Options the card context menu offers for moving a task to another account
+/// or harness without losing task context.
+struct CardSwitchMenu: Equatable, Sendable {
+    struct AccountOption: Equatable, Sendable {
+        let id: UUID
+        let name: String
+        let quotaBlock: CardQuotaBlock
+    }
+
+    let accounts: [AccountOption]
+    let harnesses: [CardAgent]
+}
+
 @MainActor
 final class SessionCard: NSView, NSDraggingSource {
     let card: BoardCard
+    let quotaBlock: CardQuotaBlock
+    let switchMenu: CardSwitchMenu
     /// Invoked on click — the board wires this to drill into the session (US-002).
     var onSelect: ((BoardCard) -> Void)?
     /// Invoked from the right-click "Rename Task…" item — the board bubbles this
@@ -18,6 +33,11 @@ final class SessionCard: NSView, NSDraggingSource {
     /// Invoked from the right-click "Delete Task…" item — the board bubbles this to
     /// the host, which confirms, tears down the session + worktree, and drops the card.
     var onDelete: ((BoardCard) -> Void)?
+    var onSwitchAccount: ((BoardCard, UUID) -> Void)?
+    var onSwitchHarness: ((BoardCard, CardAgent) -> Void)?
+    var onDeferNeedsYou: ((BoardCard) -> Void)?
+    var onPark: ((BoardCard) -> Void)?
+    var onBlockExternally: ((BoardCard) -> Void)?
 
     private let stack = NSStackView()
     private let now: () -> Date
@@ -34,9 +54,13 @@ final class SessionCard: NSView, NSDraggingSource {
     /// Distinguishes a click (drill-in) from a drag (column move): a drag sets
     /// this, so `mouseUp` does not also fire `onSelect`.
     private var didDrag = false
+    /// The ✓ on a DONE row — the one glyph that celebrates on arrival.
+    private weak var doneMark: NSTextField?
 
     init(
         card: BoardCard,
+        quotaBlock: CardQuotaBlock = .none,
+        switchMenu: CardSwitchMenu = CardSwitchMenu(accounts: [], harnesses: []),
         now: @escaping () -> Date = Date.init,
         hostState: @escaping (String) -> RemoteHookInstallState = {
             RemoteHookStatus.shared.state(for: $0)
@@ -46,6 +70,8 @@ final class SessionCard: NSView, NSDraggingSource {
         }
     ) {
         self.card = card
+        self.quotaBlock = quotaBlock
+        self.switchMenu = switchMenu
         self.now = now
         self.hostState = hostState
         self.waitingSince = waitingSince
@@ -54,6 +80,7 @@ final class SessionCard: NSView, NSDraggingSource {
         configureLayer()
         buildContent()
         buildAgingBar()
+        toolTip = workTooltip
     }
 
     required init?(coder: NSCoder) { nil }
@@ -80,9 +107,11 @@ final class SessionCard: NSView, NSDraggingSource {
             layer?.shadowOpacity = 0.25
             layer?.shadowOffset = .zero
         case .blocked:
-            themedBackground = BoardTheme.needsYouCard
-            themedBorder = BoardTheme.alert
+            themedBackground = BoardTheme.blockedCard
+            themedBorder = BoardTheme.stateColor(.blocked)
             layer?.borderWidth = 1
+        case .parked:
+            themedBackground = BoardTheme.parkedCard
         case .unreachable:
             // The calm fill of a card that is NOT asking for you, edged in alert red
             // so a dead link still reads at a glance. Deliberately not the warm
@@ -90,8 +119,20 @@ final class SessionCard: NSView, NSDraggingSource {
             themedBackground = BoardTheme.cardFill
             themedBorder = BoardTheme.stateColor(.unreachable)
             layer?.borderWidth = 1
-        case .done, .idle, .running, .runningTests, .unknown:
+        case .running, .runningTests:
+            // The column's meaning on the card itself: a cool tint. No edge — an
+            // outline is reserved for states that ask something of the operator
+            // (needs you, blocked, dead link, spent pool, keyboard focus), so a
+            // coloured edge always means "look here".
+            themedBackground = BoardTheme.workingCard
+        case .done:
+            themedBackground = BoardTheme.doneCard
+        case .idle, .unknown:
             themedBackground = BoardTheme.cardFill
+            if quotaBlock.isBlocked {
+                themedBorder = BoardTheme.quotaBlocked
+                layer?.borderWidth = 1
+            }
         }
     }
 
@@ -127,7 +168,7 @@ final class SessionCard: NSView, NSDraggingSource {
         }
     }
 
-    /// The full card face: project + harness badge → title → duration.
+    /// The full card face: project + harness badge → title → live interval (WORKING).
     private func buildFullCard() {
         stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
         let header = headerRow()
@@ -147,20 +188,29 @@ final class SessionCard: NSView, NSDraggingSource {
         if card.state.isWorking { startDurationTimer() }
     }
 
-    /// A DONE card is a compact row: ✓ + title over project, total work on the right.
+    /// A DONE card is a compact row: ✓ + title over project (total work on hover).
     private func buildDoneRow() {
         stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
         let row = NSStackView()
         row.spacing = 10
         row.alignment = .centerY
-        row.addArrangedSubview(label("✓", font: BoardTheme.mono, color: BoardTheme.stateColor(.done)))
+        let mark = label("✓", font: BoardTheme.mono, color: BoardTheme.stateColor(.done))
+        mark.wantsLayer = true
+        doneMark = mark
+        row.addArrangedSubview(mark)
         let text = NSStackView()
         text.orientation = .vertical
         text.alignment = .leading
         text.spacing = 2
         let doneTitle = label(
             card.title ?? BoardTheme.shortPath(card.projectDir),
-            font: NSFont.systemFont(ofSize: 13, weight: .medium), color: BoardTheme.textMuted)
+            font: BoardTheme.doneTitle, color: BoardTheme.textMuted)
+        // DONE is the narrowest lane, so the title wraps to a second line before it
+        // truncates — one line left only the first word or two readable.
+        doneTitle.maximumNumberOfLines = 2
+        doneTitle.lineBreakMode = .byTruncatingTail
+        doneTitle.cell?.wraps = true
+        doneTitle.cell?.truncatesLastVisibleLine = true
         doneTitle.yieldWidthToWindow(.defaultLow)   // longest text squeezes first
         text.addArrangedSubview(doneTitle)
         if card.title != nil {
@@ -168,7 +218,6 @@ final class SessionCard: NSView, NSDraggingSource {
         }
         row.addArrangedSubview(text)
         row.addArrangedSubview(NSView())   // flexible spacer
-        if shouldShowDuration { row.addArrangedSubview(durationReadout()) }
         stack.addArrangedSubview(row)
         row.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28).isActive = true
     }
@@ -232,7 +281,7 @@ final class SessionCard: NSView, NSDraggingSource {
             if card.state.isWorking { startWorkingPulse(on: icon) }
         }
 
-        let duration = label("", font: BoardTheme.monoSmall, color: BoardTheme.textFaint)
+        let duration = label("", font: BoardTheme.numericSmall, color: BoardTheme.textFaint)
         duration.identifier = NSUserInterfaceItemIdentifier("task-duration")
         duration.setAccessibilityLabel(
             card.state.isWorking ? "Current working interval" : "Total working time")
@@ -242,11 +291,17 @@ final class SessionCard: NSView, NSDraggingSource {
         return row
     }
 
-    /// Do not spend card space or attention on an empty cumulative timer. An
-    /// active interval remains visible from its first minute (`0m`) so the user
-    /// can tell that this is the live, per-iteration clock.
-    private var shouldShowDuration: Bool {
-        card.state.isWorking || Int(card.totalWorkingTime(at: now())) / 60 > 0
+    /// Only the live clock earns face space: a WORKING card shows its current
+    /// interval from its first minute (`0m`). The cumulative total is history —
+    /// on a resting card `10h 47m` read as "waiting for ten hours" — so it moved
+    /// to the card's tooltip (``workTooltip``).
+    private var shouldShowDuration: Bool { card.state.isWorking }
+
+    /// "Worked 10h 47m in total", or nil before any work was recorded.
+    private var workTooltip: String? {
+        let total = card.totalWorkingTime(at: now())
+        guard Int(total) / 60 > 0 else { return nil }
+        return "Worked \(Self.formatDuration(total)) in total"
     }
 
     private func startWorkingPulse(on icon: NSImageView) {
@@ -299,6 +354,7 @@ final class SessionCard: NSView, NSDraggingSource {
         row.alignment = .centerY
         row.addArrangedSubview(repoChip())
         if card.state == .unreachable { row.addArrangedSubview(LinkChip()) }
+        if quotaBlock.isBlocked { row.addArrangedSubview(QuotaChip(block: quotaBlock, now: now)) }
         if let status = hostChipStatus() { row.addArrangedSubview(hostChip(status)) }
         row.addArrangedSubview(NSView())   // flexible spacer
         if card.flow == .a {
@@ -334,15 +390,25 @@ final class SessionCard: NSView, NSDraggingSource {
     }
 
     private func repoText(font: NSFont) -> NSTextField {
-        label(BoardTheme.projectLabel(card.projectDir), font: font, color: BoardTheme.repoColor(for: card))
+        projectField(font: font)
     }
 
     /// The project line — colour alone carries the project identity (one coding
     /// channel; the old fill+stroke+colour pill triple-coded it and made the
     /// queue read as a wall of badges before any title).
     private func repoChip() -> NSTextField {
-        label(BoardTheme.projectLabel(card.projectDir),
-              font: BoardTheme.chip, color: BoardTheme.repoColor(for: card))
+        projectField(font: BoardTheme.chip)
+    }
+
+    /// Project names usually differ at the END (`agentic-coding-kanban` vs
+    /// `agentic-coding-docs`), so they truncate in the middle and keep both ends;
+    /// the full name rides on the tooltip.
+    private func projectField(font: NSFont) -> NSTextField {
+        let name = BoardTheme.projectLabel(card.projectDir)
+        let field = label(name, font: font, color: BoardTheme.repoColor(for: card))
+        field.lineBreakMode = .byTruncatingMiddle
+        field.toolTip = name
+        return field
     }
 
     // MARK: - Host chip (US-005 AC-4, AC-7)
@@ -440,6 +506,7 @@ final class SessionCard: NSView, NSDraggingSource {
     }
 
     /// Test seam: the bar view, if this card carries one.
+    // periphery:ignore - test-only seam (scan runs with exclude_tests)
     var agingBarForTesting: NSView? { agingBar }
 
     // MARK: - Drill-in (click) + drag (move) + rename (right-click)
@@ -449,6 +516,60 @@ final class SessionCard: NSView, NSDraggingSource {
         let rename = NSMenuItem(title: "Rename Task…", action: #selector(renameTapped), keyEquivalent: "")
         rename.target = self
         menu.addItem(rename)
+        if !switchMenu.accounts.isEmpty {
+            menu.addItem(.separator())
+            let accountMenu = NSMenuItem(title: "Switch Account", action: nil, keyEquivalent: "")
+            let submenu = NSMenu()
+            for option in switchMenu.accounts {
+                let suffix = option.quotaBlock.isBlocked ? " (quota spent)" : ""
+                let item = NSMenuItem(
+                    title: "\(option.name)\(suffix)",
+                    action: #selector(switchAccountTapped(_:)),
+                    keyEquivalent: "")
+                item.target = self
+                item.representedObject = option.id
+                item.isEnabled = !option.quotaBlock.isBlocked
+                submenu.addItem(item)
+            }
+            accountMenu.submenu = submenu
+            menu.addItem(accountMenu)
+        }
+        if !switchMenu.harnesses.isEmpty {
+            let harnessMenu = NSMenuItem(title: "Continue On…", action: nil, keyEquivalent: "")
+            let submenu = NSMenu()
+            for agent in switchMenu.harnesses {
+                let item = NSMenuItem(
+                    title: agent.displayName,
+                    action: #selector(switchHarnessTapped(_:)),
+                    keyEquivalent: "")
+                item.target = self
+                item.representedObject = agent.rawValue
+                submenu.addItem(item)
+            }
+            harnessMenu.submenu = submenu
+            menu.addItem(harnessMenu)
+        }
+        if card.state.needsAttention {
+            menu.addItem(.separator())
+            let blocked = NSMenuItem(
+                title: "Blocked externally…",
+                action: #selector(blockExternallyTapped), keyEquivalent: "")
+            blocked.target = self
+            menu.addItem(blocked)
+            let deferItem = NSMenuItem(
+                title: "Park until tomorrow…",
+                action: #selector(deferNeedsYouTapped), keyEquivalent: "")
+            deferItem.target = self
+            menu.addItem(deferItem)
+        }
+        if card.state != .parked, card.state != .done {
+            menu.addItem(.separator())
+            let park = NSMenuItem(
+                title: "Park for later…",
+                action: #selector(parkTapped), keyEquivalent: "")
+            park.target = self
+            menu.addItem(park)
+        }
         menu.addItem(.separator())
         let delete = NSMenuItem(title: "Delete Task…", action: #selector(deleteTapped), keyEquivalent: "")
         delete.target = self
@@ -457,12 +578,148 @@ final class SessionCard: NSView, NSDraggingSource {
     }
 
     @objc private func renameTapped() { onRename?(card) }
+    @objc private func deferNeedsYouTapped() { onDeferNeedsYou?(card) }
+    @objc private func parkTapped() { onPark?(card) }
+    @objc private func blockExternallyTapped() { onBlockExternally?(card) }
     @objc private func deleteTapped() { onDelete?(card) }
+    @objc private func switchAccountTapped(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID else { return }
+        onSwitchAccount?(card, id)
+    }
+    @objc private func switchHarnessTapped(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let agent = CardAgent(rawValue: raw) else { return }
+        onSwitchHarness?(card, agent)
+    }
 
-    override func mouseDown(with event: NSEvent) { didDrag = false }
+    // MARK: - Arrival
+
+    /// A card that just moved into its lane drops in instead of teleporting: 6pt
+    /// from above + fade, 200ms on the board's strong ease-out. It happens tens of
+    /// times a day and is system-driven, so it stays fast and small; Reduce Motion
+    /// keeps the fade and drops the movement. A card arriving in DONE also pops its
+    /// ✓ once — completion is the one moment on the board that earns a bounce.
+    func animateArrival() {
+        guard let layer else { return }
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let ease = CAMediaTimingFunction(controlPoints: 0.23, 1, 0.32, 1)
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0
+        fade.toValue = 1
+        fade.duration = 0.2
+        fade.timingFunction = ease
+        layer.add(fade, forKey: "arrival-fade")
+        guard !reduceMotion else { return }
+        let drop = CABasicAnimation(keyPath: "transform")
+        drop.fromValue = CATransform3DMakeTranslation(0, 6, 0)   // unflipped: +y is up
+        drop.toValue = CATransform3DIdentity
+        drop.duration = 0.2
+        drop.timingFunction = ease
+        layer.add(drop, forKey: "arrival-drop")
+        if card.state == .done { popDoneMark() }
+    }
+
+    /// The ✓ springs from 0.6 to full size about its own centre — after layout, so
+    /// the centre is known. Apple's two-parameter spring: settles in ~0.35s with a
+    /// light 0.3 bounce.
+    private func popDoneMark() {
+        DispatchQueue.main.async { [weak self] in
+            guard let mark = self?.doneMark, let layer = mark.layer else { return }
+            let cx = mark.bounds.midX, cy = mark.bounds.midY
+            var from = CATransform3DMakeTranslation(cx, cy, 0)
+            from = CATransform3DScale(from, 0.6, 0.6, 1)
+            from = CATransform3DTranslate(from, -cx, -cy, 0)
+            let pop = CASpringAnimation(perceptualDuration: 0.35, bounce: 0.3)
+            pop.keyPath = "transform"
+            pop.fromValue = from
+            pop.toValue = CATransform3DIdentity
+            pop.duration = pop.settlingDuration
+            layer.add(pop, forKey: "done-pop")
+        }
+    }
+
+    // MARK: - Hover + press feedback
+    //
+    // Cards are clicked tens of times a day, so the motion stays small and fast:
+    // hover lifts the shadow (the card reads as pressable before it is pressed),
+    // press sinks the card to 0.97 so the click is acknowledged before the
+    // drill-in lands. Only shadow and transform animate — never the frame.
+
+    private var hoverArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(
+            rect: bounds, options: [.activeInKeyWindow, .mouseEnteredAndExited], owner: self)
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { setLifted(true) }
+
+    override func mouseExited(with event: NSEvent) {
+        setLifted(false)
+        setPressed(false)
+    }
+
+    /// Hover lift: a deeper, softer shadow on top of the state's own (an amber
+    /// NEEDS YOU glow simply glows a little more).
+    private func setLifted(_ lifted: Bool) {
+        guard let layer else { return }
+        if lifted, liftBase == nil {
+            liftBase = (layer.shadowRadius, layer.shadowOpacity)
+            animateShadow(radius: layer.shadowRadius + 5, opacity: min(1, layer.shadowOpacity + 0.14))
+        } else if !lifted, let base = liftBase {
+            liftBase = nil
+            animateShadow(radius: base.radius, opacity: base.opacity)
+        }
+    }
+
+    private var liftBase: (radius: CGFloat, opacity: Float)?
+
+    private func animateShadow(radius: CGFloat, opacity: Float) {
+        guard let layer else { return }
+        let ease = CAMediaTimingFunction(controlPoints: 0.23, 1, 0.32, 1)
+        for (key, value) in [("shadowRadius", radius as Any), ("shadowOpacity", opacity as Any)] {
+            let anim = CABasicAnimation(keyPath: key)
+            anim.fromValue = layer.presentation()?.value(forKeyPath: key) ?? layer.value(forKeyPath: key)
+            anim.toValue = value
+            anim.duration = 0.15
+            anim.timingFunction = ease
+            layer.add(anim, forKey: key)
+        }
+        layer.shadowRadius = radius
+        layer.shadowOpacity = opacity
+    }
+
+    /// Press sink, scaled about the card's centre (a layer-backed NSView anchors
+    /// its layer at the bottom-left corner). Reduce Motion skips the movement.
+    private func setPressed(_ pressed: Bool) {
+        guard let layer, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let scale: CGFloat = pressed ? 0.97 : 1
+        let cx = bounds.midX, cy = bounds.midY
+        var target = CATransform3DMakeTranslation(cx, cy, 0)
+        target = CATransform3DScale(target, scale, scale, 1)
+        target = CATransform3DTranslate(target, -cx, -cy, 0)
+        let anim = CABasicAnimation(keyPath: "transform")
+        anim.fromValue = layer.presentation()?.transform ?? layer.transform
+        anim.toValue = target
+        // Asymmetric: the sink answers instantly, the release settles a touch slower.
+        anim.duration = pressed ? 0.1 : 0.16
+        anim.timingFunction = CAMediaTimingFunction(controlPoints: 0.23, 1, 0.32, 1)
+        layer.add(anim, forKey: "press")
+        layer.transform = target
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        didDrag = false
+        setPressed(true)
+    }
 
     override func mouseDragged(with event: NSEvent) {
         didDrag = true
+        setPressed(false)
         let item = NSPasteboardItem()
         item.setString(card.id.uuidString, forType: BoardCell.cardType)
         let dragItem = NSDraggingItem(pasteboardWriter: item)
@@ -471,6 +728,7 @@ final class SessionCard: NSView, NSDraggingSource {
     }
 
     override func mouseUp(with event: NSEvent) {
+        setPressed(false)
         if !didDrag { onSelect?(card) }
     }
 
@@ -524,6 +782,28 @@ class ChipLabel: NSTextField {
     }
 }
 
+/// Quota-spent / pool-low chip on a card face.
+@MainActor
+final class QuotaChip: ChipLabel {
+    init(block: CardQuotaBlock, now: @escaping () -> Date = Date.init) {
+        super.init(text: block.chipText)
+        identifier = NSUserInterfaceItemIdentifier("quota-chip")
+        font = BoardTheme.chip
+        let color: NSColor = switch block {
+        case .exhausted: BoardTheme.quotaBlocked
+        case .low: BoardTheme.attention
+        case .none: BoardTheme.textDim
+        }
+        textColor = color
+        toolTip = block.toolTip(now: now())
+        wantsLayer = true
+        themedBackground = color.withAlphaComponent(0.16)
+        layer?.cornerRadius = 3
+    }
+
+    required init?(coder _: NSCoder) { nil }
+}
+
 /// "The machine this work runs on has stopped answering" (US-007 AC-4), said in
 /// words on the card face.
 ///
@@ -562,6 +842,22 @@ enum HostChipStatus: Equatable {
     case remote(destination: String, state: RemoteHookInstallState)
     case notStartedBySich
 
+    /// What the chip shows on the card face — short, so it never crowds the
+    /// project label out. The full sentence (``text``) is the tooltip.
+    var shortText: String {
+        switch self {
+        case .remote(_, let state):
+            switch state {
+            case .installed: return text
+            case .notInstalled: return "⚠ no hooks"
+            case .staleVersion: return "⚠ old hooks"
+            case .unknown: return "? hooks"
+            }
+        case .notStartedBySich:
+            return text
+        }
+    }
+
     var text: String {
         switch self {
         case .remote(let destination, let state):
@@ -599,13 +895,18 @@ final class HostChip: ChipLabel {
     init(status: HostChipStatus, onInstall: @escaping (String) -> Void) {
         self.status = status
         self.onInstall = onInstall
-        super.init(text: status.text)
+        super.init(text: status.shortText)
         identifier = NSUserInterfaceItemIdentifier("host-chip")
         font = BoardTheme.chip
         textColor = status.isActionable ? BoardTheme.attention : BoardTheme.textDim
-        toolTip = status.isActionable
-            ? status.destination.map { "Install Sich's hooks on \($0)" } : nil
+        // The face is a marker; the tooltip says what it means and, when a click
+        // can fix it, which host the click installs onto.
+        let install = status.isActionable
+            ? status.destination.map { " — click to install Sich's hooks on \($0)" } : nil
+        toolTip = status.text + (install ?? "")
         setAccessibilityLabel(status.text)
+        // The project label beside it wins any width fight.
+        yieldWidthToWindow(.init(480))
         // Fill only where a click does something: a healthy or unreadable host
         // stays as quiet as the repo chip beside it.
         guard status.isActionable else { return }

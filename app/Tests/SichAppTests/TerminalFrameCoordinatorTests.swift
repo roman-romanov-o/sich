@@ -21,13 +21,21 @@ struct TerminalFrameCoordinatorTests {
         #expect(queue.consume() == .full)
     }
 
+    /// A wheel event normalized to rows, then quantized — the path the child-owned
+    /// wheel (mouse reports, alternate-screen arrows) takes.
+    private func rows(_ accumulator: inout TerminalScrollAccumulator,
+                      deltaY: CGFloat, precise: Bool, cellHeight: CGFloat) -> Int {
+        accumulator.rows(adding: TerminalScrollAccumulator.rowDelta(
+            deltaY: deltaY, precise: precise, cellHeight: cellHeight))
+    }
+
     @Test("precise trackpad pixels use Ghostty sensitivity and retain residue")
     func preciseScrollAccumulation() {
         var accumulator = TerminalScrollAccumulator()
 
-        #expect(accumulator.rows(deltaY: 4, precise: true, cellHeight: 20) == 0)
+        #expect(rows(&accumulator, deltaY: 4, precise: true, cellHeight: 20) == 0)
         #expect(accumulator.residue == 0.4)
-        #expect(accumulator.rows(deltaY: 6, precise: true, cellHeight: 20) == 1)
+        #expect(rows(&accumulator, deltaY: 6, precise: true, cellHeight: 20) == 1)
         #expect(abs(accumulator.residue) < 0.000_001)
     }
 
@@ -35,10 +43,10 @@ struct TerminalFrameCoordinatorTests {
     func preciseDirectionChange() {
         var accumulator = TerminalScrollAccumulator()
 
-        #expect(accumulator.rows(deltaY: 7, precise: true, cellHeight: 20) == 0)
-        #expect(accumulator.rows(deltaY: -4, precise: true, cellHeight: 20) == 0)
+        #expect(rows(&accumulator, deltaY: 7, precise: true, cellHeight: 20) == 0)
+        #expect(rows(&accumulator, deltaY: -4, precise: true, cellHeight: 20) == 0)
         #expect(abs(accumulator.residue - 0.3) < 0.000_001)
-        #expect(accumulator.rows(deltaY: -8, precise: true, cellHeight: 20) == 0)
+        #expect(rows(&accumulator, deltaY: -8, precise: true, cellHeight: 20) == 0)
         #expect(abs(accumulator.residue + 0.5) < 0.000_001)
     }
 
@@ -46,8 +54,8 @@ struct TerminalFrameCoordinatorTests {
     func discreteScrollAccumulation() {
         var accumulator = TerminalScrollAccumulator()
 
-        #expect(accumulator.rows(deltaY: 0.5, precise: false, cellHeight: 99) == 0)
-        #expect(accumulator.rows(deltaY: 0.75, precise: false, cellHeight: 99) == 1)
+        #expect(rows(&accumulator, deltaY: 0.5, precise: false, cellHeight: 99) == 0)
+        #expect(rows(&accumulator, deltaY: 0.75, precise: false, cellHeight: 99) == 1)
         #expect(abs(accumulator.residue - 0.25) < 0.000_001)
     }
 }

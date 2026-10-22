@@ -57,6 +57,25 @@ struct LinkHealthTests {
         #expect(shown != .waitingForInput)
     }
 
+    /// Two tailnets: a host on the one you are not on right now reads as a dead link.
+    /// Finished work there must stay in DONE, not be dragged back into PARKED as
+    /// `unreachable` — completion is settled and nothing remote can change it.
+    @Test("a DONE card on a dead host stays done")
+    func aDoneCardOnADeadHostStaysDone() async throws {
+        let rig = try await Rig(host: "othernet.invalid")
+        defer { rig.tearDown() }
+        try await rig.driveToRunning()
+        rig.shell.move(cardID: rig.card.id, to: .done)
+
+        rig.transport.finish(RemoteEventRelay.sshFailureExit)
+        #expect(rig.poller.relayHealth(for: rig.host) == .unreachable)
+        await rig.pollBoardOnce()
+
+        let shown = try #require(rig.shell.displayCards().first { $0.id == rig.card.id })
+        #expect(shown.state == .done)
+        #expect(BoardView.ColumnGroup.group(for: shown.state) == .done)
+    }
+
     /// X and the detection latency are different quantities (AC-2 says so explicitly);
     /// this asserts X alone. X is what the BOARD costs — one sessions-poll backstop
     /// cycle, which runs whether or not a single event line arrived.
@@ -253,7 +272,8 @@ struct LinkHealthTests {
         #expect(view.card.state != .unreachable)
         #expect(Self.linkChip(in: view) == nil)
         let chip = try #require(Self.hostChip(in: view))
-        #expect(chip.stringValue.contains("hooks not installed"))
+        #expect(chip.status.text == "hooks not installed")
+        #expect(chip.stringValue == "⚠ no hooks")
     }
 
     // MARK: - Harness
@@ -340,7 +360,7 @@ struct LinkHealthTests {
         /// difference between "the state exists" and "the state reaches the screen".
         func rendered() -> SessionCard? { LinkHealthTests.sessionCard(for: card.id, in: root) }
 
-        func attentionCount() -> Int { shell.attention.renderedCount }
+        func attentionCount() -> Int { shell.lastAttentionCount }
     }
 
     /// A main-actor-confined box, so the polling loop above reads a value it owns

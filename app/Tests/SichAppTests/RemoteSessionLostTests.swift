@@ -10,9 +10,10 @@ import Testing
 /// with the operator's conversation stranded and no error anywhere to say so.
 ///
 /// The rule these tests pin: ASK the far side first. A definite "the session is gone"
-/// rebuilds the context we know about; anything else — a live session, an unreachable
-/// host, a silent one — is left strictly alone, because typing into a session that
-/// turns out to be alive talks over whatever is running in it.
+/// rebuilds the context we know about — on the session's own launch command, which
+/// only the CREATE branch of `-A` runs; anything else — a live session, an unreachable
+/// host, a silent one — is left strictly alone, and nothing is ever typed into the
+/// attach: the control-mode handshake would read keystrokes as protocol commands.
 ///
 /// No case dials a host: the probe runs through the injected runner and the reserved
 /// `.invalid` TLD fails its lookup immediately.
@@ -86,8 +87,10 @@ struct RemoteSessionLostTests {
         shell.drill(into: card)
 
         // The conversation, not a bare prompt — and interactive, never `claude -p`.
-        #expect(typed.text.contains("claude --resume \(resumeID.uuidString.lowercased())"))
-        #expect(!typed.text.contains("claude -p"))
+        let remote = try #require(typed.argv.last)
+        #expect(remote.contains("claude --resume \(resumeID.uuidString.lowercased())"))
+        #expect(!remote.contains("claude -p"))
+        #expect(typed.text.isEmpty, "the rebuild rides the argv, nothing is typed")
         // And in the directory the operator was last seen in, not $HOME (and not the
         // `~` the card was created with, which tmux silently drops). tmux honours `-c`
         // only on the session it CREATES, which is precisely this case.
@@ -111,8 +114,10 @@ struct RemoteSessionLostTests {
         // Pinned, not bare: the id is ours up front, so the NEXT time the far side
         // drops this session there is something to resume.
         let pinned = try #require(typed.session?.claudeSessionID)
-        #expect(typed.text.contains("claude --session-id \(pinned.uuidString.lowercased())"))
-        #expect(!typed.text.contains("claude -p"))
+        let remote = try #require(typed.argv.last)
+        #expect(remote.contains("claude --session-id \(pinned.uuidString.lowercased())"))
+        #expect(!remote.contains("claude -p"))
+        #expect(typed.text.isEmpty)
     }
 
     // MARK: - learning what only the far side knows
@@ -165,7 +170,7 @@ struct RemoteSessionLostTests {
 
     // MARK: - every other answer leaves the far side alone
 
-    @Test("a session that is still alive is never typed into")
+    @Test("a session that is still alive gets no start command and is never typed into")
     func liveSessionIsLeftAlone() throws {
         let bookDir = makeTempDir()
         defer { try? FileManager.default.removeItem(at: bookDir) }
@@ -181,6 +186,8 @@ struct RemoteSessionLostTests {
         shell.drill(into: try #require(shell.cards.first))
 
         #expect(typed.text.isEmpty, "a pure re-attach types nothing: \(typed.text)")
+        #expect(!(try #require(typed.argv.last)).contains("claude"),
+                "a pure re-attach carries no agent start either")
     }
 
     @Test("an unreachable host is not a lost session")

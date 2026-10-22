@@ -35,6 +35,56 @@ struct TerminalPasteTests {
         ))
     }
 
+    // MARK: - Large paste lands whole
+
+    /// The "my paste came out cropped" defect. The pty input queue holds ~1KB and
+    /// the master fd is non-blocking, so a single write drops most of a big paste.
+    /// Real ⌘V, real run loop: the surface's writability source must feed the
+    /// remainder as the child drains, and every byte must arrive, in order.
+    @Test("⌘V of a clipboard far larger than the tty input queue reaches the child whole")
+    func cmdVLargeTextArrivesWhole() throws {
+        let out = NSTemporaryDirectory() + "sich-paste-out-" + UUID().uuidString
+        let done = NSTemporaryDirectory() + "sich-paste-done-" + UUID().uuidString
+        defer {
+            try? FileManager.default.removeItem(atPath: out)
+            try? FileManager.default.removeItem(atPath: done)
+        }
+        let text = String(repeating: "0123456789abcdef\n", count: 3_000)   // 51KB
+        // A raw-mode child (what every TUI is) that swallows exactly the paste,
+        // then leaves a sentinel it can only reach once all bytes arrived.
+        let session = try PTYSession(command: ["/bin/sh", "-c",
+            "stty raw -echo; head -c \(text.utf8.count) > '\(out)'; : > '\(done)'"])
+        try session.start()
+        defer { session.terminate() }
+        let surface = TerminalSurface(session: session)
+        let pb = NSPasteboard.withUniqueName()
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+        surface.pasteboard = pb
+        surface.startReading()
+        defer { surface.stopReading() }
+        spinMainRunLoop(until: 3.0) {
+            var t = termios()
+            return tcgetattr(session.masterFD, &t) == 0 && t.c_lflag & UInt(ICANON) == 0
+        }
+
+        #expect(surface.performKeyEquivalent(with: try cmdV()) == true)
+        spinMainRunLoop(until: 5.0) { FileManager.default.fileExists(atPath: done) }
+
+        let received = FileManager.default.contents(atPath: out) ?? Data()
+        #expect(received.count == text.utf8.count,
+            "child received \(received.count) of \(text.utf8.count) pasted bytes")
+        #expect(received == Data(text.utf8), "pasted bytes arrived out of order or corrupted")
+        #expect(session.pendingInputCount == 0, "nothing may be left queued once the child took it all")
+    }
+
+    private func spinMainRunLoop(until timeout: TimeInterval, done: () -> Bool) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline, !done() {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+    }
+
     // MARK: - ⌘V routing
 
     @Test("⌘V with an image-only clipboard sends the ⌃V trigger to the child (real key-event path)")
@@ -110,6 +160,63 @@ struct TerminalPasteTests {
 
         #expect(sent == [0x16],
             "⌃V must reach the PTY untouched so the child's own image paste works")
+    }
+
+    /// Ukrainian (and any non-Latin layout) reports the V key as "м", not "v".
+    /// Matching that character made ⌘V a no-op and ⌃V encode to zero bytes.
+    @Test("⌘V still pastes when the V key's layout character is Cyrillic")
+    func cmdVPastesWhenLayoutCharacterIsCyrillic() throws {
+        let (surface, session, pb) = try makeSurface()
+        defer { session.terminate() }
+        pb.setString("hello", forType: .string)
+        var sent: [UInt8] = []
+        session.onInput = { sent += $0 }
+
+        #expect(surface.performKeyEquivalent(with: try layoutKey(
+            modifiers: .command, keyCode: 9, glyph: "м")) == true)
+        #expect(sent == Array("hello".utf8))
+    }
+
+    @Test("⌃V and ⌃C follow the physical key when the layout character is Cyrillic")
+    func controlChordsFollowPhysicalKey() throws {
+        let (surface, session, _) = try makeSurface()
+        defer { session.terminate() }
+        // V is "м", C is "с" on the Apple Ukrainian layout.
+        let cases: [(UInt16, String, [UInt8])] = [
+            (9, "м", [0x16]),
+            (8, "с", [0x03]),
+        ]
+        for (keyCode, glyph, expected) in cases {
+            var sent: [UInt8] = []
+            session.onInput = { sent += $0 }
+            surface.keyDown(with: try layoutKey(
+                modifiers: .control, keyCode: keyCode, glyph: glyph))
+            #expect(sent == expected, "keyCode \(keyCode) (\(glyph))")
+        }
+    }
+
+    @Test("a Cyrillic letter without Control is typed as itself")
+    func cyrillicLetterIsNotRemapped() throws {
+        let (surface, session, _) = try makeSurface()
+        defer { session.terminate() }
+        var sent: [UInt8] = []
+        session.onInput = { sent += $0 }
+
+        surface.keyDown(with: try layoutKey(modifiers: [], keyCode: 9, glyph: "м"))
+
+        #expect(sent == Array("м".utf8))
+    }
+
+    /// What AppKit delivers for a key when a non-Latin input source is active:
+    /// the layout glyph in both character fields, the hardware key code unchanged.
+    private func layoutKey(modifiers: NSEvent.ModifierFlags, keyCode: UInt16,
+                           glyph: String) throws -> NSEvent {
+        try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
+            windowNumber: 0, context: nil,
+            characters: glyph, charactersIgnoringModifiers: glyph,
+            isARepeat: false, keyCode: keyCode
+        ))
     }
 
     // MARK: - File drop

@@ -10,6 +10,9 @@ import Foundation
 /// not-positively-determined indicator (US-004 AC#3), never a guess.
 public enum CardState: String, Codable, Sendable, Equatable, CaseIterable {
     case idle
+    /// Operator parked the task (deferred standup, shelved until later) — not ready
+    /// to pull from QUEUE but still on the board.
+    case parked
     case running
     case waitingForInput = "waiting-for-input"
     case runningTests = "running-tests"
@@ -28,15 +31,15 @@ public enum CardState: String, Codable, Sendable, Equatable, CaseIterable {
     /// `idle`/`done`, so an older build can never meet an `unreachable` on disk.
     case unreachable
 
-    /// True for the states that route the operator's attention (US-005):
-    /// `waitingForInput` and `blocked`. The single predicate both the attention
-    /// derivation and the card view read, so "needs you" is defined once.
+    /// True when the **agent** is waiting on the operator (US-005). External blocks
+    /// (``blocked`` — PR review, upstream dependency) are a separate column and do
+    /// not light the attention signal.
     ///
     /// `unreachable` is deliberately NOT here: a dead host is not an agent asking
     /// for you, and lighting attention for it would dilute the one signal the
     /// product exists to protect (US-007 AC-4).
     public var needsAttention: Bool {
-        self == .waitingForInput || self == .blocked
+        self == .waitingForInput
     }
 
     /// True while the card belongs in the board's WORKING column. Keeping this
@@ -63,10 +66,12 @@ public enum CardState: String, Codable, Sendable, Equatable, CaseIterable {
 
 /// Which agentic-coding CLI drives a card's session (cmux metadata, US-003 AC#2).
 /// Mirrors the (now-retired) Python `Agent` enum.
-public enum CardAgent: String, Sendable, Equatable, CaseIterable {
+public enum CardAgent: String, Sendable, Equatable, CaseIterable, Codable {
     case claude
     case codex
     case gemini
+    case cursor
+    case antigravity
 
     /// The human label rendered on the card face (matches the HELM POC).
     public var displayName: String {
@@ -74,6 +79,8 @@ public enum CardAgent: String, Sendable, Equatable, CaseIterable {
         case .claude: return "Claude Code"
         case .codex: return "Codex"
         case .gemini: return "Gemini"
+        case .cursor: return "Cursor"
+        case .antigravity: return "Antigravity"
         }
     }
 }
@@ -205,6 +212,16 @@ public struct BoardCard: Identifiable, Sendable, Equatable {
             id: id, sessionID: sessionID, title: title, projectDir: projectDir,
             agent: agent, flow: flow, state: state, workingSince: workingSince,
             accumulatedWorkingTime: duration, updatedAt: updatedAt,
+            boundCardID: boundCardID, host: host, taskFolder: taskFolder
+        )
+    }
+
+    /// The same card on a different harness — identity and task metadata preserved.
+    public func with(agent newAgent: CardAgent) -> BoardCard {
+        BoardCard(
+            id: id, sessionID: sessionID, title: title, projectDir: projectDir,
+            agent: newAgent, flow: flow, state: state, workingSince: workingSince,
+            accumulatedWorkingTime: accumulatedWorkingTime, updatedAt: updatedAt,
             boundCardID: boundCardID, host: host, taskFolder: taskFolder
         )
     }

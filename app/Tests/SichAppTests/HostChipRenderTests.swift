@@ -38,11 +38,15 @@ struct HostChipRenderTests {
             rendered[state] = chip.stringValue
             #expect(!chip.stringValue.contains("roman@render.invalid"),
                     "the destination lives on the repo chip, not here")
+            // The face is a short marker; the sentence is the tooltip and the
+            // accessibility label, so a truncated card still says what is wrong.
+            #expect(chip.toolTip?.hasPrefix(chip.status.text) == true)
+            #expect(chip.accessibilityLabel() == chip.status.text)
         }
 
-        #expect(rendered[.notInstalled] == "hooks not installed")
-        #expect(rendered[.staleVersion] == "hooks outdated")
-        #expect(rendered[.unknown] == "hook status unknown")
+        #expect(rendered[.notInstalled] == "⚠ no hooks")
+        #expect(rendered[.staleVersion] == "⚠ old hooks")
+        #expect(rendered[.unknown] == "? hooks")
         #expect(Set(rendered.values).count == rendered.count)
     }
 
@@ -64,7 +68,7 @@ struct HostChipRenderTests {
             card: remoteCard(destination: "roman@dark.invalid"), hostState: { _ in .installed })
 
         #expect(hostChip(in: installed) == nil)
-        #expect(unknown.stringValue.contains("unknown"))
+        #expect(unknown.toolTip == "hook status unknown")
         // Inert: we could not read the host, so a click would be a guess.
         #expect(!unknown.status.isActionable)
     }
@@ -78,7 +82,7 @@ struct HostChipRenderTests {
             let actionable = state == .notInstalled || state == .staleVersion
             #expect(chip.status.isActionable == actionable)
             #expect((chip.textColor == BoardTheme.attention) == actionable)
-            #expect((chip.toolTip != nil) == actionable)
+            #expect((chip.toolTip?.contains("click to install") == true) == actionable)
             #expect((chip.themedBackground != nil) == actionable)
             if actionable {
                 #expect(chip.toolTip?.contains("roman@tint.invalid") == true)
@@ -135,7 +139,8 @@ struct HostChipRenderTests {
         #expect(!(mounted is NSButton))
         // No probe has run, so the honest reading is "we do not know" — never
         // silence and never "installed".
-        #expect(chip.stringValue == "hook status unknown")
+        #expect(chip.stringValue == "? hooks")
+        #expect(chip.toolTip == "hook status unknown")
     }
 
     // MARK: - AC-7: a real click installs

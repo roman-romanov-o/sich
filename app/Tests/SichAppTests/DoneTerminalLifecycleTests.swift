@@ -116,7 +116,7 @@ struct DoneTerminalLifecycleTests {
 
         let pty = try #require(shell.ptyForTesting(card.id), "the terminal is back")
         #expect(pty.masterFD >= 0)
-        #expect(typed.text.contains("claude --resume \(conversation.uuidString.lowercased())"),
+        #expect(typed.text.contains("/.sich/bin/claude\" --resume \(conversation.uuidString.lowercased())"),
                 "the SAME conversation resumes — typed: \(typed.text)")
         #expect(!typed.text.contains("claude -p"), "interactive pool only, firewall intact")
     }

@@ -55,6 +55,34 @@
         "state": "active",
         "unit": null
       }
+    },
+    {
+      "pool": "cursor",
+      "provider": "cursor",
+      "reading": {
+        "available": false,
+        "inferred": true,
+        "refill_kind": "unknown",
+        "remaining_amount": null,
+        "remaining_fraction": null,
+        "reset": null,
+        "state": "active",
+        "unit": null
+      }
+    },
+    {
+      "pool": "antigravity",
+      "provider": "antigravity",
+      "reading": {
+        "available": false,
+        "inferred": true,
+        "refill_kind": "unknown",
+        "remaining_amount": null,
+        "remaining_fraction": null,
+        "reset": null,
+        "state": "active",
+        "unit": null
+      }
     }
   ]
 }

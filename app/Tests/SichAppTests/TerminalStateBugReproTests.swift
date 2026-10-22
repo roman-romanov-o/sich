@@ -89,6 +89,58 @@ struct TerminalStateBugReproTests {
                 "a manually completed task must not reopen to NEEDS YOU from a later hook observation")
     }
 
+    // MARK: - Bug 3: a card you parked in BLOCKED must stay there
+
+    /// Field report 2026-09-22 (`Remote-access-installer`): the card was dropped in
+    /// BLOCKED and reappeared in NEEDS YOU ~3s later, over and over — the poll cadence.
+    /// The session under it was alive at a prompt, so every merge re-applied its `Stop`
+    /// (`waiting-for-input`) over the operator's placement.
+    private func heldCardBouncesBack(_ column: BoardColumn) throws -> CardState {
+        let shell = twoTasksInOneRepo()
+        let held = try #require(shell.cards.first { $0.sessionID == "task-b-active" })
+
+        shell.move(cardID: held.id, to: column)
+        shell.applySessions([
+            BoardCard(
+                sessionID: "claude-uuid", projectDir: "/repo", agent: .claude,
+                flow: .b, state: .waitingForInput,
+                updatedAt: base.addingTimeInterval(200),
+                boundCardID: held.id.uuidString
+            )
+        ])
+
+        return try #require(shell.cards.first { $0.id == held.id }).state
+    }
+
+    @Test func blockedCardDoesNotBounceBackToNeedsYou() throws {
+        #expect(try heldCardBouncesBack(.blocked) == .blocked,
+                "BLOCKED says you are waiting on someone else — a live session's turn end cannot know that")
+    }
+
+    @Test func parkedCardDoesNotBounceBackToNeedsYou() throws {
+        #expect(try heldCardBouncesBack(.parked) == .parked,
+                "a shelved card must stay shelved until you move it back yourself")
+    }
+
+    @Test func movingOutOfBlockedReArmsTheDetector() throws {
+        let shell = twoTasksInOneRepo()
+        let card = try #require(shell.cards.first { $0.sessionID == "task-b-active" })
+
+        shell.move(cardID: card.id, to: .blocked)
+        shell.move(cardID: card.id, to: .idle)
+        shell.applySessions([
+            BoardCard(
+                sessionID: "claude-uuid", projectDir: "/repo", agent: .claude,
+                flow: .b, state: .waitingForInput,
+                updatedAt: base.addingTimeInterval(200),
+                boundCardID: card.id.uuidString
+            )
+        ])
+
+        #expect(try #require(shell.cards.first { $0.id == card.id }).state == .waitingForInput,
+                "the hold is the operator's, and it ends the moment they drag the card out")
+    }
+
     // MARK: - Bug 2: after a turn, the agent AWAITS YOU — not DONE, not QUEUE
 
     /// The hook stream a real "wait 20 seconds, then say hello" turn produces, each

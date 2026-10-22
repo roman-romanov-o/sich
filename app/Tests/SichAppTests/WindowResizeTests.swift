@@ -57,6 +57,43 @@ struct WindowResizeTests {
         #expect(window.frame.height == 500)
     }
 
+    /// Drill-in header quota readout is a single long label — without truncation it
+    /// pins the window wider than a laptop screen and the terminal reads cut off.
+    @Test func drilledInWithLongQuotaHeaderStaysShrunk() throws {
+        let shell = BoardShell(seeds: [
+            BoardSeed(sessionID: "demo/one", projectDir: "~/demo",
+                      agent: .claude, flow: .b, state: .running, scrollback: "ready"),
+        ])
+        let root = shell.buildContentForTesting()
+        let card = try #require(shell.cards.first)
+        shell.drill(into: card)
+        shell.drillIn.updateQuota([
+            QuotaGauge(provider: "anthropic", pool: "interactive",
+                       state: .active, confidence: .measured, remainingFraction: 0.83),
+            QuotaGauge(provider: "anthropic", pool: "interactive_weekly",
+                       state: .active, confidence: .measured, remainingFraction: 0.90),
+            QuotaGauge(provider: "antigravity", pool: "antigravity",
+                       state: .active, confidence: .measured, remainingFraction: 1.0),
+            QuotaGauge(provider: "codex", pool: "codex",
+                       state: .active, confidence: .measured, remainingFraction: 0.55),
+            QuotaGauge(provider: "cursor", pool: "cursor",
+                       state: .active, confidence: .measured, remainingFraction: 0.72),
+        ])
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1400, height: 860),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered, defer: false
+        )
+        window.contentView = root
+        window.layoutIfNeeded()
+
+        window.setFrame(NSRect(x: 0, y: 0, width: 700, height: 500), display: true)
+        window.layoutIfNeeded()
+
+        #expect(window.frame.width == 700)
+        #expect(window.frame.height == 500)
+    }
+
     /// The launch-sized window must not be inflated by its own content either —
     /// this is what pushed the real board to 2053pt on an 1800pt screen.
     @Test func contentNeverGrowsTheWindow() {

@@ -117,8 +117,14 @@ private func row(_ palette: CreateCardPalette, titled title: String) throws -> P
 
 /// The launched argv with the minted card id blanked, so two independently created
 /// cards can be compared for "the same command" without their ids getting in the way.
+/// Every card mints its own id AND its own claude conversation; both ride the argv.
 private func normalized(_ argv: [String], cardID: UUID) -> [String] {
-    argv.map { $0.replacingOccurrences(of: cardID.uuidString, with: "<card-id>") }
+    argv.map {
+        $0.replacingOccurrences(of: cardID.uuidString, with: "<card-id>")
+            .replacingOccurrences(
+                of: "--session-id [0-9a-f-]{36}", with: "--session-id <conversation>",
+                options: .regularExpression)
+    }
 }
 
 /// What a launch actually produced: the argv, and the session the shell then stamps
@@ -140,6 +146,13 @@ private final class LaunchedArgv: @unchecked Sendable {
     var recordedSpec: RemoteSpecSnapshot? {
         lock.lock(); defer { lock.unlock() }
         return launchedSession?.remoteSpec.map(RemoteSpecSnapshot.init(spec:))
+    }
+
+    /// The conversation id the shell pinned by auto-typing `claude` — nil when the
+    /// create path (correctly) typed nothing into the fresh pane.
+    var claudeConversation: UUID? {
+        lock.lock(); defer { lock.unlock() }
+        return launchedSession?.claudeSessionID
     }
 }
 
@@ -329,4 +342,49 @@ func theRemoteAlertIsRetiredAndThePaletteCarriesIt() throws {
     let card = try #require(board.shell.cards.last, "the palette alone still creates the card")
     #expect(card.sessionID == "remote/far.invalid/agent")
     #expect(board.launched.argv.first == "/usr/bin/ssh")
+}
+
+// MARK: - Windows (psmux) hosts
+
+/// A Windows box on plain OpenSSH: the operator flips ONE toggle on the folder stage
+/// (a real dispatched click) and the whole card family follows — the launched argv
+/// speaks psmux instead of tmux, no `claude` is auto-typed at what is really a
+/// password prompt, the spec persists its kind for restore, and the board remembers
+/// the host so the toggle comes pre-checked next time.
+@MainActor
+@Test("a Windows host toggled on speaks psmux, starts claude far-side, and is remembered")
+func windowsToggleMakesAPsmuxTerminalOnlyCard() throws {
+    let board = makeBoard()
+    defer { board.teardown() }
+
+    let palette = try openPalette(board)
+    palette.hostField.stringValue = "roman@winbox.invalid"
+    returnKey(in: board.window)
+    let toggle = try #require(palette.windowsToggleForTesting, "the folder stage offers the host-type toggle")
+    #expect(!toggle.isOn, "POSIX is the default — Windows is an opt-in")
+    try click(toggle, root: board.root, window: board.window)
+    #expect(toggle.isOn, "a genuine leftMouseDown flips it on")
+    palette.dirField.stringValue = #"C:\Dev\app"#
+    returnKey(in: board.window)
+    palette.nameField.stringValue = "agent"
+    returnKey(in: board.window)
+
+    let card = try #require(board.shell.cards.last, "the windows card was created")
+    #expect(card.sessionID == "remote/winbox.invalid/agent")
+    let conversation = try #require(board.launched.claudeConversation,
+                                    "the conversation id exists — it rides the argv, not keystrokes")
+    #expect(board.launched.argv.last
+            == "psmux -CC new-session -A -s agent -e SICH_CARD_ID=\(card.id.uuidString)"
+            + #" -c "C:\Dev\app""#
+            + " -- powershell -NoExit -Command claude --session-id "
+            + conversation.uuidString.lowercased(),
+            "the far-side command is psmux tokens starting claude, nothing POSIX, nothing typed")
+    #expect(board.launched.recordedSpec?.hostKind == .windowsPsmux,
+            "the kind rides the persisted spec, so a restore re-emits psmux")
+
+    // The choice sticks per host: reopening on the same box pre-checks the toggle.
+    let reopened = try openPalette(board)
+    reopened.hostField.stringValue = "roman@winbox.invalid"
+    returnKey(in: board.window)
+    #expect(try #require(reopened.windowsToggleForTesting).isOn, "the board remembers a Windows host")
 }

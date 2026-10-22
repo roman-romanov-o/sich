@@ -38,8 +38,8 @@ let isE2E = ProcessInfo.processInfo.environment["SICH_E2E"] != nil
 // installed. Run via `./dev.sh` to get the `-Xlinker -interposable` flag it needs.
 if !isE2E { DevHotReload.enable() }
 // The real app launch is the ONLY place the hidden `/usage` probe may spawn
-// claude — tests and the E2E capture never set this, so they never start a process.
-ClaudeUsageProbe.spawningEnabled = !isE2E
+// claude/agent — tests and the E2E capture never set this, so they never start a process.
+HiddenTUIProbe.spawningEnabled = !isE2E
 // Same discipline for the remote hook channel: only the real launch may run `ssh`,
 // so `swift test` and the capture can never reach the network (US-005).
 SSHCommandRunner.spawningEnabled = !isE2E

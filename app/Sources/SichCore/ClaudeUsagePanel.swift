@@ -48,12 +48,14 @@ public enum ClaudeUsagePanel {
     /// Map a parsed panel to the interactive-pool source. Identical binding logic
     /// to `UsageEndpointReader.interactiveSource`: the constraint with LESS
     /// remaining drives the gauge, its reset and refill kind included.
-    public static func interactiveSource(from reading: Reading) -> QuotaSourceInput {
+    public static func interactiveSource(
+        from reading: Reading, poolPrefix: String = "interactive"
+    ) -> QuotaSourceInput {
         let windowBinds = reading.sessionUsedPercent >= reading.weekUsedPercent
         let used = windowBinds ? reading.sessionUsedPercent : reading.weekUsedPercent
         let remaining = max(0.0, min(1.0, 1.0 - used / 100.0))
         return QuotaSourceInput(
-            provider: "anthropic", pool: "interactive",
+            provider: "anthropic", pool: poolPrefix,
             reading: QuotaSourceReading(
                 available: true,
                 inferred: false,               // scraped off claude's own panel → "measured"
@@ -65,13 +67,15 @@ public enum ClaudeUsagePanel {
         )
     }
 
-    public static func interactiveDisplaySources(from reading: Reading) -> [QuotaSourceInput] {
+    public static func interactiveDisplaySources(
+        from reading: Reading, poolPrefix: String = "interactive"
+    ) -> [QuotaSourceInput] {
         [
-            splitSource(pool: "interactive_5h",
+            splitSource(pool: "\(poolPrefix)_5h",
                         used: reading.sessionUsedPercent,
                         reset: reading.sessionResetsAt,
                         refill: .rollingWindow),
-            splitSource(pool: "interactive_weekly",
+            splitSource(pool: "\(poolPrefix)_weekly",
                         used: reading.weekUsedPercent,
                         reset: reading.weekResetsAt,
                         refill: .weekly),

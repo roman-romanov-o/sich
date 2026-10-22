@@ -87,7 +87,9 @@ private let kReturn: UInt16 = 36
     #expect(palette.stage == .project)
     pressKey(kReturn, chars: "\r", in: window)     // pick the recent project
     #expect(palette.stage == .harness)
-    pressKey(kReturn, chars: "\r", in: window)     // pick Claude Code → task stage
+    pressKey(kReturn, chars: "\r", in: window)     // pick Claude Code → account stage
+    #expect(palette.stage == .agentAccount)
+    pressKey(kReturn, chars: "\r", in: window)     // default account → task stage
     #expect(palette.stage == .task)
 
     let sahaCard = try #require(palette.flowCards.last) // Saha is the second choice
@@ -115,7 +117,8 @@ private let kReturn: UInt16 = 36
 
     pressKey(kReturn, chars: "\r", in: window)     // "This Mac"
     pressKey(kReturn, chars: "\r", in: window)     // project
-    pressKey(kReturn, chars: "\r", in: window)     // harness → task
+    pressKey(kReturn, chars: "\r", in: window)     // harness → account
+    pressKey(kReturn, chars: "\r", in: window)     // default account → task
     #expect(palette.stage == .task)
 
     let sahaCard = try #require(palette.flowCards.last) // Saha is the second choice
@@ -134,13 +137,14 @@ private let kReturn: UInt16 = 36
         recents: [PaletteProject(path: proj.path, activeCards: 0)], folders: [])
 
     var captured: (title: String, dir: String, harness: CreateCardPalette.Harness, inWorktree: Bool)?
-    palette.confirmInteractive = { title, dir, harness, inWorktree in
+    palette.confirmInteractive = { title, dir, harness, inWorktree, _ in
         captured = (title, dir, harness, inWorktree)
     }
 
     pressKey(kReturn, chars: "\r", in: window)     // "This Mac"
     pressKey(kReturn, chars: "\r", in: window)     // project
-    pressKey(kReturn, chars: "\r", in: window)     // harness (Claude Code) → task
+    pressKey(kReturn, chars: "\r", in: window)     // harness (Claude Code) → account
+    pressKey(kReturn, chars: "\r", in: window)     // default account → task
     #expect(palette.stage == .task)
 
     let interactiveCard = try #require(palette.flowCards.first)
@@ -149,7 +153,7 @@ private let kReturn: UInt16 = 36
     #expect(interactiveCard.isSelected, "interactive terminal is the selected first choice")
     #expect(!sahaCard.isSelected, "Saha is the unselected second choice")
     #expect(palette.navRows.isEmpty, "interactive terminal is selected by default")
-    #expect(palette.worktreeToggle != nil, "the first/default choice shows interactive options")
+    #expect(palette.worktreeToggleForTesting != nil, "the first/default choice shows interactive options")
 
     palette.nameField.stringValue = "poke around"
     pressKey(kReturn, chars: "\r", in: window)     // Return in the field editor confirms
@@ -161,6 +165,55 @@ private let kReturn: UInt16 = 36
     #expect(!got.inWorktree, "own-worktree is OFF by default — a worktree is an opt-in")
 }
 
+/// Cursor sits after Codex in the harness list and carries through the same way.
+@MainActor
+@Test func cursorHarnessReachesInteractiveConfirmViaRealEvents() throws {
+    let proj = URL(fileURLWithPath: "/tmp/demo-project", isDirectory: true)
+    let (palette, _, window) = makePalette(
+        recents: [PaletteProject(path: proj.path, activeCards: 0)], folders: [])
+
+    var captured: CreateCardPalette.Harness?
+    palette.confirmInteractive = { _, _, harness, _, _ in captured = harness }
+
+    pressKey(kReturn, chars: "\r", in: window)     // "This Mac"
+    pressKey(kReturn, chars: "\r", in: window)     // project
+    pressKey(125, in: window)                      // Claude → Codex
+    pressKey(125, in: window)                      // Codex → Cursor
+    pressKey(kReturn, chars: "\r", in: window)     // Cursor → account
+    #expect(palette.stage == .agentAccount)
+    pressKey(kReturn, chars: "\r", in: window)     // default account → task
+    #expect(palette.stage == .task)
+    palette.nameField.stringValue = "try cursor"
+    pressKey(kReturn, chars: "\r", in: window)
+
+    #expect(captured == .cursor)
+    #expect(captured?.cardAgent == .cursor)
+}
+
+/// Antigravity sits after Cursor in the harness list.
+@MainActor
+@Test func antigravityHarnessReachesInteractiveConfirmViaRealEvents() throws {
+    let proj = URL(fileURLWithPath: "/tmp/demo-project", isDirectory: true)
+    let (palette, _, window) = makePalette(
+        recents: [PaletteProject(path: proj.path, activeCards: 0)], folders: [])
+
+    var captured: CreateCardPalette.Harness?
+    palette.confirmInteractive = { _, _, harness, _, _ in captured = harness }
+
+    pressKey(kReturn, chars: "\r", in: window)     // "This Mac"
+    pressKey(kReturn, chars: "\r", in: window)     // project
+    pressKey(125, in: window)                      // Claude → Codex
+    pressKey(125, in: window)                      // Codex → Cursor
+    pressKey(125, in: window)                      // Cursor → Antigravity
+    pressKey(kReturn, chars: "\r", in: window)     // Antigravity → task
+    #expect(palette.stage == .task)
+    palette.nameField.stringValue = "try agy"
+    pressKey(kReturn, chars: "\r", in: window)
+
+    #expect(captured == .antigravity)
+    #expect(captured?.cardAgent == .antigravity)
+}
+
 /// Codex path: selecting Codex at the harness stage carries through the interactive
 /// task confirmation, instead of collapsing into the old Claude/bare-shell Boolean.
 @MainActor
@@ -170,12 +223,14 @@ private let kReturn: UInt16 = 36
         recents: [PaletteProject(path: proj.path, activeCards: 0)], folders: [])
 
     var captured: CreateCardPalette.Harness?
-    palette.confirmInteractive = { _, _, harness, _ in captured = harness }
+    palette.confirmInteractive = { _, _, harness, _, _ in captured = harness }
 
     pressKey(kReturn, chars: "\r", in: window)     // "This Mac"
     pressKey(kReturn, chars: "\r", in: window)     // project
     pressKey(125, in: window)                      // harness: Claude → Codex
-    pressKey(kReturn, chars: "\r", in: window)     // Codex → task
+    pressKey(kReturn, chars: "\r", in: window)     // Codex → account
+    #expect(palette.stage == .agentAccount)
+    pressKey(kReturn, chars: "\r", in: window)     // default account → task
     #expect(palette.stage == .task)
 
     #expect(palette.navRows.isEmpty, "interactive terminal remains the default for Codex")
@@ -194,13 +249,14 @@ private let kReturn: UInt16 = 36
     let (palette, root, window) = makePalette(
         recents: [PaletteProject(path: proj.path, activeCards: 0)], folders: [])
     var captured: Bool?
-    palette.confirmInteractive = { _, _, _, inWorktree in captured = inWorktree }
+    palette.confirmInteractive = { _, _, _, inWorktree, _ in captured = inWorktree }
 
     pressKey(kReturn, chars: "\r", in: window)     // "This Mac"
     pressKey(kReturn, chars: "\r", in: window)     // project
-    pressKey(kReturn, chars: "\r", in: window)     // harness → task
+    pressKey(kReturn, chars: "\r", in: window)     // harness → account
+    pressKey(kReturn, chars: "\r", in: window)     // default account → task
 
-    let toggle = try #require(palette.worktreeToggle, "interactive stage shows the worktree toggle")
+    let toggle = try #require(palette.worktreeToggleForTesting, "interactive stage shows the worktree toggle")
     #expect(!toggle.isOn, "the toggle starts off")
     try clickRow(toggle, root: root, window: window)   // a genuine leftMouseDown flips it on
     #expect(toggle.isOn, "clicking the toggle turns it on")

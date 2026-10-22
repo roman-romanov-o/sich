@@ -1,16 +1,14 @@
-import CryptoKit
 import Foundation
 import Testing
 
 @testable import SichCore
 
-/// ts-unit-02 — the dedup keys for both line kinds (TC-UNIT-008..011).
+/// ts-unit-02 — the raw-line dedup key (TC-UNIT-008).
 ///
 /// A reconnect re-runs `tail -n 200 -F`, so the same bytes come back. What must not
-/// come back is a card that moved backwards or a diff that landed twice. Both keys
-/// are asserted here against the two look-alike implementations that would pass a
-/// naive test and fail in production: a byte cursor, and a key computed on the
-/// NORMALIZED value.
+/// come back is a card that moved backwards. The key is asserted here against the
+/// two look-alike implementations that would pass a naive test and fail in
+/// production: a byte cursor, and a key computed on the NORMALIZED value.
 @Suite("Remote dedup keys (ts-unit-02)")
 struct RemoteDedupTests {
 
@@ -91,59 +89,7 @@ struct RemoteDedupTests {
         #expect(window.count == 4)
     }
 
-    // MARK: - US-008 AC-2: a turn diff keys on FOUR parts
-
-    @Test("TC-UNIT-009 / AC-2: two Stops in one iteration are two turns, not one")
-    func twoStopsInOneIterationAreTwoDistinctKeys() {
-        // `iteration` increments on UserPromptSubmit only; `turn_diff` fires on every
-        // Stop and merely READS it, against a checkpoint that is never cleared. One
-        // turn, two Stops, two different diffs, one iteration number.
-        let first = turnDiff(iteration: 3, body: "--- a/x\n+++ b/x\n@@\n+one\n")
-        let second = turnDiff(iteration: 3, body: "--- a/x\n+++ b/x\n@@\n+one\n+two\n")
-
-        #expect(TurnDiffKey(first) != TurnDiffKey(second),
-                "keyed on (host, session, iteration) alone the second diff is eaten")
-        #expect(TurnDiffKey(first) == TurnDiffKey(first))
-    }
-
-    @Test("TC-UNIT-009 / AC-2: the key is host- and session-qualified")
-    func theDiffKeyIsHostAndSessionQualified() {
-        let body = "--- a/x\n+++ b/x\n@@\n+same\n"
-        let base = turnDiff(iteration: 1, body: body, host: "alpha.invalid")
-
-        #expect(TurnDiffKey(base) != TurnDiffKey(turnDiff(iteration: 1, body: body, host: "beta.invalid")))
-        #expect(TurnDiffKey(base) != TurnDiffKey(turnDiff(iteration: 1, body: body, host: nil)))
-        #expect(TurnDiffKey(base) != TurnDiffKey(
-            turnDiff(iteration: 1, body: body, host: "alpha.invalid", sessionID: "other")))
-        #expect(TurnDiffKey(base) != TurnDiffKey(turnDiff(iteration: 2, body: body, host: "alpha.invalid")))
-    }
-
-    /// The replayed line is the SAME bytes, but the forwarder stamps whole seconds and
-    /// a stamp-less line falls back to arrival — so a key that touched `timestamp` (or
-    /// the volatile `cwd`) would call the replay news.
-    @Test("TC-UNIT-010 / AC-2: the key ignores timestamp and cwd")
-    func theDiffKeyIgnoresTimestampAndCwd() {
-        let body = "--- a/x\n+++ b/x\n@@\n+same\n"
-        let live = TurnDiff(
-            sessionID: "s", cwd: "/srv/app", iteration: 4,
-            timestamp: Date(timeIntervalSince1970: 1_000), unifiedDiff: body, host: "far.invalid")
-        let replayed = TurnDiff(
-            sessionID: "s", cwd: "/tmp/checkout", iteration: 4,
-            timestamp: Date(timeIntervalSince1970: 9_999), unifiedDiff: body, host: "far.invalid")
-
-        #expect(live != replayed, "the values differ — which is why the key is not one")
-        #expect(TurnDiffKey(live) == TurnDiffKey(replayed))
-    }
-
     // MARK: - Fixtures
-
-    private func turnDiff(
-        iteration: Int, body: String, host: String? = "far.invalid", sessionID: String = "s"
-    ) -> TurnDiff {
-        TurnDiff(
-            sessionID: sessionID, iteration: iteration,
-            timestamp: Date(timeIntervalSince1970: 1_000), unifiedDiff: body, host: host)
-    }
 
     private struct RelayParts {
         let relay: RemoteEventRelay

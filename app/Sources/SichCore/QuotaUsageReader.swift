@@ -54,41 +54,50 @@ public enum QuotaUsageReader {
         return value
     }
 
-    /// The whole job: read the transcripts and assemble the four sources, mirroring
-    /// `live.build_quota_response().sources`. Returns exactly four inputs, in this
+    /// The whole job: read the transcripts and assemble the six sources, mirroring
+    /// `live.build_quota_response().sources`. Returns exactly six inputs, in this
     /// fixed order, NEVER netted against one another:
     ///   [0] anthropic/interactive       — estimated (inferred:true) from JSONL
     ///   [1] anthropic/agent_sdk_credit  — unknown (not locally observable)
     ///   [2] codex/codex                 — unknown
     ///   [3] gemini/gemini               — unknown
+    ///   [4] cursor/cursor               — unknown until the `/usage` probe reads it
+    ///   [5] antigravity/antigravity     — unknown until the `/usage` probe reads it
     ///
     /// `now` is injected (no inline system-clock read — testability) and truncated to
     /// whole seconds so the serialized `reset` stays second-resolution, matching the
     /// Python `build_quota_response`. `projectsDir` defaults to `~/.claude/projects`
     /// and is overridable for fixtures.
+    // periphery:ignore - test-only seam (scan runs with exclude_tests)
     public static func read(now: Date, projectsDir: URL = defaultProjectsDir) -> [QuotaSourceInput] {
         let truncatedNow = Date(timeIntervalSince1970: now.timeIntervalSince1970.rounded(.towardZero))
         let events = readUsageEvents(now: truncatedNow, projectsDir: projectsDir)
-        return [interactiveSource(now: truncatedNow, events: events)] + nonLocalSources
+        return [interactiveSource(now: truncatedNow, events: events, poolPrefix: "interactive")]
+            + nonLocalSources
     }
 
-    /// Display-only split for the quota table: unlike the routing gauge above,
-    /// this exposes the 5h and weekly constraints separately so the UI does not
-    /// fake a second Claude column.
-    public static func interactiveDisplaySources(
-        now: Date, projectsDir: URL = defaultProjectsDir
+    /// Interactive-pool sources for one Claude profile — main gauge plus 5h/weekly display split.
+    public static func readInteractiveSources(
+        now: Date, projectsDir: URL, poolPrefix: String = "interactive"
     ) -> [QuotaSourceInput] {
         let truncatedNow = Date(timeIntervalSince1970: now.timeIntervalSince1970.rounded(.towardZero))
         let events = readUsageEvents(now: truncatedNow, projectsDir: projectsDir)
-        let windowUsed = activeWindowUsage(events, now: truncatedNow)
+        return [interactiveSource(now: truncatedNow, events: events, poolPrefix: poolPrefix)]
+            + interactiveDisplaySources(now: truncatedNow, events: events, poolPrefix: poolPrefix)
+    }
+
+    private static func interactiveDisplaySources(
+        now: Date, events: [UsageEvent], poolPrefix: String
+    ) -> [QuotaSourceInput] {
+        let windowUsed = activeWindowUsage(events, now: now)
         let weeklyUsed = events.reduce(0.0) { $0 + $1.amount }
         return [
-            splitSource(pool: "interactive_5h",
+            splitSource(pool: "\(poolPrefix)_5h",
                         remaining: fraction(windowCap() - windowUsed, cap: windowCap()),
-                        reset: windowReset(events, now: truncatedNow),
+                        reset: windowReset(events, now: now),
                         refill: .rollingWindow,
                         inferred: true),
-            splitSource(pool: "interactive_weekly",
+            splitSource(pool: "\(poolPrefix)_weekly",
                         remaining: fraction(weeklyCap() - weeklyUsed, cap: weeklyCap()),
                         reset: nil,
                         refill: .weekly,
@@ -96,13 +105,15 @@ public enum QuotaUsageReader {
         ]
     }
 
-    /// The three non-locally-observable pools, always `unknown` (never 0, never
+    /// The five non-locally-observable pools, always `unknown` (never 0, never
     /// 100%). Constant — exposed so the live-endpoint path can prepend the real
     /// interactive reading without re-walking the JSONL just to rebuild these.
     public static let nonLocalSources: [QuotaSourceInput] = [
         unknownSource(provider: "anthropic", pool: "agent_sdk_credit"),
         unknownSource(provider: "codex", pool: "codex"),
         unknownSource(provider: "gemini", pool: "gemini"),
+        unknownSource(provider: "cursor", pool: "cursor"),
+        unknownSource(provider: "antigravity", pool: "antigravity"),
     ]
 
     /// `~/.claude/projects` — the default transcript root.
@@ -116,14 +127,16 @@ public enum QuotaUsageReader {
     /// The interactive Anthropic pool, derived from window math (always `inferred`).
     /// An empty/absent transcript dir reads as fresh real-zero usage (full bar) —
     /// available + active — NOT `unknown` (the three non-local pools own that state).
-    private static func interactiveSource(now: Date, events: [UsageEvent]) -> QuotaSourceInput {
+    private static func interactiveSource(
+        now: Date, events: [UsageEvent], poolPrefix: String = "interactive"
+    ) -> QuotaSourceInput {
         let weeklyUsed = events.reduce(0.0) { $0 + $1.amount }
         let result = interactiveRemaining(
             usage: events, now: now,
             windowCap: windowCap(), weeklyCap: weeklyCap(), weeklyUsed: weeklyUsed
         )
         return QuotaSourceInput(
-            provider: "anthropic", pool: "interactive",
+            provider: "anthropic", pool: poolPrefix,
             reading: QuotaSourceReading(
                 available: true,
                 inferred: true,

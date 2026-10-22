@@ -42,7 +42,31 @@ public enum HookNormalizer {
         "StopFailure": .errorExit,
         "SessionEnd": .sessionEnd,
         "session_end": .sessionEnd,
+        // Cursor's hook vocabulary (camelCase, `~/.cursor/hooks.json`). `stop` is the
+        // agent-loop end (= Claude's Stop), `sessionEnd` the conversation close.
+        "sessionStart": .sessionStart,
+        "beforeSubmitPrompt": .userInput,
+        "preToolUse": .toolUse,
+        "postToolUse": .toolUse,
+        "postToolUseFailure": .errorExit,
+        "preCompact": .compaction,
+        "subagentStart": .subagentStart,
+        "subagentStop": .subagentStop,
+        "sessionEnd": .sessionEnd,
+        // Antigravity (`~/.gemini/config/hooks.json`) has five events and NO name
+        // field on its payload — the installed command names the event and the
+        // hook script stamps it in. Model-invocation edges are "working" too.
+        "PreInvocation": .toolUse,
+        "PostInvocation": .toolUse,
     ]
+
+    /// Hook event names that precede a tool call — the point where a test runner is
+    /// recognised (Claude/Codex `PreToolUse`, Cursor `preToolUse`).
+    static let preToolUseNames: Set<String> = ["PreToolUse", "preToolUse"]
+
+    /// Tool names whose `tool_input.command` is a shell line (Claude/Codex `Bash`,
+    /// Cursor `Shell`).
+    static let shellToolNames: Set<String> = ["Bash", "Shell"]
 
     /// Substrings in a Bash command that mean "this tool call is a test run".
     /// Ported verbatim from `hook_receiver._TEST_RUNNERS`.
@@ -66,9 +90,13 @@ public enum HookNormalizer {
             kind: resolveKind(payload),
             source: .hook,
             agent: resolveAgent(payload),
-            sessionID: payload["session_id"] as? String ?? "",
+            // Cursor keys the conversation as `conversation_id`; the field means the
+            // same thing (the resumable chat) so it folds into `sessionID`.
+            sessionID: payload["session_id"] as? String
+                ?? payload["conversation_id"] as? String
+                ?? payload["conversationId"] as? String ?? "",
             timestamp: SignalTimestamp.parse(payload["timestamp"], arrival: arrival),
-            cwd: payload["cwd"] as? String,
+            cwd: payload["cwd"] as? String ?? firstWorkspaceRoot(payload),
             cardID: payload["sich_card_id"] as? String,
             // Present only on a relayed line: the channel stamped it at ingestion
             // (US-003 AC-2) and it is what keeps two machines apart (US-004 AC-3).
@@ -88,7 +116,7 @@ public enum HookNormalizer {
     /// (port of `_resolve_kind`).
     private static func resolveKind(_ payload: [String: Any]) -> SignalKind {
         let name = payload["hook_event_name"] as? String ?? ""
-        if name == "PreToolUse" && isTestCommand(payload) {
+        if preToolUseNames.contains(name) && isTestCommand(payload) {
             return .testRunStart
         }
         // The idle nudge ("Claude is waiting for your input") is the turn boundary
@@ -114,6 +142,13 @@ public enum HookNormalizer {
         }
     }
 
+    /// Cursor carries no `cwd` on most events, only `workspace_roots` (Antigravity:
+    /// `workspacePaths`); the first root is the directory the agent was launched in.
+    private static func firstWorkspaceRoot(_ payload: [String: Any]) -> String? {
+        (payload["workspace_roots"] as? [String])?.first
+            ?? (payload["workspacePaths"] as? [String])?.first
+    }
+
     private static func resolveAgent(_ payload: [String: Any]) -> CardAgent {
         let raw = payload["sich_agent"] as? String
             ?? payload["_sich_agent"] as? String
@@ -125,7 +160,8 @@ public enum HookNormalizer {
     /// True when a `PreToolUse` Bash command invokes a known test runner
     /// (port of `_is_test_command`).
     private static func isTestCommand(_ payload: [String: Any]) -> Bool {
-        guard payload["tool_name"] as? String == "Bash" else { return false }
+        guard let tool = payload["tool_name"] as? String, shellToolNames.contains(tool)
+        else { return false }
         let command = (payload["tool_input"] as? [String: Any])?["command"] as? String ?? ""
         return testRunners.contains { command.contains($0) }
     }

@@ -5,7 +5,7 @@ import SichCore
 /// consistent. Its dark appearance grows outward from Ghostty's `#282c34`
 /// blue-charcoal terminal and uses Ghostty's default ANSI colours for accents.
 /// Semantic helpers (`stateColor`/
-/// `flowColor`/`agentColor`) keep the colour policy here, not smeared across views.
+/// `flowColor`) keep the colour policy here, not smeared across views.
 @MainActor
 enum BoardTheme {
     // MARK: - Surfaces (theme-aware Ghostty blue-charcoal dark ramp / canonical
@@ -20,20 +20,39 @@ enum BoardTheme {
     static let documentChrome = dynamic(dark: hex(0x171A20), light: hex(0xE7EDF2))  // chrome below the canvas
     static let cardStroke = dynamic(dark: hex(0x414956), light: hex(0xC8D2DA))      // cool light edge
     static let cardStrokeStrong = dynamic(dark: hex(0x596576), light: hex(0x9EACB8))
-    static let hairline = dynamic(dark: hex(0x343B46), light: hex(0xD3DCE3))
+    static let hairline = dynamic(dark: hex(0x2C323B), light: hex(0xD3DCE3))
     /// The NEEDS YOU column's warm-tinted background — the whole column reads amber.
-    static let needsYouColumn = dynamic(dark: hex(0x1A0F03), light: hex(0xFFF7E8))
+    static let needsYouColumn = dynamic(dark: hex(0x272220), light: hex(0xFFF7E8))
     /// A NEEDS YOU card's warm fill; stroke is `attention` (fresh) or `needsYouStroke` (aging).
-    static let needsYouCard = dynamic(dark: hex(0x2B1908), light: hex(0xFFF1D9))
+    static let needsYouCard = dynamic(dark: hex(0x3A2A1C), light: hex(0xFFF1D9))
     static let needsYouStroke = hex(0xB35C1F)   // orange700 — shared accent
+    /// PARKED — shelved / deferred; quieter than QUEUE.
+    static let parkedColumn = dynamic(dark: hex(0x1A1D22), light: hex(0xECEFF2))
+    static let parkedCard = dynamic(dark: hex(0x252930), light: hex(0xF4F6F8))
+    /// BLOCKED — waiting on someone/something outside the session (PR review, upstream).
+    static let blockedColumn = dynamic(dark: hex(0x271F22), light: hex(0xFFF0F0))
+    static let blockedCard = dynamic(dark: hex(0x3A2226), light: hex(0xFFE8E8))
+    /// A card's surface carries its column's meaning: a WORKING card sits on a cool
+    /// blue tint, a DONE card on a green one — so state reads before the title does.
+    /// Only fills here; outlines are reserved for states that ask for the operator.
+    static let workingCard = dynamic(dark: hex(0x252D3A), light: hex(0xEEF5FC))
+    static let doneCard = dynamic(dark: hex(0x262C25), light: hex(0xF2F8EA))
     /// The unfilled part of a quota gauge — the groove the fill runs in. Must read as
     /// *recessed* against the panel in both modes, so it darkens the dark canvas and
     /// darkens the light one too (a lighter-than-paper groove would vanish).
-    static let gaugeTrack = dynamic(dark: hex(0x262626), light: hex(0xCBD5DD))
+    static let gaugeTrack = dynamic(dark: hex(0x1B1F26), light: hex(0xCBD5DD))
     /// Text drawn *on top of* a gauge fill. Every fill colour the bar can take (green
     /// `done`, orange `attention`, red `alert`) is bright in both appearances, so this
     /// stays a fixed near-black rather than flipping with the theme.
     static let gaugeLabelOnFill = hex(0x08121C)
+    /// "Plenty left" — a calm sage, not the done-lime. Healthy capacity is the
+    /// normal state of the quota panel, so it must be the quietest fill there;
+    /// the orange/red tones are what the eye should find.
+    static let healthy = hex(0x7FA06F)
+    /// Harness logos on cards and quota rows. One neutral ink: the silhouette
+    /// already names the harness, and a brand colour per mark put Claude's orange
+    /// on nearly every card — the same orange that means NEEDS YOU.
+    static let harnessMark = dynamic(dark: hex(0xA3AAB5), light: hex(0x586975))
 
     // MARK: - Text (dark: light-on-dark; light: deliberately darker than Solarized
     // base greys so dense board labels stay readable on the neutral surface).
@@ -55,6 +74,10 @@ enum BoardTheme {
     static let codeInline = hex(0x20A896)        // solarized cyan
     /// Red for blocked/overdue accents.
     static let alert = hex(0xE84C3D)             // solarized red
+    /// Muted violet for quota-spent cards — distinct from agent-error red and
+    /// attention amber so "pool empty" reads at a glance without looking like
+    /// "needs you".
+    static let quotaBlocked = hex(0x9B7BB8)
     /// Deeper crimson used ONLY as the global attention badge FILL, so its
     /// white text clears WCAG AA (the bright `alert` red at white text falls short).
     static let attentionBadge = hex(0xB0302A)
@@ -156,21 +179,31 @@ enum BoardTheme {
         (size * boardFontScale * responsiveFontScale).rounded(.toNearestOrAwayFromZero)
     }
 
-    // Type policy: sans carries prose, mono carries data (counts, %, durations,
-    // paths, commands), and the card title anchors by SIZE, not weight — it is
-    // the largest text on a card face while staying medium, so cards read calm.
+    // Type policy: sans carries prose; numbers (counts, %, durations, countdowns)
+    // set in SF Pro with tabular digits so they align and change width-stably
+    // without switching typeface mid-line; SF Mono is reserved for code-shaped
+    // text (commands, pool ids, the terminal). The card title anchors by SIZE, not weight — it is
+    // the largest text on a card face at REGULAR weight. The title is the one
+    // line the operator actually reads across a full board, and at medium a
+    // column of them read as a wall of emphasis (8 Sep type study).
 
     static var mono: NSFont { .monospacedSystemFont(ofSize: scaled(11), weight: .regular) }
     static var monoBold: NSFont { .monospacedSystemFont(ofSize: scaled(11), weight: .semibold) }
     static var monoSmall: NSFont { .monospacedSystemFont(ofSize: scaled(10), weight: .regular) }
+    /// Numeric data in SF Pro with tabular (fixed-width) digits.
+    static var numeric: NSFont { .monospacedDigitSystemFont(ofSize: scaled(11), weight: .regular) }
+    static var numericBold: NSFont { .monospacedDigitSystemFont(ofSize: scaled(11), weight: .semibold) }
+    static var numericSmall: NSFont { .monospacedDigitSystemFont(ofSize: scaled(10), weight: .regular) }
     /// The percent riding inside a quota bar — semibold so it holds up against the fill.
-    static var gaugeLabel: NSFont { .monospacedSystemFont(ofSize: scaled(11), weight: .semibold) }
+    static var gaugeLabel: NSFont { .monospacedDigitSystemFont(ofSize: scaled(11), weight: .semibold) }
     static var title: NSFont { .systemFont(ofSize: scaled(13), weight: .semibold) }
     /// Column wayfinding caps — tracking (see ``caps(_:color:)``), not weight,
     /// does the work, so headers stop competing with card titles.
     static var columnTitle: NSFont { .systemFont(ofSize: scaled(11), weight: .semibold) }
     /// The card headline — the size anchor on a card face (see type policy above).
-    static var cardTitle: NSFont { .systemFont(ofSize: scaled(15), weight: .medium) }
+    static var cardTitle: NSFont { .systemFont(ofSize: scaled(15), weight: .regular) }
+    /// A finished card's title — a step below the live card headline, tracking zoom.
+    static var doneTitle: NSFont { .systemFont(ofSize: scaled(13), weight: .regular) }
     static var sansSmall: NSFont { .systemFont(ofSize: scaled(11), weight: .medium) }
     static var sansTiny: NSFont { .systemFont(ofSize: scaled(10), weight: .regular) }
     /// Sans prose emphasis — advisory headlines. Prose never sets in mono.
@@ -181,11 +214,15 @@ enum BoardTheme {
     static var chip: NSFont { .systemFont(ofSize: scaled(10), weight: .medium) }
 
     /// An ALL-CAPS wayfinding label with letter tracking, e.g. column headers.
-    static func caps(_ text: String, color: NSColor) -> NSAttributedString {
+    /// Small caps want *positive* tracking — the one place the board adds it.
+    static func caps(_ text: String, color: NSColor, font: NSFont = columnTitle) -> NSAttributedString {
         NSAttributedString(string: text, attributes: [
-            .font: columnTitle, .kern: 0.6, .foregroundColor: color,
+            .font: font, .kern: 0.6, .foregroundColor: color,
         ])
     }
+
+    /// The smaller caps tier — table headers inside a panel (quota LEFT / 5H / WEEKLY).
+    static var capsSmall: NSFont { .systemFont(ofSize: scaled(10), weight: .semibold) }
 
     /// The card headline as an attributed string — one font for EVERY title so
     /// the column scans as a uniform list, with tightened two-line leading (SF
@@ -204,17 +241,23 @@ enum BoardTheme {
         ])
     }
 
-    /// Prose set in sans with its embedded data tokens (percentages, durations,
-    /// /commands) picked back out into mono — the sans-for-prose / mono-for-data
-    /// rule applied inside a single line.
+    /// Prose set in sans with its embedded tokens picked out: `/commands` in SF
+    /// Mono (they are code), percentages and durations in tabular-digit SF Pro
+    /// (they are numbers — same face as the prose, steady width).
     static func prose(_ text: String, font: NSFont, color: NSColor) -> NSAttributedString {
         let result = NSMutableAttributedString(
             string: text, attributes: [.font: font, .foregroundColor: color])
-        let mono = NSFont.monospacedSystemFont(ofSize: font.pointSize, weight: .regular)
-        let pattern = #"/[\w:-]+|\d+(?:\.\d+)?%|\d+[dhm]\b"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return result }
-        for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
-            result.addAttribute(.font, value: mono, range: match.range)
+        let range = NSRange(text.startIndex..., in: text)
+        let styles: [(pattern: String, font: NSFont)] = [
+            (#"/[\w:-]+"#, .monospacedSystemFont(ofSize: font.pointSize, weight: .regular)),
+            (#"\d+(?:\.\d+)?%|\d+[dhm]\b"#,
+             .monospacedDigitSystemFont(ofSize: font.pointSize, weight: .regular)),
+        ]
+        for style in styles {
+            guard let regex = try? NSRegularExpression(pattern: style.pattern) else { continue }
+            for match in regex.matches(in: text, range: range) {
+                result.addAttribute(.font, value: style.font, range: match.range)
+            }
         }
         return result
     }
@@ -225,6 +268,7 @@ enum BoardTheme {
     static func stateColor(_ state: CardState) -> NSColor {
         switch state {
         case .idle: return hex(0x667980)      // base01
+        case .parked: return hex(0x728797)   // base00 — shelved, not loud
         case .running: return hex(0x3A9ADE)   // solarized blue — the "working" pulse
         case .runningTests: return hex(0x7A5FB8) // solarized violet
         case .waitingForInput: return hex(0xD97A3A) // solarized orange
@@ -243,19 +287,10 @@ enum BoardTheme {
         flow == .a ? hex(0x7A5FB8) : hex(0x20A896)
     }
 
-    /// Which agentic CLI drives the card — a small colour dot on the card face.
-    static func agentColor(_ agent: CardAgent) -> NSColor {
-        switch agent {
-        case .claude: return hex(0xD97A3A)    // solarized orange
-        case .codex: return dynamic(dark: hex(0xE8EAED), light: hex(0x1A1A1A))  // OpenAI monochrome ink (black; inverted on dark so it stays legible)
-        case .gemini: return hex(0x3A9ADE)    // solarized blue
-        }
-    }
-
     /// The harness's official brand mark — Anthropic's, OpenAI's, and Google
     /// Gemini's actual logos, vendored as vector PDFs under `Resources/` and rendered
     /// tinted by ``HarnessBadge``. Vector so a 16pt badge stays crisp on retina; a
-    /// single silhouette per mark so ``agentColor`` can tint it to the two-flow palette.
+    /// single silhouette per mark so ``harnessMark`` can tint it one neutral ink.
     /// Loaded once and cached — the PDF parse is not repeated per card.
     static func agentMark(_ agent: CardAgent) -> NSImage? {
         if let cached = markCache[agent] { return cached }
@@ -264,6 +299,8 @@ enum BoardTheme {
         case .claude: name = "claude"
         case .codex: name = "codex"
         case .gemini: name = "gemini"
+        case .cursor: name = "cursor"
+        case .antigravity: name = "antigravity"
         }
         guard let url = markURL(name), let image = NSImage(contentsOf: url) else { return nil }
         markCache[agent] = image
@@ -292,6 +329,8 @@ enum BoardTheme {
         case .claude: return "\u{2733}\u{FE0E}"   // ✳ starburst
         case .codex: return "\u{2B21}\u{FE0E}"    // ⬡ hexagon
         case .gemini: return "\u{2726}\u{FE0E}"   // ✦ spark
+        case .cursor: return "\u{2B22}\u{FE0E}"   // ⬢ cube-ish hexagon
+        case .antigravity: return "\u{25B2}\u{FE0E}"   // ▲ lift-off
         }
     }
 
@@ -350,9 +389,12 @@ enum BoardTheme {
     }
     private static let repoColorSlotsKey = "sich.repoColorSlots"
     private static var repoColorSlots: [String: Int]?
+    /// Muted identity hues that stay clear of every *semantic* hue on the board —
+    /// no attention orange, alert red, done green, running blue or test violet — so
+    /// a project label can never be read as a card's state.
     private static let repoPalette = [
-        hex(0x20A896), hex(0x3A9ADE), hex(0x7A5FB8), hex(0xD97A3A),
-        hex(0x99CC00), hex(0xD4599F), hex(0xB39900), hex(0xE84C3D),
+        hex(0x4FB3A9), hex(0xC678A8), hex(0xC9A64B), hex(0x9C8FD6),
+        hex(0x5FA8B8), hex(0x93A97A), hex(0xC98F91), hex(0xB39E82),
     ]
 
     /// Display form of a card's project dir. A deep absolute path collapses to its

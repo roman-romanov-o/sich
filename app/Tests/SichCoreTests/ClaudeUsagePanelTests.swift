@@ -143,4 +143,18 @@ struct ClaudeUsagePanelTests {
         #expect(r.sessionResetsAt == nil)
         #expect(r.weekResetsAt == nil)
     }
+
+    @Test("ensureUsageProbeTrusted seeds hasTrustDialogAccepted for the probe dir")
+    func ensureUsageProbeTrustedSeedsProject() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("claude-probe-trust-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        ClaudeUsageProbe.ensureUsageProbeTrusted(configDir: dir.path)
+        let json = try JSONSerialization.jsonObject(with: Data(contentsOf: dir.appendingPathComponent(".claude.json")))
+            as? [String: Any]
+        let projects = json?["projects"] as? [String: Any]
+        let entry = projects?[HiddenTUIProbe.probeDir.path] as? [String: Any]
+        #expect(entry?["hasTrustDialogAccepted"] as? Bool == true)
+    }
 }

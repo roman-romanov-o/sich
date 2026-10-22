@@ -2,8 +2,8 @@ import AppKit
 import SichCore
 import UserNotifications
 
-/// The board window: hosts the mission-control ``BoardView``, the
-/// ``AttentionIndicator`` header, and the ``DrillInPanel`` overlay, wired to a
+/// The board window: hosts the mission-control ``BoardView``, the quota panel
+/// and the ``DrillInPanel`` overlay, wired to a
 /// ``SessionRegistry`` of seeded sessions. This is the launchable,
 /// screenshottable Phase 03 surface (US-002/003/005 rendering).
 ///
@@ -22,7 +22,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     // hierarchy — the iter-2 sign-off proved BoardSelection's value-type test does
     // not cover whether the board is actually hidden / restored on screen.
     let boardView = BoardView()
-    let attention = AttentionIndicator()
     /// Backlog storage and its page remain implemented, but the unfinished section
     /// has no board or menu entry point until it is ready to ship.
     let backlogPage = BacklogPage()
@@ -39,16 +38,21 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// The panel's width constraint — its constant tracks ``QuotaLayout/panelWidth``,
     /// which scales with the board font, so a zoom can't clip the gauges off-window.
     private var quotaWidth: NSLayoutConstraint?
+    /// The board + quota edges that depend on where the panel docks, one set per
+    /// ``QuotaDock`` side; exactly one is active (see ``dockQuota(_:)``).
+    private var trailingDockConstraints: [NSLayoutConstraint] = []
+    private var bottomDockConstraints: [NSLayoutConstraint] = []
     // The live data bridge — fully native after the Phase-03 cutover (DD-001/DD-002):
     // quota reads in-process from disk (no `GET /quota`, no sidecar) and sessions
     // arrive by tailing the observe-only event file (no `/sessions`, no port).
     // Started only on the real launch path (not in tests).
     private var quotaPoller: NativeQuotaPoller?
+    /// Named agent accounts (Claude / Codex / Cursor config roots).
+    private var agentAccountStore = AgentAccountStore()
     /// Also the board's link-health source (US-007): the relays it supervises are the
     /// only thing that knows whether a host still answers. Internal so a test can
     /// drive the real relay path through a stand-in transport, never a real ssh.
     var sessionsPoller: SessionsPoller?
-    private var turnDiffs: [TurnDiff] = []
     // The always-on pty drain (the fix for "work stops when I leave the task"): one
     // main-run-loop timer that reads EVERY owned session's pty each tick — not just
     // the drilled-in one — so an off-screen agent's child never blocks on a full
@@ -74,8 +78,11 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     // Cards whose child died WHILE drilled in: the surface shows the end banner
     // first; the card is swept off the board when the operator returns to it.
     private var deadCardIDs: Set<UUID> = []
-    // Attention count at the previous render — alerts fire only on a RISE.
-    private var lastAttentionCount = 0
+    /// Attention count at the previous render — alerts fire only on a RISE, and the
+    /// Dock badge shows it. Readable so tests can prove a live re-render landed.
+    private(set) var lastAttentionCount = 0
+    /// Rule 1 standup: avoid stacking modals; snooze stored in UserDefaults.
+    private var needsYouStandupOpen = false
     // Per-card state at the previous render — a "task done" notification fires on
     // the rising edge into `.done` (not every refresh while it stays done).
     private var lastCardStates: [UUID: CardState] = [:]
@@ -90,6 +97,12 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     // as DONE. Everything else starts from queue and must earn WORKING again from
     // fresh observations in the current app session.
     private var manuallyDoneCardIDs: Set<UUID> = []
+    // The other two columns that are operator intent rather than detector output:
+    // BLOCKED (you are waiting on someone else) and PARKED (you shelved it). The
+    // session under such a card is usually alive and sitting at a prompt, so its
+    // next `Stop` reports `waiting-for-input` — which dragged the card straight back
+    // to NEEDS YOU seconds after the drop (docs/OPERATING-RULES.md rule 1).
+    private var operatorHeldCardIDs: Set<UUID> = []
     private var selection = BoardSelection()
     private(set) var cards: [BoardCard] = []
     private(set) var planningModeCardID: UUID?
@@ -103,6 +116,10 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// Item 6 (18.08): the per-task who-worked-when journal. `nil` in tests unless
     /// injected, so suites never write into the real Application Support.
     var workLog: TaskWorkLog?
+    /// One-way Notion → backlog import. `nil` without a token in `notion.json`, and
+    /// always in tests/E2E (same guard as the task store).
+    var notionImporter: NotionImporter?
+    private var notionPullTimer: Timer?
     /// Backlog: durable task intent with no session yet. Array order = render order.
     private(set) var backlogTasks: [TaskRecord] = []
     /// Archived tasks: finished work that left the board but stays durable in the
@@ -171,6 +188,9 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         if taskStore == nil, ProcessInfo.processInfo.environment["SICH_E2E"] == nil {
             taskStore = BoardTaskStore.applicationSupport()
             workLog = TaskWorkLog.applicationSupport()
+            notionImporter = NotionConfig.load(from: NotionConfig.applicationSupportURL).map {
+                NotionImporter(api: NotionClient(config: $0), store: .applicationSupport())
+            }
             // Item 8 (18.08): only the real app teaches the spawn geometry — the same
             // guard that keeps tests/E2E out of the operator's Application Support
             // keeps them out of the operator's UserDefaults.
@@ -182,8 +202,11 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         refresh()
         startSessionPump()
         startSessionsBridge()
+        startNotionImport()
         installPostLaunchIntegrations()
         handleLaunchCaptureRequests()
+        registerNeedsYouStandupObserver()
+        presentNeedsYouStandupIfNeeded()
         maybeRunE2E()
     }
 
@@ -290,22 +313,60 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         // all-"unknown" reading (no provider wiring yet for the other three pools),
         // hiding the pool contrast the capture exists to show.
         if ProcessInfo.processInfo.environment["SICH_E2E"] == nil {
-            let poller = NativeQuotaPoller { [weak self] sources in self?.applyQuota(sources: sources) }
+            let profiles = agentAccountStore.profiles
+            let poller = NativeQuotaPoller(profiles: profiles) { [weak self] sources in
+                self?.applyQuota(sources: sources)
+            }
             poller.start()
             self.quotaPoller = poller
         }
     }
 
+    private func claudeProfileByCardMap() -> [UUID: UUID] {
+        var map: [UUID: UUID] = [:]
+        for (cardID, meta) in taskMetaByCard {
+            if let pid = meta.claudeProfileID { map[cardID] = pid }
+        }
+        return map
+    }
+
+    private func accountEnvExports(for profileID: UUID?, agent: CardAgent) -> String {
+        AgentAccountBackend.shellEnvExports(
+            accountID: profileID, in: agentAccountStore.accounts, agent: agent)
+    }
+
+    private func agentAccount(for profileID: UUID?) -> AgentAccountProfile? {
+        agentAccountStore.account(id: profileID)
+    }
+
+    private func restartQuotaPoller() {
+        quotaPoller?.stop()
+        guard ProcessInfo.processInfo.environment["SICH_E2E"] == nil else { return }
+        let poller = NativeQuotaPoller(profiles: agentAccountStore.profiles) { [weak self] sources in
+            self?.applyQuota(sources: sources)
+        }
+        poller.start()
+        quotaPoller = poller
+    }
+
     private func startSessionsBridge() {
-        let sessionsPoller = SessionsPoller(
-            diffSink: { [weak self] diffs in
-                self?.turnDiffs = diffs
-                self?.drillIn.update(diffs: diffs)
-            },
+        adoptSessionsPoller(SessionsPoller(
             sink: { [weak self] cards in self?.applySessions(cards) }
-        )
-        sessionsPoller.start()
-        self.sessionsPoller = sessionsPoller
+        ))
+    }
+
+    /// Bring the sessions poller up. Also the test seam for the REAL launch order,
+    /// in which the poller is created AFTER the pre-quit session tree is restored —
+    /// so the remote sessions restore already put in the registry are followed here,
+    /// not left to a restore-time `sessionsPoller?.attachRemoteHost` that found no
+    /// poller and silently dropped the attach (every remote card came back as an
+    /// unobserved terminal that never moved until a NEW card on that host was opened).
+    func adoptSessionsPoller(_ poller: SessionsPoller) {
+        poller.start()
+        sessionsPoller = poller
+        for spec in registry.all.compactMap(\.remoteSpec) {
+            poller.attachRemoteHost(spec)
+        }
     }
 
     // MARK: - Always-on pty drain
@@ -479,7 +540,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         guard let index = cards.firstIndex(where: { $0.id == cardID }),
               RemoteSessionKey.parse(sessionID: cards[index].sessionID) != nil
         else { return false }
-        if !manuallyDoneCardIDs.contains(cardID) {
+        if !manuallyDoneCardIDs.contains(cardID), !operatorHeldCardIDs.contains(cardID) {
             cards[index] = cards[index].with(state: .idle)
         }
         refresh()
@@ -575,6 +636,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         lastCardStates.removeValue(forKey: id)
         taskMetaByCard.removeValue(forKey: id)
         manuallyDoneCardIDs.remove(id)
+        operatorHeldCardIDs.remove(id)
     }
 
     /// One board-placed record rejoins the board: its metadata attaches to the
@@ -583,13 +645,23 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     private func adoptBoardRecord(_ record: TaskRecord, state: CardState) {
         taskMetaByCard[record.id] = CardTaskMeta(
             details: record.details, mode: record.mode, createdAt: record.createdAt,
-            sessionRef: record.sessionRef, remote: record.remote?.spec
+            sessionRef: record.sessionRef, remote: record.remote?.spec,
+            claudeProfileID: record.claudeProfileID,
+            needsYouDeferredUntil: record.needsYouDeferredUntil
         )
         BoardTheme.linkProject(card: record.id, toDirectory: record.remote?.spec.remoteDir)
         if state == .done { manuallyDoneCardIDs.insert(record.id) }
+        if state == .blocked || state == .parked { operatorHeldCardIDs.insert(record.id) }
         if let index = cards.firstIndex(where: { $0.id == record.id }) {
             cards[index] = cards[index].with(
                 accumulatedWorkingTime: record.accumulatedWorkingTime ?? 0)
+            // The book is the authority on placement, and a held column is the one
+            // placement the session snapshot could disagree about (it is written at
+            // quit, the book on every mutation). Without this the card would restore
+            // idle yet stay frozen there, held against its own record.
+            if operatorHeldCardIDs.contains(record.id), cards[index].state != state {
+                cards[index] = cards[index].with(state: state)
+            }
             return
         }
         // A remote record keeps its `(host, session)` id — the string the duplicate
@@ -639,7 +711,9 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             createdAt: meta.createdAt,
             sessionRef: sessionRef(for: card),
             accumulatedWorkingTime: card.totalWorkingTime(),
-            remote: remoteSnapshot(for: card)
+            remote: remoteSnapshot(for: card),
+            claudeProfileID: taskMetaByCard[card.id]?.claudeProfileID,
+            needsYouDeferredUntil: taskMetaByCard[card.id]?.needsYouDeferredUntil
         )
     }
 
@@ -698,12 +772,20 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         guard let card = card(forSessionID: pane.sessionID) else { return pane }
         return pane.with(
             cardID: card.id, cardState: persistedRestartState(for: card),
-            title: card.title, taskFolder: card.taskFolder
+            title: card.title, taskFolder: card.taskFolder,
+            claudeProfileID: taskMetaByCard[card.id]?.claudeProfileID
         )
     }
 
+    /// Only operator intent is durable: DONE, and the two held columns (BLOCKED /
+    /// PARKED). A live state restarts from queue and must earn WORKING again from
+    /// fresh observations. The held state is read off the card but clamped to the two
+    /// legal values, so no detector state can leak into a file an older build reads.
     private func persistedRestartState(for card: BoardCard) -> CardState {
-        manuallyDoneCardIDs.contains(card.id) ? .done : .idle
+        if manuallyDoneCardIDs.contains(card.id) { return .done }
+        guard operatorHeldCardIDs.contains(card.id),
+              card.state == .blocked || card.state == .parked else { return .idle }
+        return card.state
     }
 
     /// The card driving a registry session — joined through the pty the two share
@@ -735,7 +817,14 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// materializes each re-opened pane as a real board card. The command it receives is
     /// the firewall-classified `$SHELL -il` the restorer built — never an agent.
     private func makeLaunchRestorer() -> SessionRestorer {
-        SessionRestorer(reopen: { [weak self] pane, command in
+        SessionRestorer(
+            accountEnv: { [weak self] profileID, agent in
+                self?.accountEnvExports(for: profileID, agent: agent) ?? ""
+            },
+            accountFor: { [weak self] profileID in
+                self?.agentAccount(for: profileID)
+            },
+            reopen: { [weak self] pane, command in
             MainActor.assumeIsolated { self?.openRestoredCard(pane: pane, command: command) }
         })
     }
@@ -745,9 +834,13 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// firewall-clean `$SHELL -il` the restorer validated, so the watcher-not-spawner
     /// invariant holds; this method builds no agent command of its own.
     private func openRestoredCard(pane: RestoredPane, command: [String]) {
+        // The session keeps the pane's agent type even though the argv is a bare shell:
+        // `snapshotWindows` persists `session.agentType` on the NEXT quit, so `.shell`
+        // here would turn a Cursor/Codex card into a bare shell (and a `.claude` card)
+        // after exactly one restart, and its resume command would never be sent again.
         guard let session = try? registry.launch(
             command: command, projectDir: pane.cwd,
-            agentType: .shell, flowTag: pane.snapshot.flowTag,
+            agentType: pane.snapshot.agentType, flowTag: pane.snapshot.flowTag,
             rows: TerminalGeometry.preferred.rows, cols: TerminalGeometry.preferred.cols
         ) else { return }
         ShellSignalBridge.attachCwdReporting(to: session)   // US-004: live OSC-7 cwd
@@ -759,6 +852,10 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             session.recordClaudeSession(claudeID)
         } else if pane.snapshot.agentType == .codex, pane.liveness == .reopened {
             HookInstaller.installCodexShim()
+        } else if pane.snapshot.agentType == .cursor, pane.liveness == .reopened {
+            HookInstaller.installCursorHooks()
+        } else if pane.snapshot.agentType == .antigravity, pane.liveness == .reopened {
+            HookInstaller.installAntigravityHooks()
         }
         if let command = Self.restoredAgentCommand(for: pane.snapshot), pane.liveness == .reopened {
             _ = session.pty.send(Array(command.utf8))
@@ -780,6 +877,15 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         if card.state == .done {
             manuallyDoneCardIDs.insert(card.id)
         }
+        if card.state == .blocked || card.state == .parked {
+            operatorHeldCardIDs.insert(card.id)
+        }
+        if taskMetaByCard[card.id] == nil {
+            taskMetaByCard[card.id] = CardTaskMeta(
+                claudeProfileID: pane.snapshot.claudeProfileID)
+        } else if let profileID = pane.snapshot.claudeProfileID {
+            taskMetaByCard[card.id]?.claudeProfileID = profileID
+        }
         ptyByCard[card.id] = session.pty
         if let spec = pane.snapshot.remote?.spec {
             adoptRestoredRemote(spec, on: session)
@@ -794,6 +900,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// the card comes back as an unobserved terminal: attached, but never moving.
     private func adoptRestoredRemote(_ spec: RemoteTmuxSpec, on session: Session) {
         session.recordRemoteSpec(spec)
+        TmuxControlBridge.attachIfNeeded(to: session)
         RemoteHookStatus.shared.register(spec)
         sessionsPoller?.attachRemoteHost(spec)
     }
@@ -808,19 +915,61 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         return key.sessionID
     }
 
+    /// Which executable a typed launch line names. The board's status feed depends on the
+    /// Sich shim (`~/.sich/bin/claude`) wrapping the real binary with per-invocation
+    /// hooks; a LOCAL launch therefore names the shim by absolute path instead of
+    /// trusting PATH order, which any later rc line (`export PATH="~/.local/bin:$PATH"`
+    /// appended by another installer) silently defeats — the card then never hears a
+    /// Stop and sticks in WORKING. A REMOTE launch is typed into a far-side shell that
+    /// has no shim (its hooks arrive through the forwarded event log), so it stays a
+    /// bare PATH lookup.
+    enum HarnessLauncher {
+        case localShim
+        case remotePath
+
+        var claudeExecutable: String {
+            switch self {
+            case .localShim: return "\"$HOME/\(HookInstaller.codexBinDirName)/\(HookInstaller.claudeShimName)\""
+            case .remotePath: return "claude"
+            }
+        }
+
+        var codexExecutable: String {
+            switch self {
+            case .localShim: return "\(HookInstaller.codexShimPath())/codex"
+            case .remotePath: return "codex"
+            }
+        }
+
+        var cursorExecutable: String {
+            switch self {
+            case .localShim: return "\(HookInstaller.codexShimPath())/agent"
+            case .remotePath: return "agent"
+            }
+        }
+
+        var antigravityExecutable: String {
+            switch self {
+            case .localShim: return "\(HookInstaller.codexShimPath())/agy"
+            case .remotePath: return "agy"
+            }
+        }
+    }
+
     /// The keystrokes that start a NEW Claude conversation pinned to `sessionID`, so we
     /// know the id up front and can resume it later. Lowercased to match Claude's own
     /// transcript-id form (what `--resume` looks up).
-    static func startClaudeCommand(sessionID: UUID) -> String {
-        "claude --session-id \(sessionID.uuidString.lowercased())\n"
+    static func startClaudeCommand(sessionID: UUID, via launcher: HarnessLauncher) -> String {
+        "\(launcher.claudeExecutable) --session-id \(sessionID.uuidString.lowercased())\n"
     }
 
     /// The keystrokes that RESUME the conversation `sessionID` on a restored pane. Falls
     /// back to a fresh `claude` if the transcript is gone (resume exits non-zero), so a
     /// restore never lands the operator on a dead shell; stderr is dropped so the expected
     /// "no conversation" note doesn't flash before the fallback.
-    static func resumeClaudeCommand(sessionID: UUID) -> String {
-        "claude --resume \(sessionID.uuidString.lowercased()) 2>/dev/null || claude\n"
+    static func resumeClaudeCommand(sessionID: UUID, via launcher: HarnessLauncher) -> String {
+        let claude = launcher.claudeExecutable
+        return "\(claude) --resume \(sessionID.uuidString.lowercased()) 2>/dev/null || \(claude)\n"
     }
 
     /// Prefer the explicit pinned Claude conversation id. For snapshots written before
@@ -837,24 +986,52 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         // into it would talk over whatever is already running in that session.
         if pane.remote != nil { return nil }
         if let claudeID = claudeResumeID(for: pane) {
-            return resumeClaudeCommand(sessionID: claudeID)
+            return resumeClaudeCommand(sessionID: claudeID, via: .localShim)
         }
         if pane.agentType == .codex {
             return resumeCodexCommand()
         }
+        if pane.agentType == .cursor {
+            return resumeCursorCommand()
+        }
+        if pane.agentType == .antigravity {
+            return resumeAntigravityCommand()
+        }
         return nil
     }
 
+    /// Start a Cursor agent session in the already-open login shell.
+    static func startCursorCommand(via launcher: HarnessLauncher = .localShim) -> String {
+        "\(launcher.cursorExecutable)\n"
+    }
+
+    /// Resume the latest Cursor chat. Cursor owns its chat ids (`agent resume` picks
+    /// the most recent), so like Codex we do not mint an app-level id.
+    static func resumeCursorCommand(via launcher: HarnessLauncher = .localShim) -> String {
+        "\(launcher.cursorExecutable) resume\n"
+    }
+
+    /// Start an Antigravity (`agy`) session in the already-open login shell.
+    static func startAntigravityCommand(via launcher: HarnessLauncher = .localShim) -> String {
+        "\(launcher.antigravityExecutable)\n"
+    }
+
+    /// Resume the latest Antigravity conversation (`--continue` picks the most
+    /// recent one in this workspace); no app-level id is minted.
+    static func resumeAntigravityCommand(via launcher: HarnessLauncher = .localShim) -> String {
+        "\(launcher.antigravityExecutable) --continue\n"
+    }
+
     /// Start a Codex CLI session in the already-open login shell.
-    static func startCodexCommand() -> String {
-        "\(HookInstaller.codexShimPath())/codex\n"
+    static func startCodexCommand(via launcher: HarnessLauncher = .localShim) -> String {
+        "\(launcher.codexExecutable)\n"
     }
 
     /// Resume the most recent Codex interactive session for this cwd. Codex owns its
     /// saved session ids, so we use its cwd-filtered `--last` behavior instead of
     /// inventing an app-level id.
-    static func resumeCodexCommand() -> String {
-        "\(HookInstaller.codexShimPath())/codex resume --last\n"
+    static func resumeCodexCommand(via launcher: HarnessLauncher = .localShim) -> String {
+        "\(launcher.codexExecutable) resume --last\n"
     }
 
     /// US-004: install Ghostty shell-integration idempotently (a no-op on the second
@@ -888,11 +1065,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".zshrc")
     }
 
-    /// Build the seeded board hierarchy **without** ordering a window on screen, so
-    /// the drill-in interaction (board hidden on drill, restored on return) can be
-    /// driven by a headless view-level test. Wires interactions exactly as
-    /// `applicationDidFinishLaunching` does — otherwise the back-affordance callback
-    /// (`drillIn.onClose → returnToBoard`) is unwired and a test would silently
     /// Test seam: does this card still own a live PTY? Used to prove a delete forgets
     /// its session binding (returns nil after `deleteCard`).
     func ptyForTesting(_ cardID: UUID) -> PTYSession? { ptyByCard[cardID] }
@@ -907,11 +1079,21 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         return cards
     }
 
+    /// The pty a card's terminal is bound to (nil = no live shell).
+    // periphery:ignore - test-only seam (scan runs with exclude_tests)
+    func ptyForTesting(card: BoardCard) -> PTYSession? { ptyByCard[card.id] }
+
+    /// Build the seeded board hierarchy **without** ordering a window on screen, so
+    /// the drill-in interaction (board hidden on drill, restored on return) can be
+    /// driven by a headless view-level test. Wires interactions exactly as
+    /// `applicationDidFinishLaunching` does — otherwise the back-affordance callback
+    /// (`drillIn.onClose → returnToBoard`) is unwired and a test would silently
     /// bypass the real Esc/click → return chain. Returns the root content view.
+    // periphery:ignore - test-only seam (scan runs with exclude_tests)
     @discardableResult
-    func buildContentForTesting() -> NSView {
+    func buildContentForTesting(size: NSSize = NSSize(width: 1280, height: 720)) -> NSView {
         seedSessions()
-        let root = makeContentView(in: NSSize(width: 1280, height: 720))
+        let root = makeContentView(in: size)
         wireInteractions()
         root.layoutSubtreeIfNeeded()
         return root
@@ -928,6 +1110,32 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// (attaches the registered pty, hides the board) — the real gesture handlers call
     /// this same method.
     func enterPlanningModeForTesting(_ card: BoardCard) { enterPlanningMode(card) }
+
+    // periphery:ignore - test-only seam (scan runs with exclude_tests)
+    func taskMetaForTesting(_ cardID: UUID) -> CardTaskMeta? { taskMetaByCard[cardID] }
+
+    // periphery:ignore - test-only seam (scan runs with exclude_tests)
+    func switchMenusForTesting() -> [UUID: CardSwitchMenu] {
+        let shown = displayCards()
+        let gauges = QuotaProjection.gauges(from: quotaSources)
+        return switchMenus(for: shown, gauges: gauges)
+    }
+
+    // periphery:ignore - test-only seam (scan runs with exclude_tests)
+    func refreshForTesting() { refresh() }
+
+    // periphery:ignore - test-only seam (scan runs with exclude_tests)
+    func setAgentAccountsForTesting(_ accounts: [AgentAccountProfile]) {
+        agentAccountStore = AgentAccountStore(accounts: accounts)
+    }
+
+    // periphery:ignore - test-only seam (scan runs with exclude_tests)
+    func insertCardForTesting(_ card: BoardCard, remote: RemoteTmuxSpec? = nil) {
+        cards.append(card)
+        if let remote {
+            taskMetaByCard[card.id, default: CardTaskMeta()].remote = remote
+        }
+    }
 
     // MARK: - Seeding
 
@@ -986,9 +1194,12 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// ⌘Q quits — `swift run` binaries start with no menu at all. ponytail: two items,
     /// no nib; grows only if more shortcuts are actually wanted.
     private func installMainMenu() {
-        let appMenu = NSMenu()
+        let appMenu = LayoutAwareMenu()
         appMenu.addItem(withTitle: "New Task", action: #selector(newTaskMenuAction),
                         keyEquivalent: "n").target = self
+        appMenu.addItem(withTitle: "Agent Accounts…",
+                        action: #selector(manageAgentAccountsMenuAction),
+                        keyEquivalent: "").target = self
         appMenu.addItem(.separator())
         // One ⌘+/⌘− pair for the whole app (checklist 18.08): on the board it scales
         // board type, inside a terminal takeover it sizes the terminal font. The old
@@ -1012,13 +1223,14 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
                         keyEquivalent: "q")
         let appItem = NSMenuItem()
         appItem.submenu = appMenu
-        let main = NSMenu()
+        let main = LayoutAwareMenu()
         main.addItem(appItem)
         main.addItem(EditMenu.item())   // without it ⌘V is dead in every text field
         NSApp.mainMenu = main
     }
 
     @objc private func newTaskMenuAction() { openCreatePalette() }
+    @objc private func manageAgentAccountsMenuAction() { promptManageAgentAccounts() }
     @objc private func fitWindowMenuAction() { fitWindowToScreen() }
     @objc private func increaseFontMenuAction() { zoomFont(direction: 1) }
     @objc private func decreaseFontMenuAction() { zoomFont(direction: -1) }
@@ -1047,6 +1259,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         // global agent config and cross-contaminating unrelated sessions.
         HookInstaller.installClaudeShim()
         HookInstaller.installCodexShim()
+        HookInstaller.installCursorHooks()
         // The shim points Claude at `custom:sich`; this writes the file behind that
         // reference, so the child's TUI palette is the board's rather than a
         // dark-oriented default stranded on light paper.
@@ -1148,13 +1361,25 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         window.makeFirstResponder(boardView)   // arrow-key board navigation from launch
         self.window = window
         // The 1400×860 default fits a wide external display but overflows a smaller
-        // built-in laptop screen. Correct that once on launch. Do not automatically
-        // refit later: `windowDidChangeScreen` fires midway through a cross-display
-        // drag, and changing the frame there traps the window on its original screen.
+        // built-in laptop screen. Correct that once on launch. Do not refit from
+        // `windowDidChangeScreen`: it fires midway through a cross-display drag, and
+        // changing the frame there traps the window on its original screen.
         fitWindowToScreen()
+        // Unplugging the external display is the other way a window ends up wider
+        // than its screen: macOS moves it to the built-in panel at its old size, so
+        // the board's right edge (and the quota panel) hang off-screen. That
+        // arrives as a screen-parameters change, never as a drag, so refitting
+        // there is safe.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.fitWindowToScreen() }
+        }
         // The fitted launch width may already be below the 1400pt design width
         // (a built-in laptop screen) — size the type to it before first paint.
-        applyResponsiveTypography()
+        applyResponsiveLayout()
     }
 
     /// Shrink and reposition the window so it fits entirely inside its current
@@ -1206,9 +1431,9 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         // Follow the system appearance (don't pin `.darkAqua`): the UI is painted from
         // `BoardTheme`'s dynamic light/dark tokens, and standard control chrome should
         // match the active system theme so the app reads light in light mode.
-        layout(attention, in: root, header: true)
         layoutQuota(in: root)
-        layout(boardView, in: root, header: false)
+        layout(boardView, in: root)
+        dockQuota(QuotaLayout.dock(forContentSize: size))
         drillIn.isHidden = true
         layoutDrillIn(in: root)
         planningMode.isHidden = true
@@ -1232,45 +1457,57 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         ])
     }
 
-    /// The quota panel pinned to the trailing edge as a fixed-width column, from
-    /// just under the header to the bottom — the board fills the remaining width.
+    /// The quota panel docks on one of two sides (``QuotaDock``). Trailing: a
+    /// fixed-width column from just under the header to the bottom, the board
+    /// filling the width left of it. Bottom: a full-width strip as tall as its
+    /// cards — capped so it can never crowd the board out — with the board above.
     private func layoutQuota(in root: NSView) {
         quota.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(quota)
         let width = quota.widthAnchor.constraint(equalToConstant: QuotaLayout.panelWidth)
         quotaWidth = width
-        NSLayoutConstraint.activate([
-            quota.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            quota.topAnchor.constraint(equalTo: root.topAnchor, constant: 32),
-            quota.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+        quota.trailingAnchor.constraint(equalTo: root.trailingAnchor).isActive = true
+        quota.bottomAnchor.constraint(equalTo: root.bottomAnchor).isActive = true
+        trailingDockConstraints = [
+            quota.topAnchor.constraint(equalTo: root.topAnchor),
             width,
-        ])
-    }
-
-    private func layout(_ view: NSView, in root: NSView, header: Bool) {
-        view.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(view)
-        NSLayoutConstraint.activate(header
-            ? headerConstraints(view, in: root)
-            : boardConstraints(view, in: root))
-    }
-
-    private func headerConstraints(_ v: NSView, in root: NSView) -> [NSLayoutConstraint] {
-        [
-            v.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
-            v.topAnchor.constraint(equalTo: root.topAnchor, constant: 12),
-            v.heightAnchor.constraint(equalToConstant: 26),
-            v.widthAnchor.constraint(greaterThanOrEqualToConstant: 36),
+        ]
+        bottomDockConstraints = [
+            quota.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            quota.heightAnchor.constraint(lessThanOrEqualTo: root.heightAnchor, multiplier: 0.4),
         ]
     }
 
+    /// Move the quota panel to `dock` and give the board the space that leaves.
+    private func dockQuota(_ dock: QuotaDock) {
+        quota.dock = dock
+        boardView.isDoneNarrow = dock != .trailing
+        NSLayoutConstraint.deactivate(trailingDockConstraints + bottomDockConstraints)
+        NSLayoutConstraint.activate(
+            dock == .trailing ? trailingDockConstraints : bottomDockConstraints)
+    }
+
+    private func layout(_ view: NSView, in root: NSView) {
+        view.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(view)
+        NSLayoutConstraint.activate(boardConstraints(view, in: root))
+    }
+
     private func boardConstraints(_ v: NSView, in root: NSView) -> [NSLayoutConstraint] {
-        [
-            v.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            // Board fills the width left of the quota column (not the full root).
-            v.trailingAnchor.constraint(equalTo: quota.leadingAnchor, constant: -12),
-            v.topAnchor.constraint(equalTo: root.topAnchor, constant: 32),
+        // Board fills the width left of a trailing quota column (not the full
+        // root), or the full width above a bottom quota strip.
+        trailingDockConstraints += [
+            // Flush: the panel's own leading hairline is the lane boundary.
+            v.trailingAnchor.constraint(equalTo: quota.leadingAnchor),
             v.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+        ]
+        bottomDockConstraints += [
+            v.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            v.bottomAnchor.constraint(equalTo: quota.topAnchor),
+        ]
+        return [
+            v.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            v.topAnchor.constraint(equalTo: root.topAnchor),
         ]
     }
 
@@ -1296,6 +1533,9 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         boardView.onMove = { [weak self] id, column in self?.move(cardID: id, to: column) }
         boardView.onRename = { [weak self] in self?.promptRename(for: $0) }
         boardView.onDelete = { [weak self] in self?.promptDelete(for: $0) }
+        boardView.onSwitchAccount = { [weak self] in self?.switchAccount(on: $0, to: $1) }
+        boardView.onSwitchHarness = { [weak self] in self?.switchHarness(on: $0, to: $1) }
+        boardView.onDeferNeedsYou = { [weak self] in self?.deferNeedsYouToTomorrow(cardID: $0.id) }
         backlogPage.onReturn = { [weak self] in self?.hideBacklogPage() }
         backlogPage.onAdd = { [weak self] in self?.promptAddBacklogTask() }
         backlogPage.onPromote = { [weak self] record in
@@ -1311,7 +1551,9 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         backlogPage.onDelete = { [weak self] in self?.deleteBacklogTask(id: $0.id) }
         boardView.onShowArchive = { [weak self] in self?.showArchivePage() }
         archivePage.onReturn = { [weak self] in self?.hideArchivePage() }
-        attention.onActivate = { [weak self] in self?.activateAttention() }
+        archivePage.onRevive = { [weak self] record in
+            self?.reviveArchivedTask(id: record.id)
+        }
         drillIn.onClose = { [weak self] in self?.returnToBoard() }
         planningMode.onReturn = { [weak self] in self?.returnToBoard() }
     }
@@ -1324,26 +1566,39 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// Re-render everything whose metrics derive from the scaled board fonts —
     /// the manual ⌘+/⌘− zoom and the responsive window-width shrink share this.
     private func reflowBoardTypography() {
+        // The dock rides along: how many quota cards fit a bottom strip depends on
+        // the zoomed card width, and a dock flip re-renders the same surfaces.
+        if let size = window?.contentView?.frame.size {
+            dockQuota(QuotaLayout.dock(forContentSize: size))
+        }
         boardView.applyFontScale()
-        attention.update(count: attention.renderedCount)
         quotaWidth?.constant = QuotaLayout.panelWidth
-        quota.render(gauges: QuotaProjection.gauges(from: quotaSources), cards: cards)
+        quota.render(
+            gauges: QuotaProjection.gauges(from: quotaSources), cards: cards,
+            claudeProfiles: agentAccountStore.profiles,
+            claudeProfileByCard: claudeProfileByCardMap())
         window?.contentView?.layoutSubtreeIfNeeded()
     }
 
-    /// Auto-shrink the board type on narrow windows. The scale is quantized in
-    /// ``BoardTheme/responsiveScale(forContentWidth:)`` so a live resize drag only
-    /// pays for a scaffold rebuild when it crosses a 0.05 step.
-    private func applyResponsiveTypography() {
-        guard let width = window?.contentView?.frame.width else { return }
-        let scale = BoardTheme.responsiveScale(forContentWidth: width)
-        guard scale != BoardTheme.responsiveFontScale else { return }
+    /// Fit the board to the window shape: auto-shrink the type on narrow windows
+    /// and dock the quota panel under the board on portrait ones. The scale is
+    /// quantized in ``BoardTheme/responsiveScale(forContentWidth:)`` and the dock
+    /// only changes by whole quota cards, so a live resize drag only pays for a
+    /// scaffold rebuild when it crosses a step.
+    private func applyResponsiveLayout() {
+        guard let size = window?.contentView?.frame.size else { return }
+        let dock = QuotaLayout.dock(forContentSize: size)
+        // A bottom-docked panel hands its column back to the board, so the board is
+        // as wide as it would be in a window that much wider.
+        let boardGain = dock == .trailing ? 0 : QuotaLayout.panelWidth
+        let scale = BoardTheme.responsiveScale(forContentWidth: size.width + boardGain)
+        guard scale != BoardTheme.responsiveFontScale || dock != quota.dock else { return }
         BoardTheme.responsiveFontScale = scale
         reflowBoardTypography()
     }
 
     public func windowDidResize(_ notification: Notification) {
-        applyResponsiveTypography()
+        applyResponsiveLayout()
     }
 
     private func changeTerminalFont(by delta: CGFloat) {
@@ -1362,16 +1617,26 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// card-creation logic (which owns the pool firewall + saha binding invariants).
     /// The palette is a dumb view; every side effect flows back through here.
     func openCreatePalette() {
-        let palette = CreateCardPalette(recents: paletteRecents())
+        let palette = CreateCardPalette(
+            recents: paletteRecents(), agentAccounts: agentAccountStore.accounts)
         palette.browse = { [weak self] in Self.chooseFolder(relativeTo: self?.window) }
         palette.discoverFolders = { dir in
             TaskFolderIndex().discover(in: URL(fileURLWithPath: dir, isDirectory: true))
         }
         palette.onCancel = { [weak self] in self?.dismissCreatePalette() }
-        palette.confirmInteractive = { [weak self] title, dir, harness, inWorktree in
+        palette.addAgentAccount = { [weak self] agent in
+            self?.promptAddAgentAccount(agent: agent, from: palette)
+        }
+        palette.confirmInteractive = { [weak self] (title: String, dir: String,
+                                                    harness: CreateCardPalette.Harness,
+                                                    inWorktree: Bool, profileID: UUID?) in
             guard let self else { return }
-            self.createSession(title: title.isEmpty ? nil : title, projectDir: dir,
-                               autoStartAgent: harness.cardAgent, inWorktree: inWorktree)
+            let accountID = AgentAccountBackend.supportsMultiAccount(harness.cardAgent ?? .claude)
+                ? profileID : nil
+            self.createSession(
+                title: title.isEmpty ? nil : title, projectDir: dir,
+                autoStartAgent: harness.cardAgent, inWorktree: inWorktree,
+                claudeProfileID: accountID)
             self.rememberProjectDir(dir)
             self.dismissCreatePalette()
         }
@@ -1381,8 +1646,10 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         palette.confirmSahaExisting = { [weak self] folder, dir in
             self?.completeSahaExisting(folder: folder, dir: dir)
         }
-        palette.confirmRemote = { [weak self] title, destination, dir in
-            self?.completeRemoteCard(title: title, destination: destination, dir: dir)
+        palette.windowsHosts = windowsRemoteHosts
+        palette.confirmRemote = { [weak self] title, destination, dir, windows in
+            self?.completeRemoteCard(
+                title: title, destination: destination, dir: dir, windows: windows)
         }
         createPalette?.removeFromSuperview()
         createPalette = palette
@@ -1426,24 +1693,208 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// SAME ``createRemoteTmuxSession(spec:)`` the ⌘⇧R alert used, so a palette card and
     /// an alert card are one construction — identical argv, identity binding and restore
     /// snapshot. Returns an error string for the palette to show, nil once the card exists.
-    private func completeRemoteCard(title: String, destination: String, dir: String) -> String? {
+    private func completeRemoteCard(
+        title: String, destination: String, dir: String, windows: Bool
+    ) -> String? {
         let folder = dir.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let spec = RemoteTmuxSpec.parse(destination: destination, sessionName: title,
+        guard var spec = RemoteTmuxSpec.parse(destination: destination, sessionName: title,
                                               remoteDir: folder.isEmpty ? nil : folder) else {
             return "Enter a host — e.g. you@box or box:2222."
         }
+        spec.hostKind = windows ? .windowsPsmux : .posix
         guard createRemoteTmuxSession(spec: spec) != nil else {
             return lastRemoteSessionIssue?.description ?? "Could not open the remote session."
         }
         if !folder.isEmpty { recentFolders.remember(host: destination, path: folder) }
+        rememberWindowsHost(destination, isWindows: windows)
         dismissCreatePalette()
         return nil
     }
+
+    /// Hosts the operator marked "Windows (psmux)": pre-checks the palette toggle the
+    /// next time that host is picked. Keyed by the typed destination string — the same
+    /// token the recents store and the palette's host rows use. Lives in the same
+    /// defaults as the recents so a test's scratch suite isolates both.
+    private var windowsRemoteHosts: Set<String> {
+        Set(recentFoldersDefaults.stringArray(forKey: Self.windowsHostsKey) ?? [])
+    }
+
+    private func rememberWindowsHost(_ host: String, isWindows: Bool) {
+        var hosts = windowsRemoteHosts
+        if isWindows { hosts.insert(host) } else { hosts.remove(host) }
+        recentFoldersDefaults.set(hosts.sorted(), forKey: Self.windowsHostsKey)
+    }
+
+    static let windowsHostsKey = "sich.remote.windowsHosts"
 
     func dismissCreatePalette() {
         createPalette?.removeFromSuperview()
         createPalette = nil
         window?.makeFirstResponder(boardView)
+    }
+
+    /// Add a named agent account (isolated config root + hooks + optional sign-in).
+    private func promptAddAgentAccount(
+        agent: CardAgent? = nil, host: String? = nil, from palette: CreateCardPalette? = nil
+    ) {
+        let kind = agent ?? .claude
+        let alert = NSAlert()
+        alert.messageText = "Add \(AgentAccountBackend.displayName(for: kind)) Account"
+        alert.informativeText = """
+            Each account uses its own config directory (credentials + settings). \
+            Sich can open a sign-in terminal after you add the account.
+            """
+        alert.addButton(withTitle: "Add")
+        alert.addButton(withTitle: "Cancel")
+        let name = NSTextField(frame: NSRect(x: 0, y: 62, width: 320, height: 24))
+        name.placeholderString = "Account name (e.g. Work)"
+        let dir = NSTextField(frame: NSRect(x: 0, y: 34, width: 320, height: 24))
+        dir.placeholderString = "Config dir (optional — a name is enough)"
+        let hostField = NSTextField(frame: NSRect(x: 0, y: 6, width: 320, height: 24))
+        hostField.placeholderString = "Host (blank = this Mac; user@box for remote)"
+        hostField.stringValue = host ?? ""
+        let box = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 86))
+        box.addSubview(name)
+        box.addSubview(dir)
+        box.addSubview(hostField)
+        alert.accessoryView = box
+        alert.window.initialFirstResponder = name
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let trimmed = name.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let configPath = dir.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolved = configPath.isEmpty
+            ? AgentAccountBackend.suggestedConfigRoot(agent: kind, name: trimmed) : configPath
+        let hostValue = hostField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let accountHost = hostValue.isEmpty ? nil : hostValue
+        let account = agentAccountStore.add(
+            name: trimmed, agent: kind, configRoot: resolved, host: accountHost)
+        if accountHost == nil {
+            _ = HookInstaller.provisionAccount(account)
+        } else if let spec = RemoteTmuxSpec.parse(destination: accountHost!, sessionName: "sich-auth") {
+            _ = HookInstaller.installRemoteAccount(
+                spec: spec, account: account, runner: remoteSessionRunner)
+        }
+        restartQuotaPoller()
+        if let palette {
+            palette.reloadAgentAccounts(agentAccountStore.accounts)
+            palette.selectAgentAccount(account.id)
+        }
+        refresh()
+        offerAccountSignIn(account)
+    }
+
+    private func offerAccountSignIn(_ account: AgentAccountProfile) {
+        guard account.authStatus != .ready else { return }
+        let alert = NSAlert()
+        alert.messageText = "Sign in to \(account.name)?"
+        alert.informativeText = """
+            Opens a short-lived terminal card and runs the agent's login command. \
+            Complete browser auth there, then return to the board.
+            """
+        alert.addButton(withTitle: "Sign In Now")
+        alert.addButton(withTitle: "Later")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        startAccountSignIn(account)
+    }
+
+    /// Guided auth: a dedicated card with the right env vars and login keystrokes.
+    private func startAccountSignIn(_ account: AgentAccountProfile) {
+        if let host = account.host, let spec = RemoteTmuxSpec.parse(destination: host, sessionName: "sich-signin-\(account.id.uuidString.prefix(8))") {
+            _ = HookInstaller.installRemoteAccount(spec: spec, account: account, runner: remoteSessionRunner)
+            let cardID = UUID()
+            let env = AgentAccountBackend.remoteTmuxEnvironment(for: account)
+            guard let seed = try? BoardSeed.remoteTmux(
+                spec: spec, title: "Sign in: \(account.name)", cardID: cardID.uuidString,
+                agent: account.agent, tmuxEnvironment: env),
+                  let session = launch(seed) else { return }
+            let card = BoardCard(
+                id: cardID, sessionID: seed.sessionID, title: seed.title,
+                projectDir: seed.projectDir, agent: account.agent, flow: .b, state: .idle)
+            cards.append(card)
+            ptyByCard[card.id] = session.pty
+            taskMetaByCard[card.id] = CardTaskMeta(mode: .interactive, remote: spec, claudeProfileID: account.id)
+            TmuxControlBridge.attachIfNeeded(to: session)
+            session.pty.sendWhenReady(Array(AgentAccountBackend.loginCommand(for: account, localShim: false).utf8))
+            RemoteHookStatus.shared.register(spec)
+            sessionsPoller?.attachRemoteHost(spec)
+            refresh()
+            persistTasks()
+            return
+        }
+        let dir = RepoLocator.launchProjectDir(repoRoot: repoRoot)
+        guard let card = createSession(
+            title: "Sign in: \(account.name)", projectDir: dir, autoStartAgent: nil,
+            claudeProfileID: account.id) else { return }
+        guard let pty = ptyByCard[card.id] else { return }
+        switch account.agent {
+        case .codex: HookInstaller.installCodexShim()
+        case .cursor: HookInstaller.installCursorHooks()
+        default: break
+        }
+        _ = pty.send(Array(AgentAccountBackend.loginCommand(for: account, localShim: true).utf8))
+        agentAccountStore.refreshAuthStatus(id: account.id)
+        refresh()
+    }
+
+    /// List and remove named agent accounts.
+    private func promptManageAgentAccounts() {
+        let list = agentAccountStore.accounts.map {
+            let scope = $0.host.map { " · \($0)" } ?? ""
+            let auth = $0.authStatus == .ready ? " ✓" : ($0.authStatus == .pending ? " · sign-in pending" : "")
+            return "\(AgentAccountBackend.displayName(for: $0.agent)) · \($0.name) (\($0.configRoot))\(scope)\(auth)"
+        }.joined(separator: "\n")
+        let alert = NSAlert()
+        alert.messageText = "Agent Accounts"
+        alert.informativeText = list.isEmpty ? "No accounts configured." : list
+        alert.addButton(withTitle: "Add Account…")
+        alert.addButton(withTitle: "Remove…")
+        alert.addButton(withTitle: "Done")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            promptPickAgentKindForAdd()
+        case .alertSecondButtonReturn:
+            promptRemoveAgentAccount()
+        default:
+            break
+        }
+    }
+
+    private func promptPickAgentKindForAdd() {
+        let alert = NSAlert()
+        alert.messageText = "Which agent?"
+        alert.informativeText = "Pick the LLM client this account is for."
+        alert.addButton(withTitle: "Claude")
+        alert.addButton(withTitle: "Codex")
+        alert.addButton(withTitle: "Cursor")
+        alert.addButton(withTitle: "Cancel")
+        let response = alert.runModal()
+        switch response {
+        case .alertFirstButtonReturn: promptAddAgentAccount(agent: .claude)
+        case .alertSecondButtonReturn: promptAddAgentAccount(agent: .codex)
+        case .alertThirdButtonReturn: promptAddAgentAccount(agent: .cursor)
+        default: break
+        }
+    }
+
+    private func promptRemoveAgentAccount() {
+        let removable = agentAccountStore.accounts.filter { !$0.isDefault }
+        guard !removable.isEmpty else { return }
+        let alert = NSAlert()
+        alert.messageText = "Remove Agent Account"
+        alert.informativeText = "Cards already bound keep their account id; only the picker list changes."
+        alert.addButton(withTitle: "Remove")
+        alert.addButton(withTitle: "Cancel")
+        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 280, height: 26))
+        for account in removable {
+            popup.addItem(withTitle: "\(AgentAccountBackend.displayName(for: account.agent)) · \(account.name)")
+        }
+        alert.accessoryView = popup
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let account = removable[popup.indexOfSelectedItem]
+        agentAccountStore.remove(id: account.id)
+        restartQuotaPoller()
+        refresh()
     }
 
     /// Recent project dirs as palette rows, each tagged with how many owned (live-pty)
@@ -1532,7 +1983,8 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         autoStartAgent: CardAgent? = nil,
         flow: CardFlow = .b,
         taskFolder: String? = nil,
-        inWorktree: Bool = false
+        inWorktree: Bool = false,
+        claudeProfileID: UUID? = nil
     ) -> BoardCard? {
         sessionCounter += 1
         let chosen = (projectDir?.isEmpty == false) ? projectDir : nil
@@ -1551,9 +2003,12 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         // claude session back into this card even when the repo dir is shared.
         let cardID = UUID()
         let agent = autoStartAgent ?? .claude
+        let profileID = AgentAccountBackend.supportsMultiAccount(agent)
+            ? (claudeProfileID ?? agentAccountStore.selectable(for: agent, host: nil).first?.id) : nil
         let seed = BoardSeed.liveTerminal(
             projectDir: dir, sessionID: sessionSlug(title), title: title,
-            cardID: cardID.uuidString, agent: agent
+            cardID: cardID.uuidString, agent: agent,
+            accountEnv: accountEnvExports(for: profileID, agent: agent)
         )
         guard let session = launch(seed) else { return nil }
         let card = BoardCard(
@@ -1576,13 +2031,24 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             // cards share one repo dir. `--session-id` is fresh here (this UUID has no prior
             // transcript), so claude accepts it.
             session.recordClaudeSession(session.id)
-            _ = session.pty.send(Array(Self.startClaudeCommand(sessionID: session.id).utf8))
+            _ = session.pty.send(Array(Self.startClaudeCommand(sessionID: session.id, via: .localShim).utf8))
         } else if autoStartAgent == .codex {
             HookInstaller.installCodexShim()
             _ = session.pty.send(Array(Self.startCodexCommand().utf8))
+        } else if autoStartAgent == .cursor {
+            HookInstaller.installCursorHooks()
+            _ = session.pty.send(Array(Self.startCursorCommand().utf8))
+        } else if autoStartAgent == .antigravity {
+            HookInstaller.installAntigravityHooks()
+            _ = session.pty.send(Array(Self.startAntigravityCommand().utf8))
         }
         if taskMetaByCard[card.id] == nil {
-            taskMetaByCard[card.id] = CardTaskMeta(mode: flow == .a ? .saha : .interactive)
+            taskMetaByCard[card.id] = CardTaskMeta(
+                mode: flow == .a ? .saha : .interactive,
+                claudeProfileID: profileID
+            )
+        } else if let profileID {
+            taskMetaByCard[card.id]?.claudeProfileID = profileID
         }
         refresh()
         persistTasks()
@@ -1605,7 +2071,17 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             return nil
         }
         sessionCounter += 1
-        guard let seed = try? BoardSeed.remoteTmux(spec: spec, cardID: cardID.uuidString),
+        // A brand-new card lands in a brand-new tmux session — a bare login shell,
+        // which is not what anyone opened a card for. Start the agent the way the
+        // local flow does, pinned to a conversation id minted BEFORE the argv exists:
+        // interactive `claude`, never `claude -p`, riding the session's own launch
+        // command on the far side (see `RemoteTmuxCommand.argv`). Structurally
+        // safe: `.foreign` was refused above and no far-side session can be `.bound`
+        // to an id minted this very call, so `-A` creates rather than attaches.
+        let conversation = UUID()
+        guard let seed = try? BoardSeed.remoteTmux(
+            spec: spec, cardID: cardID.uuidString,
+            agentCommand: RemoteTmuxCommand.claudeStart(sessionID: conversation)),
               let session = launch(seed) else { return nil }
         let card = BoardCard(
             id: cardID,
@@ -1622,16 +2098,11 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         // card's hue to the local checkout of the same project.
         BoardTheme.linkProject(card: card.id, toDirectory: spec.remoteDir)
         session.recordRemoteSpec(spec)
-        // A brand-new card lands in a brand-new tmux session — a bare login shell,
-        // which is not what anyone opened a card for. Start the agent the way the
-        // local flow does: type the command into the pty, where it buffers along the
-        // ssh/tty chain until the far shell reads it. Interactive `claude` pinned to
-        // a fresh conversation id — never `claude -p`. Structurally safe to type:
-        // `.foreign` was refused above and no far-side session can be `.bound` to an
-        // id minted this very call, so `-A` creates rather than attaches-over-someone.
-        let conversation = UUID()
+        // The card attaches in tmux CONTROL MODE: the bridge decodes the wire
+        // protocol into pane bytes (local scrollback, smooth wheel, prompt jumps)
+        // while ssh's password prompt still passes through untouched.
+        TmuxControlBridge.attachIfNeeded(to: session)
         session.recordClaudeSession(conversation)
-        _ = session.pty.send(Array(Self.startClaudeCommand(sessionID: conversation).utf8))
         // Learn this host's hook state so the card's chip can say something true
         // about it (US-005). Inert unless the real executable enabled probing.
         RemoteHookStatus.shared.register(spec)
@@ -1758,7 +2229,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         noteFocus(card.id)
         planningModeCardID = card.id
         boardView.isHidden = true
-        attention.isHidden = true
         backlogPage.isHidden = true
         archivePage.isHidden = true
         quota.isHidden = true
@@ -1823,6 +2293,28 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         backlogTasks.removeAll { $0.id == id }
         persistTasks()
         refresh()
+    }
+
+    /// Pull open Notion tasks assigned to the operator into the backlog: once at
+    /// launch, then every 10 minutes. No importer (no token) → no-op.
+    private func startNotionImport() {
+        guard notionImporter != nil else { return }
+        pullNotionTasks()
+        let timer = Timer(timeInterval: 10 * 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.pullNotionTasks() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        notionPullTimer = timer
+    }
+
+    private func pullNotionTasks() {
+        guard let notionImporter else { return }
+        Task { [weak self] in
+            let fresh = await notionImporter.pull()
+            for task in fresh {
+                self?.addBacklogTask(title: task.title, details: task.backlogDetails)
+            }
+        }
     }
 
     /// Move a backlog task onto the board with an explicit launch choice — agent
@@ -1905,12 +2397,20 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         alert.informativeText = record.details.isEmpty ? "Choose how to run this task." : record.details
         alert.addButton(withTitle: "Claude")
         alert.addButton(withTitle: "Codex")
+        alert.addButton(withTitle: "Cursor")
+        alert.addButton(withTitle: "Antigravity")
         alert.addButton(withTitle: "Plan with saha")
         alert.addButton(withTitle: "Cancel")
+        // Buttons past the third answer with 1000 + index (AppKit's numbering).
+        let cursorButton = NSApplication.ModalResponse(rawValue: 1003)
+        let antigravityButton = NSApplication.ModalResponse(rawValue: 1004)
+        let sahaButton = NSApplication.ModalResponse(rawValue: 1005)
         switch alert.runModal() {
         case .alertFirstButtonReturn: return promoteBacklogTask(id: record.id, agent: .claude)
         case .alertSecondButtonReturn: return promoteBacklogTask(id: record.id, agent: .codex)
-        case .alertThirdButtonReturn: return promoteBacklogTask(id: record.id, mode: .saha)
+        case cursorButton: return promoteBacklogTask(id: record.id, agent: .cursor)
+        case antigravityButton: return promoteBacklogTask(id: record.id, agent: .antigravity)
+        case sahaButton: return promoteBacklogTask(id: record.id, mode: .saha)
         default: return nil
         }
     }
@@ -1923,7 +2423,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     func showBacklogPage() {
         backlogPage.render(backlogTasks)
         boardView.isHidden = true
-        attention.isHidden = true
         quota.isHidden = true
         backlogPage.isHidden = false
         window?.makeFirstResponder(backlogPage)
@@ -1933,7 +2432,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     func hideBacklogPage() {
         backlogPage.isHidden = true
         boardView.isHidden = false
-        attention.isHidden = false
         quota.isHidden = false
         refresh()
         window?.makeFirstResponder(boardView)
@@ -1945,17 +2443,44 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     func showArchivePage() {
         archivePage.render(archivedTasks)
         boardView.isHidden = true
-        attention.isHidden = true
         quota.isHidden = true
         archivePage.isHidden = false
         window?.makeFirstResponder(archivePage)
+    }
+
+    /// Put an archived task back on the board and open its session. Lands in idle
+    /// (a revived task is in play again — DONE would close the terminal and the
+    /// next launch would archive it before it could be read). Local cards resume
+    /// the pinned conversation in their directory; remote cards re-attach over ssh.
+    /// The same ``reviveSession(for:)`` path a DONE → in-play move already uses.
+    @discardableResult
+    func reviveArchivedTask(id: UUID) -> BoardCard? {
+        guard let index = archivedTasks.firstIndex(where: { $0.id == id }) else { return nil }
+        let record = archivedTasks.remove(at: index)
+        adoptBoardRecord(record, state: .idle)
+        restoreRevivedCard(id)
+        persistTasks()
+        guard let card = cards.first(where: { $0.id == id }) else { return nil }
+        // Stay on the archive while the attach runs (a remote probe can take a
+        // moment). The drill-in takes over when the session is back; if it cannot
+        // (the checkout is gone), the card is still on the board to be found.
+        drill(into: card)
+        if drillIn.isHidden { hideArchivePage() }
+        return cards.first { $0.id == id }
+    }
+
+    /// A revived card is back in play: not a durable DONE, so the next launch
+    /// keeps it on the board instead of sweeping it into the archive again.
+    private func restoreRevivedCard(_ id: UUID) {
+        manuallyDoneCardIDs.remove(id)
+        guard let index = cards.firstIndex(where: { $0.id == id }) else { return }
+        cards[index] = cards[index].with(state: .idle)
     }
 
     /// Esc / "← board": restore the board exactly as left.
     func hideArchivePage() {
         archivePage.isHidden = true
         boardView.isHidden = false
-        attention.isHidden = false
         quota.isHidden = false
         refresh()
         window?.makeFirstResponder(boardView)
@@ -1966,10 +2491,33 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// exception: DONE closes the terminal (a finished task must stop eating a shell,
     /// an fd, and a pump slot), after freezing its resume hints. Leaving DONE brings
     /// the terminal back on the SAME conversation via ``reviveSession(for:)``.
+    /// Rule 1: park off NEEDS YOU until tomorrow and persist the snooze.
+    func deferNeedsYouToTomorrow(cardID: UUID, now: Date = Date()) {
+        guard let idx = cards.firstIndex(where: { $0.id == cardID }) else { return }
+        let until = NeedsYouStandup.defaultDeferUntil(from: now)
+        let card = cards[idx]
+        workLog?.noteEvent(
+            "parked until \(Self.standupStamp.string(from: until)) (NEEDS YOU standup)",
+            card: card, at: now)
+        // The snooze is stamped AFTER the move: landing in PARKED clears any existing
+        // deferral, which would otherwise wipe the one this call exists to record.
+        move(cardID: cardID, to: .parked)
+        taskMetaByCard[cardID, default: CardTaskMeta()].needsYouDeferredUntil = until
+        persistTasks()
+    }
+
     func move(cardID: UUID, to column: BoardColumn) {
         guard let idx = cards.firstIndex(where: { $0.id == cardID }) else { return }
         let wasDone = cards[idx].state == .done
         cards[idx] = cards[idx].with(state: column.state)
+        if column == .parked || column == .idle || column == .blocked {
+            taskMetaByCard[cardID]?.needsYouDeferredUntil = nil
+        }
+        if column == .blocked || column == .parked {
+            operatorHeldCardIDs.insert(cardID)
+        } else {
+            operatorHeldCardIDs.remove(cardID)
+        }
         if column == .done {
             manuallyDoneCardIDs.insert(cardID)
             closeTerminal(for: cardID)
@@ -2073,13 +2621,14 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         taskMetaByCard.removeValue(forKey: cardID)
         seededCardIDs.remove(cardID)
         manuallyDoneCardIDs.remove(cardID)
+        operatorHeldCardIDs.remove(cardID)
         refresh()
         persistOnTerminate(store: SessionSnapshotStore.applicationSupport())
         persistTasks()
     }
 
     /// US-002: drill into a card → full-window terminal takeover (Altitude-1).
-    /// The board surface and attention header are hidden so the embedded terminal
+    /// The board surface and quota panel are hidden so the embedded terminal
     /// is the only thing on screen.
     func drill(into card: BoardCard) {
         guard let pty = ptyByCard[card.id] ?? reviveSession(for: card) else { return }
@@ -2095,13 +2644,11 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         selection.focus(card.id)
         drilledInCardID = card.id   // its surface owns the fd now; the pump skips it
         boardView.isHidden = true
-        attention.isHidden = true
         backlogPage.isHidden = true
         archivePage.isHidden = true
         quota.isHidden = true
         drillIn.isHidden = false
         drillIn.focus(card: card, pty: pty, terminalFontSize: terminalFontSize)
-        drillIn.update(diffs: turnDiffs)
         drillIn.updateQuota(QuotaProjection.gauges(from: quotaSources))
     }
 
@@ -2124,19 +2671,27 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: dir, isDirectory: &isDir),
               isDir.boolValue else { return nil }
+        let profileID = taskMetaByCard[card.id]?.claudeProfileID
         let seed = BoardSeed.liveTerminal(
             projectDir: dir, sessionID: card.sessionID, title: card.title,
-            cardID: card.id.uuidString, agent: card.agent
+            cardID: card.id.uuidString, agent: card.agent,
+            accountEnv: accountEnvExports(for: profileID, agent: card.agent)
         )
         guard let session = launch(seed) else { return nil }
         if let resumeID = hint?.claudeSessionID {
             // Carry the ORIGINAL conversation id forward, same as openRestoredCard:
             // the resume token must survive an unbounded chain of revivals.
             session.recordClaudeSession(resumeID)
-            _ = session.pty.send(Array(Self.resumeClaudeCommand(sessionID: resumeID).utf8))
+            _ = session.pty.send(Array(Self.resumeClaudeCommand(sessionID: resumeID, via: .localShim).utf8))
         } else if card.agent == .codex {
             HookInstaller.installCodexShim()
             _ = session.pty.send(Array(Self.resumeCodexCommand().utf8))
+        } else if card.agent == .cursor {
+            HookInstaller.installCursorHooks()
+            _ = session.pty.send(Array(Self.resumeCursorCommand().utf8))
+        } else if card.agent == .antigravity {
+            HookInstaller.installAntigravityHooks()
+            _ = session.pty.send(Array(Self.resumeAntigravityCommand().utf8))
         }
         ptyByCard[card.id] = session.pty
         persistTasks()
@@ -2171,30 +2726,33 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// Re-attach a session-less remote card under the ORIGINAL card id.
     ///
     /// Normally tmux kept the far side exactly as the operator left it and revival is a
-    /// pure attach: NO keystrokes are typed, because they would talk over whatever is
-    /// already running there. But `-A` also silently CREATES the session when the far
-    /// side lost it (a reboot, an OOM sweep, a killed tmux server) — and that case used
-    /// to be indistinguishable from a resume, so the operator landed on a bare login
-    /// shell with their conversation stranded. So ask first: only when the far side says
-    /// the session is gone do we rebuild the context we know about — the last directory,
-    /// via the spec, and the conversation, by resuming it.
+    /// pure attach: nothing is started, because it would talk over whatever is already
+    /// running there. But `-A` also silently CREATES the session when the far side lost
+    /// it (a reboot, an OOM sweep, a killed tmux server) — and that case used to be
+    /// indistinguishable from a resume, so the operator landed on a bare login shell
+    /// with their conversation stranded. So ask first: only when the far side says the
+    /// session is gone do we rebuild the context we know about — the last directory,
+    /// via the spec, and the conversation, by resuming it on the session's own launch
+    /// command (the create branch of `-A`, exactly the case this is for).
     private func reviveRemoteSession(spec: RemoteTmuxSpec, card: BoardCard) -> PTYSession? {
         let lost = remoteSessionIsLost(spec: spec, cardID: card.id.uuidString)
+        let rebuild = lost ? remoteRebuild(for: card) : nil
         guard let seed = try? BoardSeed.remoteTmux(
             spec: spec, sessionID: card.sessionID, title: card.title,
-            cardID: card.id.uuidString, agent: card.agent
+            cardID: card.id.uuidString, agent: card.agent,
+            agentCommand: rebuild?.command
         ), let session = launch(seed) else { return nil }
         adoptRestoredRemote(spec, on: session)
-        if lost, let rebuild = remoteRebuildCommand(for: card, on: session) {
-            _ = session.pty.send(Array(rebuild.utf8))
+        if let rebuild {
+            session.recordClaudeSession(rebuild.conversation)
         }
         ptyByCard[card.id] = session.pty
         persistTasks()
         return session.pty
     }
 
-    /// What to type into a tmux session the far side had to build from nothing, to put
-    /// the card back on a conversation instead of an empty prompt.
+    /// What a tmux session the far side had to build from nothing runs, to put the card
+    /// back on a conversation instead of an empty prompt.
     ///
     /// With a known conversation id it is a resume; without one — the far side was lost
     /// before any hook line named it — it is a fresh conversation PINNED to an id we
@@ -2206,15 +2764,13 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// not exist on the far side, and Gemini has no resume; both come back to the shell
     /// prompt they left, which is what the operator can act on.
     /// Firewall-clean throughout: interactive `claude`, never `claude -p`.
-    private func remoteRebuildCommand(for card: BoardCard, on session: Session) -> String? {
+    private func remoteRebuild(for card: BoardCard) -> (command: String, conversation: UUID)? {
         guard card.agent == .claude else { return nil }
         if let resumeID = taskMetaByCard[card.id]?.sessionRef?.claudeSessionID {
-            session.recordClaudeSession(resumeID)
-            return Self.resumeClaudeCommand(sessionID: resumeID)
+            return (RemoteTmuxCommand.claudeResume(sessionID: resumeID), resumeID)
         }
         let fresh = UUID()
-        session.recordClaudeSession(fresh)
-        return Self.startClaudeCommand(sessionID: fresh)
+        return (RemoteTmuxCommand.claudeStart(sessionID: fresh), fresh)
     }
 
     /// Whether the far side has LOST this card's tmux session, so the attach about to
@@ -2227,8 +2783,8 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             of: key, cardID: cardID, spec: spec, runner: remoteSessionRunner) == .absent
     }
 
-    /// US-002 AC#2: return to the board, state preserved — un-hide the board and
-    /// attention header so the board looks exactly as it did before drilling in.
+    /// US-002 AC#2: return to the board, state preserved — un-hide the board so it
+    /// looks exactly as it did before drilling in.
     func returnToBoard() {
         if let inside = drilledInCardID ?? planningModeCardID,
            let card = cards.first(where: { $0.id == inside }) {
@@ -2240,7 +2796,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         if let dead = drilledInCardID, deadCardIDs.contains(dead) { removeDeadCard(dead) }
         drilledInCardID = nil   // surface is detaching; the pump resumes draining this fd
         boardView.isHidden = false
-        attention.isHidden = false
         backlogPage.isHidden = true
         archivePage.isHidden = true
         quota.isHidden = false
@@ -2325,33 +2880,360 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         planningModeCardID = nil
     }
 
-    /// US-005 AC#2: activating the indicator filters the board to waiting/blocked.
-    private func activateAttention() {
-        if selection.attentionFilterActive {
-            selection.clearAttentionFilter()
-        } else {
-            selection.activateAttention(displayCards())
-        }
-        refresh()
-    }
-
     /// Re-derive the view from the current model — the single render path, so a
     /// live state change just re-runs this (US-003 AC#3 / US-005 live update).
     private func refresh(includeQuota: Bool = true) {
         let shown = displayCards()
-        let count = Attention.count(shown)
-        attention.update(count: count)
-        alertIfAttentionRose(to: count)
+        let gauges = QuotaProjection.gauges(from: quotaSources)
+        let quotaBlocks = quotaBlocks(for: shown, gauges: gauges)
+        let switchMenus = switchMenus(for: shown, gauges: gauges)
+        alertIfAttentionRose(to: Attention.count(shown))
         notifyNewlyDone()
-        boardView.render(cards: selection.visibleCards(from: shown))
+        boardView.render(
+            cards: shown,
+            quotaBlocks: quotaBlocks,
+            switchMenus: switchMenus)
         if !backlogPage.isHidden { backlogPage.render(backlogTasks) }
         if !archivePage.isHidden { archivePage.render(archivedTasks) }
         if includeQuota {
-            quota.render(gauges: QuotaProjection.gauges(from: quotaSources), cards: shown)
+            quota.render(
+                gauges: gauges, cards: shown,
+                claudeProfiles: agentAccountStore.profiles,
+                claudeProfileByCard: claudeProfileByCardMap())
         }
         // Keep the drill-in's status pill / waiting banner tracking the live state.
         if let id = drilledInCardID, let card = shown.first(where: { $0.id == id }) {
             drillIn.update(state: card.state)
+        }
+    }
+
+    /// Per-card quota block derived from harness + account + live gauges.
+    private func quotaBlocks(for cards: [BoardCard], gauges: [QuotaGauge]) -> [UUID: CardQuotaBlock] {
+        let profiles = agentAccountStore.claudeProfiles
+        let byCard = claudeProfileByCardMap()
+        var result: [UUID: CardQuotaBlock] = [:]
+        for card in cards {
+            result[card.id] = CardQuotaAdvisor.block(
+                for: card, profileID: byCard[card.id],
+                claudeProfiles: profiles, gauges: gauges)
+        }
+        return result
+    }
+
+    /// Context-menu targets for account/harness moves on local and remote cards.
+    private func switchMenus(for cards: [BoardCard], gauges: [QuotaGauge]) -> [UUID: CardSwitchMenu] {
+        let profiles = agentAccountStore.claudeProfiles
+        let byCard = claudeProfileByCardMap()
+        var result: [UUID: CardSwitchMenu] = [:]
+        for card in cards where canSwitchHarness(card) {
+            let host = switchHost(for: card)
+            let currentProfile = byCard[card.id]
+            let accounts: [CardSwitchMenu.AccountOption]
+            if AgentAccountBackend.supportsMultiAccount(card.agent) {
+                accounts = agentAccountStore.selectable(for: card.agent, host: host)
+                    .filter { $0.id != currentProfile }
+                    .map { account in
+                        let block = CardQuotaAdvisor.block(
+                            for: BoardCard(
+                                id: card.id, sessionID: card.sessionID, title: card.title,
+                                projectDir: card.projectDir, agent: card.agent, flow: card.flow,
+                                state: card.state),
+                            profileID: account.id, claudeProfiles: profiles, gauges: gauges)
+                        return CardSwitchMenu.AccountOption(
+                            id: account.id, name: account.name, quotaBlock: block)
+                    }
+            } else {
+                accounts = []
+            }
+            let harnesses = CardAgent.allCases.filter { $0 != card.agent && supportsHarnessSwitch($0) }
+            result[card.id] = CardSwitchMenu(accounts: accounts, harnesses: harnesses)
+        }
+        return result
+    }
+
+    private func canSwitchHarness(_ card: BoardCard) -> Bool {
+        guard card.state != .done else { return false }
+        return isLocalCard(card) || isRemoteCard(card)
+    }
+
+    private func isLocalCard(_ card: BoardCard) -> Bool {
+        card.host == nil && taskMetaByCard[card.id]?.remote == nil
+    }
+
+    private func isRemoteCard(_ card: BoardCard) -> Bool {
+        taskMetaByCard[card.id]?.remote != nil || card.host != nil
+    }
+
+    /// The host key for account selection — nil for local, the remote hostname otherwise.
+    private func switchHost(for card: BoardCard) -> String? {
+        taskMetaByCard[card.id]?.remote?.host ?? Self.relayHost(of: card) ?? card.host
+    }
+
+    private func supportsHarnessSwitch(_ agent: CardAgent) -> Bool {
+        switch agent {
+        case .claude, .codex, .cursor, .antigravity: return true
+        case .gemini: return false
+        }
+    }
+
+    /// Move a task to another account on the same harness, with a context handoff.
+    func switchAccount(on card: BoardCard, to accountID: UUID) {
+        guard canSwitchHarness(card),
+              let account = agentAccountStore.account(id: accountID),
+              account.agent == card.agent else { return }
+        relaunch(card: card, agent: card.agent, profileID: account.id, handoffFrom: card)
+    }
+
+    /// Continue a task on a different harness, with a context handoff.
+    func switchHarness(on card: BoardCard, to agent: CardAgent) {
+        guard canSwitchHarness(card), supportsHarnessSwitch(agent) else { return }
+        let host = switchHost(for: card)
+        let profileID = AgentAccountBackend.supportsMultiAccount(agent)
+            ? agentAccountStore.selectable(for: agent, host: host).first?.id
+            : nil
+        relaunch(card: card, agent: agent, profileID: profileID, handoffFrom: card)
+    }
+
+    /// Tear down the live session and relaunch under a new harness/account on the
+    /// same card id, seeding the new agent with a handoff prompt.
+    private func relaunch(
+        card: BoardCard, agent: CardAgent, profileID: UUID?, handoffFrom prior: BoardCard
+    ) {
+        if isRemoteCard(card) {
+            relaunchRemote(card: card, agent: agent, profileID: profileID, handoffFrom: prior)
+            return
+        }
+        if drilledInCardID == card.id { returnToBoard() }
+        let handoff = buildHandoffContext(from: prior)
+        terminateOwnedSession(for: card.id)
+        guard let idx = cards.firstIndex(where: { $0.id == card.id }) else { return }
+        cards[idx] = cards[idx].with(agent: agent).with(state: .idle)
+        let cwd = taskMetaByCard[card.id]?.sessionRef?.lastCwd ?? card.projectDir
+        taskMetaByCard[card.id, default: CardTaskMeta()].claudeProfileID = profileID
+        taskMetaByCard[card.id]?.sessionRef = TaskSessionRef(claudeSessionID: nil, lastCwd: cwd)
+        guard let session = openRelaunchedSession(
+            card: cards[idx], agent: agent, profileID: profileID, handoff: handoff
+        ) else { return }
+        ptyByCard[card.id] = session.pty
+        workLog?.noteEvent(
+            "relaunched on \(agent.displayName)\(profileLabel(profileID)) with context handoff",
+            card: cards[idx])
+        refresh()
+        persistTasks()
+    }
+
+    /// Remote variant: detach the local ssh client, re-attach to the same tmux
+    /// session, interrupt whatever is running, and start the new harness there.
+    private func relaunchRemote(
+        card: BoardCard, agent: CardAgent, profileID: UUID?, handoffFrom prior: BoardCard
+    ) {
+        guard let spec = remoteSpec(for: card) ?? taskMetaByCard[card.id]?.remote else { return }
+        if drilledInCardID == card.id { returnToBoard() }
+        let handoff = buildHandoffContext(from: prior)
+        terminateOwnedSession(for: card.id)
+        guard let idx = cards.firstIndex(where: { $0.id == card.id }) else { return }
+        cards[idx] = cards[idx].with(agent: agent).with(state: .idle)
+        let cwd = remoteWorkingDir(for: card) ?? spec.remoteDir ?? card.projectDir
+        taskMetaByCard[card.id, default: CardTaskMeta()].claudeProfileID = profileID
+        taskMetaByCard[card.id]?.sessionRef = TaskSessionRef(claudeSessionID: nil, lastCwd: cwd)
+        guard let session = openRelaunchedRemoteSession(
+            card: cards[idx], spec: spec, agent: agent, profileID: profileID, handoff: handoff
+        ) else { return }
+        ptyByCard[card.id] = session.pty
+        workLog?.noteEvent(
+            "relaunched on \(agent.displayName)\(profileLabel(profileID)) with context handoff",
+            card: cards[idx])
+        refresh()
+        persistTasks()
+    }
+
+    private func profileLabel(_ profileID: UUID?) -> String {
+        guard let profileID, let account = agentAccountStore.account(id: profileID) else { return "" }
+        return " (\(account.name))"
+    }
+
+    private func terminateOwnedSession(for cardID: UUID) {
+        let pty = ptyByCard.removeValue(forKey: cardID)
+        pty?.terminate()
+        if let pty, let dead = registry.all.first(where: { $0.pty === pty }) {
+            registry.remove(id: dead.id)
+        }
+    }
+
+    private func buildHandoffContext(from card: BoardCard) -> String {
+        let remote = isRemoteCard(card)
+        let profileID = taskMetaByCard[card.id]?.claudeProfileID
+        let account = agentAccountStore.account(id: profileID)
+        let session = ptyByCard[card.id].flatMap { pty in
+            registry.all.first { $0.pty === pty }
+        }
+        let cwd = remote
+            ? (remoteWorkingDir(for: card) ?? card.projectDir)
+            : (session?.reportedCwd
+                ?? taskMetaByCard[card.id]?.sessionRef?.lastCwd
+                ?? card.projectDir)
+        let claudeRoot = account.flatMap { $0.agent == .claude ? $0.resolvedConfigRoot : nil }
+            ?? ClaudeLaunchEnv.defaultConfigDir.path
+        let request = AgentTranscriptLocator.Request(
+            agent: card.agent,
+            projectDir: cwd,
+            claudeSessionID: session?.claudeSessionID
+                ?? taskMetaByCard[card.id]?.sessionRef?.claudeSessionID,
+            claudeConfigRoot: claudeRoot,
+            codexHome: account.flatMap { $0.agent == .codex ? $0.resolvedConfigRoot : nil },
+            cursorConfigRoot: account.flatMap { $0.agent == .cursor ? $0.resolvedConfigRoot : nil }
+        )
+        let transcriptPath = remote
+            ? AgentTranscriptLocator.expectedPath(request)
+            : AgentTranscriptLocator.locate(request)
+        let logURL = workLog?.fileURL(for: card.id)
+        let logTail = logURL.flatMap { url -> String? in
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+            return HarnessHandoff.tail(ofWorkLog: text)
+        }
+        return HarnessHandoff.prompt(
+            title: card.title, projectDir: cwd,
+            priorAgent: card.agent, priorAccountName: account?.name,
+            priorTranscriptPath: transcriptPath,
+            workLogTail: logTail, taskFolder: card.taskFolder)
+    }
+
+    /// The far-side working directory learned from hooks or the card's spec.
+    private func remoteWorkingDir(for card: BoardCard) -> String? {
+        if let cwd = taskMetaByCard[card.id]?.sessionRef?.lastCwd, cwd.hasPrefix("/") {
+            return cwd
+        }
+        if let pty = ptyByCard[card.id],
+           let session = registry.all.first(where: { $0.pty === pty }),
+           let cwd = session.reportedCwd, cwd.hasPrefix("/") {
+            return cwd
+        }
+        return taskMetaByCard[card.id]?.remote?.remoteDir
+    }
+
+    private func openRelaunchedSession(
+        card: BoardCard, agent: CardAgent, profileID: UUID?, handoff: String
+    ) -> Session? {
+        let dir = taskMetaByCard[card.id]?.sessionRef?.lastCwd ?? card.projectDir
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: dir, isDirectory: &isDir),
+              isDir.boolValue else { return nil }
+        let seed = BoardSeed.liveTerminal(
+            projectDir: dir, sessionID: card.sessionID, title: card.title,
+            cardID: card.id.uuidString, agent: agent,
+            accountEnv: accountEnvExports(for: profileID, agent: agent)
+        )
+        guard let session = launch(seed) else { return nil }
+        startAgent(in: session, agent: agent, handoff: handoff, via: .localShim)
+        return session
+    }
+
+    private func openRelaunchedRemoteSession(
+        card: BoardCard, spec: RemoteTmuxSpec, agent: CardAgent,
+        profileID: UUID?, handoff: String
+    ) -> Session? {
+        let account = agentAccount(for: profileID)
+        let tmuxEnv = account.map { AgentAccountBackend.remoteTmuxEnvironment(for: $0) } ?? []
+        let conversation = agent == .claude ? UUID() : nil
+        guard let seed = try? BoardSeed.remoteTmux(
+            spec: spec, sessionID: card.sessionID, title: card.title,
+            cardID: card.id.uuidString, agent: agent,
+            tmuxEnvironment: tmuxEnv,
+            agentCommand: conversation.map(RemoteTmuxCommand.claudeStart(sessionID:))
+        ), let session = launch(seed) else { return nil }
+        adoptRestoredRemote(spec, on: session)
+        if let conversation {
+            session.recordClaudeSession(conversation)
+        }
+        scheduleRemoteAgentStart(
+            in: session, agent: agent, profileID: profileID, handoff: handoff)
+        return session
+    }
+
+    private func startAgent(
+        in session: Session, agent: CardAgent, handoff: String,
+        via launcher: HarnessLauncher
+    ) {
+        switch agent {
+        case .claude:
+            session.recordClaudeSession(session.id)
+            _ = session.pty.send(Array(Self.startClaudeCommand(sessionID: session.id, via: launcher).utf8))
+        case .codex:
+            if launcher == .localShim { HookInstaller.installCodexShim() }
+            _ = session.pty.send(Array(Self.startCodexCommand(via: launcher).utf8))
+        case .cursor:
+            if launcher == .localShim { HookInstaller.installCursorHooks() }
+            _ = session.pty.send(Array(Self.startCursorCommand(via: launcher).utf8))
+        case .antigravity:
+            if launcher == .localShim { HookInstaller.installAntigravityHooks() }
+            _ = session.pty.send(Array(Self.startAntigravityCommand(via: launcher).utf8))
+        case .gemini:
+            break
+        }
+        scheduleHandoff(handoff, to: session)
+    }
+
+    /// After re-attaching over ssh, interrupt the running process and start the
+    /// new harness on the far side. The keystrokes go through `sendWhenReady`, so
+    /// they reach the PANE once the control-mode attach has bound it — never the
+    /// handshake; the handoff follows the start command.
+    private func scheduleRemoteAgentStart(
+        in session: Session, agent: CardAgent, profileID: UUID?, handoff: String
+    ) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak session] in
+            guard let session else { return }
+            session.pty.sendWhenReady([0x03])   // Ctrl-C — stop whatever is running
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak session] in
+                guard let session else { return }
+                let prefix = Self.remoteAccountPrefix(for: profileID, agent: agent,
+                                                      in: self.agentAccountStore)
+                switch agent {
+                case .claude:
+                    let id = session.claudeSessionID ?? UUID()
+                    session.recordClaudeSession(id)
+                    let cmd = prefix + Self.startClaudeCommand(sessionID: id, via: .remotePath)
+                    session.pty.sendWhenReady(Array(cmd.utf8))
+                case .codex:
+                    let cmd = prefix + Self.startCodexCommand(via: .remotePath)
+                    session.pty.sendWhenReady(Array(cmd.utf8))
+                case .cursor:
+                    let cmd = prefix + Self.startCursorCommand(via: .remotePath)
+                    session.pty.sendWhenReady(Array(cmd.utf8))
+                case .antigravity:
+                    let cmd = prefix + Self.startAntigravityCommand(via: .remotePath)
+                    session.pty.sendWhenReady(Array(cmd.utf8))
+                case .gemini:
+                    break
+                }
+                self.scheduleHandoff(handoff, to: session)
+            }
+        }
+    }
+
+    /// Shell exports for a remote account switch, typed before the agent start.
+    private static func remoteAccountPrefix(
+        for profileID: UUID?, agent: CardAgent, in store: AgentAccountStore
+    ) -> String {
+        guard let profileID, let account = store.account(id: profileID),
+              account.agent == agent else { return "" }
+        let pairs = AgentAccountBackend.remoteTmuxEnvironment(for: account)
+        guard !pairs.isEmpty else { return "" }
+        return pairs.map { name, value in
+            "export \(name)=\(shellQuotedRemote(value)); "
+        }.joined()
+    }
+
+    private static func shellQuotedRemote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    /// Give the agent a moment to start, then paste the handoff as the first prompt.
+    private func scheduleHandoff(_ text: String, to session: Session) {
+        let payload = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !payload.isEmpty else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak session] in
+            guard let session else { return }
+            _ = session.pty.send(Array((payload + "\n").utf8))
         }
     }
 
@@ -2380,10 +3262,15 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// map. Cards on hosts nobody relays for (every local card) pass through: `nil`
     /// health is silence, not a verdict, and a reachable host with no forwarder
     /// installed stays an install-state message on the host chip.
-    private func displayCards() -> [BoardCard] {
+    ///
+    /// A DONE card is exempt: completion is settled, nothing on the far side can
+    /// change it, so a dead link (e.g. the host lives on a tailnet you are not on
+    /// right now) must not drag finished work back into PARKED.
+    func displayCards() -> [BoardCard] {
         guard let sessionsPoller else { return cards }
         return cards.map { card in
-            guard let host = card.host ?? Self.relayHost(of: card),
+            guard card.state != .done,
+                  let host = card.host ?? Self.relayHost(of: card),
                   sessionsPoller.relayHealth(for: host) == .unreachable
             else { return card }
             return card.with(state: .unreachable)
@@ -2404,7 +3291,8 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// into a repaint.
     private func unreachableHosts(among candidates: [BoardCard]) -> Set<String> {
         guard let sessionsPoller else { return [] }
-        let hosts = candidates.compactMap { $0.host ?? Self.relayHost(of: $0) }
+        let hosts = candidates.filter { $0.state != .done }
+            .compactMap { $0.host ?? Self.relayHost(of: $0) }
         return Set(hosts.filter { sessionsPoller.relayHealth(for: $0) == .unreachable })
     }
 
@@ -2434,6 +3322,57 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         AttentionClock.shared.retain(live)
     }
 
+    // MARK: - Rule 1: NEEDS YOU standup (docs/OPERATING-RULES.md)
+
+    private static let standupStamp: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return f
+    }()
+
+    private func registerNeedsYouStandupObserver() {
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.presentNeedsYouStandupIfNeeded() }
+        }
+    }
+
+    /// Surfaces stale NEEDS YOU cards until the operator responds, defers, or snoozes.
+    func presentNeedsYouStandupIfNeeded() {
+        guard ProcessInfo.processInfo.environment["SICH_E2E"] == nil else { return }
+        guard !needsYouStandupOpen else { return }
+        guard drilledInCardID == nil, planningMode.isHidden, backlogPage.isHidden,
+              archivePage.isHidden, createPalette == nil else { return }
+        let stale = NeedsYouStandup.staleCards(
+            among: cards,
+            waitingSince: { AttentionClock.shared.waitingSince($0) },
+            deferredUntil: { taskMetaByCard[$0]?.needsYouDeferredUntil }
+        )
+        guard let card = stale.first,
+              let since = AttentionClock.shared.waitingSince(card.id) else { return }
+
+        needsYouStandupOpen = true
+        defer { needsYouStandupOpen = false }
+
+        let choice = NeedsYouStandupPrompt.run(for: card, waitingSince: since)
+        switch choice {
+        case .respondNow:
+            drill(into: card)
+        case .deferUntilTomorrow:
+            deferNeedsYouToTomorrow(cardID: card.id)
+            DispatchQueue.main.async { [weak self] in self?.presentNeedsYouStandupIfNeeded() }
+        case .markDone:
+            move(cardID: card.id, to: .done)
+            DispatchQueue.main.async { [weak self] in self?.presentNeedsYouStandupIfNeeded() }
+        case .cancelled:
+            break
+        }
+    }
+
     /// OS-level nudge when a session newly starts waiting on the operator while
     /// they are in another app. In-app the header indicator already covers it, so
     /// banners stay quiet when active.
@@ -2450,7 +3389,10 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     func applyQuota(sources: [QuotaSourceInput]) {
         quotaSources = sources
         let gauges = QuotaProjection.gauges(from: quotaSources)
-        quota.render(gauges: gauges, cards: cards)
+        quota.render(
+            gauges: gauges, cards: cards,
+            claudeProfiles: agentAccountStore.profiles,
+            claudeProfileByCard: claudeProfileByCardMap())
         drillIn.updateQuota(gauges)   // keep the drill-in header readout live too
     }
 
@@ -2514,10 +3456,10 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         guard signature != lastSessionsSignature else { return }
         lastSessionsSignature = signature
         cards = merged   // ptyByCard keeps its owned entries → drill-in still works
-        // US-005: re-render even while drilled in so the board (and the always-visible
-        // attention badge) reflect reality on return, not a frozen snapshot. The focused
-        // terminal lives in the separate `drillIn` panel; while drilled, `boardView`,
-        // `attention`, and `quota` are all hidden, so `refresh()` rebuilds hidden card
+        // US-005: re-render even while drilled in so the board (and the Dock badge)
+        // reflect reality on return, not a frozen snapshot. The focused terminal lives
+        // in the separate `drillIn` panel; while drilled, `boardView` and `quota` are
+        // hidden, so `refresh()` rebuilds hidden card
         // views without touching the live terminal's superview. ponytail: full refresh,
         // no teardown — the old `focusedCardID == nil` guard is gone.
         refresh()
@@ -2573,12 +3515,16 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         return now < deadline ? card : card.with(state: next)
     }
 
-    /// Reconcile detector output without surrendering manual task completion. DONE is
+    /// Reconcile detector output without surrendering manual task placement. DONE is
     /// a manual-only column in both directions: a manually completed task stays there
     /// until the operator moves it, and an observed session completion cannot put an
-    /// active task there. Other live states continue to move non-completed cards.
+    /// active task there. BLOCKED and PARKED are manual in the same sense — they say
+    /// something the agent cannot know (you are waiting on a PR, you shelved this) —
+    /// so a live session's next turn end must not pull them back to NEEDS YOU. Other
+    /// live states continue to move non-held cards.
     private func detectorSafeState(card: BoardCard, observed state: CardState) -> CardState {
         if card.state == .done || state == .done { return card.state }
+        if operatorHeldCardIDs.contains(card.id) { return card.state }
         return state
     }
 
@@ -2634,7 +3580,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         case .runningTests:              return 4
         case .running:                   return 3
         case .done:                      return 2
-        case .idle:                      return 1
+        case .idle, .parked:             return 1
         // Never observed on a store entry (the board derives it at render time), and
         // ranked with `unknown` if one ever reached here: it says nothing about which
         // session is live.
@@ -2658,4 +3604,8 @@ struct CardTaskMeta {
     /// the card level so the task book can persist it and a session-less remote
     /// card can rebuild its attach on drill-in (the far side is still running).
     var remote: RemoteTmuxSpec?
+    /// Which Claude Code account (`CLAUDE_CONFIG_DIR`) this card's sessions use.
+    var claudeProfileID: UUID?
+    /// Rule 1 snooze: do not treat NEEDS YOU as stale until this instant.
+    var needsYouDeferredUntil: Date?
 }

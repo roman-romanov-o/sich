@@ -3,7 +3,7 @@ import SichCore
 
 /// The visual harness identity: the agent's **official brand mark** (Anthropic /
 /// OpenAI / Google Gemini, vendored as vector PDFs — see ``BoardTheme/agentMark(_:)``)
-/// tinted to its two-flow colour, replacing textual "Claude Code" / "Codex" labels
+/// in one neutral ink (``BoardTheme/harnessMark``), replacing textual "Claude Code" / "Codex" labels
 /// so which CLI drives a session is spottable at a glance without adding another chip.
 ///
 /// It draws the mark itself in ``draw(_:)`` — a container view with a stock image
@@ -36,7 +36,7 @@ final class HarnessBadge: NSView {
         self.agent = agent
         toolTip = agent.displayName
         mark = BoardTheme.agentMark(agent)
-        tint = BoardTheme.agentColor(agent)
+        tint = BoardTheme.harnessMark
         themedBackground = nil
         themedBorder = nil
         needsDisplay = true

@@ -40,7 +40,31 @@ public final class TerminalSurface: NSView {
     private var selectionAnchor: GridPoint?
     private var selectionFocus: GridPoint?
     private var refreshQueue = TerminalRefreshQueue()
+    /// Whether the scrollback pill was on screen at the last repaint — a flip
+    /// is the one case the row damage-diff cannot express, so it forces a full one.
+    private var badgeWasVisible = false
     private var scrollAccumulator = TerminalScrollAccumulator()
+    /// Wheel motion (rows, wheel-up positive) not yet applied to the viewport.
+    /// Applied at frame time, against the emulator's real position, so a scroll
+    /// that clamps at the live screen can never leave a phantom fraction behind.
+    private var pendingScroll: CGFloat = 0
+    /// Sub-row scroll position, 0 ≤ fraction < 1: the row stack is drawn shifted
+    /// UP by this many rows, with the row just below the viewport sliding in at
+    /// the bottom. Only ever non-zero while the viewport sits in history.
+    private var scrollFraction: CGFloat = 0
+    /// The history row below the viewport, shown under the last row while
+    /// `scrollFraction > 0`.
+    private var rowBelow: [TerminalCell]?
+    /// Set by a viewport/geometry change: the next idle frame pre-renders the
+    /// screen above into the row cache so the first flick into history finds its
+    /// rows already painted.
+    private var prefetchArmed = false
+    /// Rows are Core Animation layers showing content-keyed cached row images
+    /// (``TerminalRowLayerHost``); selection, cursor, banner and pill paint in the
+    /// overlay above them. A scroll frame is pointer swaps plus a GPU composite.
+    private let rowHost = TerminalRowLayerHost(frame: .zero)
+    private let overlay = TerminalOverlayView(frame: .zero)
+    private let rowCache = TerminalRowCache()
     private lazy var frameCoordinator = TerminalFrameCoordinator { [weak self] in
         self?.displayFrame() ?? false
     }
@@ -64,9 +88,15 @@ public final class TerminalSurface: NSView {
     /// One monospaced cell's exact advance × line height. Kept fractional (not
     /// rounded) so a coalesced glyph run drawn as one string stays grid-aligned:
     /// the font advances by exactly this width per char, matching `col * cellSize`.
+    ///
+    /// The height, though, is rounded UP to whole device pixels: a row layer sits
+    /// at `row * cellHeight`, and a fractional origin would make Core Animation
+    /// resample its image (blurry glyphs). Width stays fractional — it only
+    /// positions text within one row image.
     private lazy var cellSize: CGSize = {
         let w = ("M" as NSString).size(withAttributes: [.font: font]).width
-        let h = font.ascender - font.descender + font.leading
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        let h = ((font.ascender - font.descender + font.leading) * scale).rounded(.up) / scale
         return CGSize(width: w, height: h)
     }()
 
@@ -85,6 +115,11 @@ public final class TerminalSurface: NSView {
         layer?.masksToBounds = true
         // A dropped file pastes its path (the drag-a-screenshot-into-claude flow).
         registerForDraggedTypes([.fileURL])
+        addSubview(rowHost)   // framed to the grid rect by `syncRowLayers`
+        overlay.frame = bounds
+        overlay.autoresizingMask = [.width, .height]
+        addSubview(overlay)
+        overlay.drawHandler = { [weak self] _ in self?.drawOverlay() }
     }
 
     required init?(coder: NSCoder) { nil }
@@ -101,8 +136,18 @@ public final class TerminalSurface: NSView {
         super.viewDidChangeEffectiveAppearance()
         cachedTerminalBackground = nil
         glyphAttrsCache.removeAll(keepingCapacity: true)
+        rowCache.removeAll()   // rows were painted in the old palette
         applyTerminalTheme()
         requestRefresh(.full) // cells re-resolve through the new palette
+    }
+
+    /// Moved to a display with another scale: cached rows carry the old backing
+    /// resolution, so drop them rather than show blurry 1x rows on a 2x screen.
+    // periphery:ignore - NSView override; `public` is required by the open class
+    public override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        rowCache.removeAll()
+        syncRowLayers(changedFrom: nil)
     }
 
     /// Push this appearance's colour theme into the emulator so the child's ANSI
@@ -120,12 +165,12 @@ public final class TerminalSurface: NSView {
     /// Item 8 (18.08): a drill-in surface teaches the board its settled grid so the
     /// NEXT spawn is born that shape. Off by default — planning-mode panes and test
     /// surfaces are narrower than the drill-in viewport and must not pollute it.
-    public var teachesGeometry = false
+    var teachesGeometry = false
 
     // MARK: - Links (item 9, 18.08)
 
     /// The card's project dir — relative file links on screen resolve against it.
-    public var workingDirectory: String?
+    var workingDirectory: String?
 
     /// How a ⌘-clicked link leaves the app. Injectable so tests can catch the URL
     /// instead of actually launching a browser/Finder.
@@ -251,7 +296,13 @@ public final class TerminalSurface: NSView {
     /// whether there was work — the coordinator uses a run of workless frames to
     /// pause itself once output goes quiet.
     private func displayFrame() -> Bool {
-        guard let reason = refreshQueue.consume() else { return false }
+        guard let reason = refreshQueue.consume() else {
+            if prefetchArmed {
+                prefetchArmed = false
+                prefetchRowsAbove()
+            }
+            return false
+        }
         refresh(reason: reason)
         return true
     }
@@ -271,40 +322,93 @@ public final class TerminalSurface: NSView {
         let signpost = OSSignpostID(log: Self.performanceLog)
         os_signpost(.begin, log: Self.performanceLog, name: "Terminal snapshot", signpostID: signpost)
         defer { os_signpost(.end, log: Self.performanceLog, name: "Terminal snapshot", signpostID: signpost) }
-        let snap = session.terminal.snapshot()
+        let snap = applyPendingScroll()
         guard snap.rows > 0 else { return }   // never blank a good screen on a failed read
         let old = grid
         grid = snap
-        // During viewport scrolling practically every row changes. Comparing every
-        // cell first only adds CPU work, so repaint the surface directly.
-        guard reason == .output else {
-            needsDisplay = true
-            return
-        }
-        // Damage-diff: invalidate only the rows that actually changed (plus the
-        // cursor's old/new rows), so a one-line update repaints one strip, not the
-        // whole surface. Geometry change = everything moved: full repaint.
-        guard old.rows == snap.rows, old.cols == snap.cols else {
-            needsDisplay = true
-            return
-        }
-        for row in 0..<snap.rows where rowChanged(old, snap, row) {
-            setNeedsDisplay(rowRect(row))
-        }
-        if old.cursor != snap.cursor {
-            if let c = old.cursor { setNeedsDisplay(rowRect(c.y)) }
-            if let c = snap.cursor { setNeedsDisplay(rowRect(c.y)) }
+        rowBelow = scrollFraction > 0 ? fetchRowBelow(snap) : nil
+        let badgeFlipped = badgeWasVisible != isViewingScrollback
+        badgeWasVisible = isViewingScrollback
+        // Cached rows were resolved against the old default colours (OSC 10/11).
+        let paletteChanged = old.defaultFg != snap.defaultFg || old.defaultBg != snap.defaultBg
+        if paletteChanged { rowCache.removeAll() }
+        // A viewport shift or a geometry change moves every row; plain output is
+        // diffed so a one-line update touches one row layer.
+        let incremental = reason == .output && !paletteChanged
+            && old.rows == snap.rows && old.cols == snap.cols
+        syncRowLayers(changedFrom: incremental ? old : nil)
+        if reason != .output { prefetchArmed = true }
+        if !incremental || badgeFlipped || old.cursor != snap.cursor
+            || snap.cursor.map({ rowChanged(old, snap, $0.y) }) == true {
+            overlay.needsDisplay = true
         }
     }
 
-    private func rowChanged(_ a: TerminalGrid, _ b: TerminalGrid, _ row: Int) -> Bool {
-        let range = (row * a.cols)..<((row + 1) * a.cols)
-        return a.cells[range] != b.cells[range]
+    private func rowChanged(_ old: TerminalGrid, _ new: TerminalGrid, _ row: Int) -> Bool {
+        let range = (row * old.cols)..<((row + 1) * old.cols)
+        return old.cells[range] != new.cells[range]
     }
 
-    private func rowRect(_ row: Int) -> NSRect {
-        NSRect(x: 0, y: inset + CGFloat(row) * cellSize.height,
-               width: bounds.width, height: cellSize.height)
+    // MARK: - Smooth scrolling
+
+    /// Move the viewport by the wheel motion gathered since the last frame and
+    /// return the fresh snapshot. Whole rows go to the emulator; the remainder is
+    /// the sub-row shift. Two clamps keep the fraction honest: the live screen is
+    /// the bottom (a live viewport never carries a fraction), and a scroll into
+    /// history that the emulator cut short at the top drops its fraction too.
+    /// How far the emulator moved is read from its own viewport offset — never
+    /// inferred from row contents, which a TUI repaints between any two frames.
+    private func applyPendingScroll() -> TerminalGrid {
+        let terminal = session.terminal
+        guard pendingScroll != 0 else { return terminal.snapshot() }
+        let target = scrollFraction - pendingScroll   // wheel-up = toward history
+        pendingScroll = 0
+        let whole = Int(target.rounded(.down))
+        scrollFraction = target - CGFloat(whole)
+        if whole != 0 {
+            let before = terminal.viewportOffset
+            terminal.scrollViewport(delta: whole)
+            if whole < 0, before - terminal.viewportOffset < -whole { scrollFraction = 0 }   // top of scrollback
+        }
+        let snap = terminal.snapshot()
+        if snap.live { scrollFraction = 0 }   // the live screen is the bottom
+        return snap
+    }
+
+    /// The row just below the viewport. Only asked for in history (a fraction is
+    /// never live), so the step down always moves and the step back is exact.
+    private func fetchRowBelow(_ snap: TerminalGrid) -> [TerminalCell]? {
+        let terminal = session.terminal
+        terminal.scrollViewport(delta: 1)
+        let down = terminal.snapshot()
+        terminal.scrollViewport(delta: -1)
+        guard down.rows == snap.rows, down.cols == snap.cols, down.cols > 0 else { return nil }
+        return Array(down.cells[((down.rows - 1) * down.cols)...])
+    }
+
+    /// Idle-frame work: paint the screen above the viewport into the row cache so
+    /// a flick into history is served from cache from its first frame. The
+    /// viewport is put back exactly — `scrollViewportToBottom` when live, else by
+    /// the offset the emulator reports it moved (row contents can't tell: a TUI's
+    /// history is bands of identical blank rows).
+    private func prefetchRowsAbove() {
+        let terminal = session.terminal
+        guard grid.rows > 0, grid.cols > 0, !terminal.alternateScreenActive else { return }
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        let offset = terminal.viewportOffset
+        terminal.scrollViewport(delta: -grid.rows)
+        let above = terminal.snapshot()
+        defer {
+            if grid.live {
+                terminal.scrollViewportToBottom()
+            } else {
+                terminal.scrollViewport(delta: offset - terminal.viewportOffset)
+            }
+        }
+        guard above.rows == grid.rows, above.cols == grid.cols, above.cells != grid.cells else { return }
+        for row in 0..<above.rows {
+            _ = image(forCells: above.cells[(row * above.cols)..<((row + 1) * above.cols)], scale: scale)
+        }
     }
 
     /// Mark the surface as ended: stop the read loop and show a clean, unobtrusive
@@ -313,7 +417,7 @@ public final class TerminalSurface: NSView {
         guard endBanner == nil else { return }
         stopReading()
         endBanner = disposition.endBanner
-        needsDisplay = true
+        overlay.needsDisplay = true
     }
 
     // MARK: - Input
@@ -328,38 +432,52 @@ public final class TerminalSurface: NSView {
     /// Typing snaps back to the live bottom.
     public override func scrollWheel(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        let rows = scrollAccumulator.rows(
+        let delta = TerminalScrollAccumulator.rowDelta(
             deltaY: event.scrollingDeltaY,
             precise: event.hasPreciseScrollingDeltas,
             cellHeight: cellSize.height)
-        guard rows != 0 else { return }
-        if forwardWheelToChild(event, up: rows > 0, ticks: abs(rows)) { return }
-        if sendAlternateScrollArrows(up: rows > 0, ticks: abs(rows)) { return }
-        // Wheel-up (positive deltaY) moves BACK into history (negative delta).
-        session.terminal.scrollViewport(delta: -rows)
+        guard delta != 0 else { return }
+        if session.terminal.alternateScreenActive || childTracksMouse(event) {
+            // The child consumes whole ticks; sub-row motion carries over.
+            let rows = scrollAccumulator.rows(adding: delta)
+            guard rows != 0 else { return }
+            if forwardWheelToChild(event, up: rows > 0, ticks: abs(rows)) { return }
+            sendAlternateScrollArrows(up: rows > 0, ticks: abs(rows))
+            return
+        }
+        // Our own viewport scrolls by pixels, momentum included: whole rows move
+        // the emulator at frame time, the remainder shifts the row stack.
+        pendingScroll += delta
         requestRefresh(.viewport)
     }
 
-    private func forwardWheelToChild(_ event: NSEvent, up: Bool, ticks: Int) -> Bool {
-        let point = convert(event.locationInWindow, from: nil)
-        let geometry = Terminal.MouseGeometry(
+    private func mouseGeometry() -> Terminal.MouseGeometry {
+        Terminal.MouseGeometry(
             screenWidth: UInt32(max(1, bounds.width)),
             screenHeight: UInt32(max(1, bounds.height)),
             cellWidth: UInt32(max(1, cellSize.width.rounded())),
             cellHeight: UInt32(max(1, cellSize.height.rounded())),
             padding: UInt32(inset))
+    }
+
+    private func childTracksMouse(_ event: NSEvent) -> Bool {
+        let point = convert(event.locationInWindow, from: nil)
+        return session.terminal.encodeWheel(
+            up: true, x: Float(point.x), y: Float(point.y), geometry: mouseGeometry()) != nil
+    }
+
+    private func forwardWheelToChild(_ event: NSEvent, up: Bool, ticks: Int) -> Bool {
+        let point = convert(event.locationInWindow, from: nil)
         guard let bytes = session.terminal.encodeWheel(
-            up: up, x: Float(point.x), y: Float(point.y), geometry: geometry)
+            up: up, x: Float(point.x), y: Float(point.y), geometry: mouseGeometry())
         else { return false }   // no mouse tracking — fall through
         for _ in 0..<ticks { session.send(bytes) }
         return true
     }
 
-    private func sendAlternateScrollArrows(up: Bool, ticks: Int) -> Bool {
-        guard session.terminal.alternateScreenActive else { return false }
+    private func sendAlternateScrollArrows(up: Bool, ticks: Int) {
         let bytes = KeyEncoder.bytes(for: up ? .up : .down)
         for _ in 0..<ticks { session.send(bytes) }
-        return true
     }
 
     // Selecting more than this much buffered output means the user abandoned the
@@ -368,6 +486,11 @@ public final class TerminalSurface: NSView {
 
     public override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        if isViewingScrollback,
+           scrollbackBadgeRect().contains(convert(event.locationInWindow, from: nil)) {
+            returnToLiveBottom()
+            return
+        }
         // ⌘-click on a highlighted URL/file opens it (item 9, 18.08) — the standard
         // terminal gesture — and never starts a selection.
         if event.modifierFlags.contains(.command),
@@ -383,13 +506,13 @@ public final class TerminalSurface: NSView {
         let cell = gridPoint(at: point)
         selectionAnchor = cell
         selectionFocus = cell
-        needsDisplay = true
+        overlay.needsDisplay = true
     }
 
     public override func mouseDragged(with event: NSEvent) {
         guard selectionAnchor != nil else { return }
         selectionFocus = gridPoint(at: convert(event.locationInWindow, from: nil))
-        needsDisplay = true
+        overlay.needsDisplay = true
         autoscrollSelectionIfNeeded(event)
     }
 
@@ -399,7 +522,7 @@ public final class TerminalSurface: NSView {
         if selectionText().isEmpty {
             clearSelection()   // plain click: nothing selected, resume the stream
         }
-        needsDisplay = true
+        overlay.needsDisplay = true
     }
 
     public override func keyDown(with event: NSEvent) {
@@ -408,7 +531,7 @@ public final class TerminalSurface: NSView {
             return
         }
         // Typing re-engages the live screen — standard terminal behavior.
-        session.terminal.scrollViewportToBottom()
+        returnToLiveBottom()
         clearSelection()
         // Every key — including Esc — flows straight to the PTY so an interactive
         // child (Claude Code's Esc / Esc-Esc) works. "Back to board" lives on ⌘[,
@@ -439,7 +562,7 @@ public final class TerminalSurface: NSView {
     @discardableResult
     public func insertSuggested(_ command: String) -> Bool {
         guard !hasUnsentInput else { return false }
-        session.terminal.scrollViewportToBottom()
+        returnToLiveBottom()
         clearSelection()
         session.send(Array(command.utf8))
         unsentInput = command
@@ -453,15 +576,24 @@ public final class TerminalSurface: NSView {
         guard event.modifierFlags.contains(.command) else {
             return super.performKeyEquivalent(with: event)
         }
+        // ⌘↑/⌘↓ walk the user's own prompts in the transcript — the "previous
+        // mark" gesture of Terminal.app, aimed at Claude Code's prompt echoes.
+        switch Int(event.keyCode) {
+        case 126: jumpToUserPrompt(previous: true); return true
+        case 125: jumpToUserPrompt(previous: false); return true
+        default: break
+        }
         // ⌘←/⌘→/⌘⌫ are editing keys for the child (line start/end, kill line);
         // they arrive on the key-equivalent path, never reaching keyDown.
         if [123, 124, 51].contains(Int(event.keyCode)),
            let input = Self.keyInput(from: event) {
-            session.terminal.scrollViewportToBottom()
+            returnToLiveBottom()
             session.send(KeyEncoder.bytes(for: input))
             return true
         }
-        switch event.charactersIgnoringModifiers {
+        // Match the Latin key, not the active layout's character. On Ukrainian
+        // the V key reports "м", and a string compare against "v" never pasted.
+        switch ASCIILayoutKey.shortcutCharacter(for: event) {
         case "[" where onBack?() == true:
             return true
         case "v":
@@ -482,7 +614,7 @@ public final class TerminalSurface: NSView {
     /// still flows through `keyDown` untouched — the vanilla chord keeps working.)
     private func paste() {
         guard let payload = Self.pastePayload(from: pasteboard) else { return }
-        session.terminal.scrollViewportToBottom()
+        returnToLiveBottom()
         clearSelection()
         session.send(PasteEncoder.bytes(
             for: payload, bracketed: session.terminal.bracketedPasteEnabled))
@@ -517,7 +649,7 @@ public final class TerminalSurface: NSView {
     public override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         let paths = Self.fileURLs(from: sender.draggingPasteboard).map(\.path)
         guard !paths.isEmpty else { return false }
-        session.terminal.scrollViewportToBottom()
+        returnToLiveBottom()
         clearSelection()
         // Trailing space, like Terminal.app's drop: the user keeps typing after it.
         session.send(PasteEncoder.bytes(
@@ -542,8 +674,12 @@ public final class TerminalSurface: NSView {
 
     /// Translate an `NSEvent` into a window-free ``KeyInput`` (the testable seam).
     nonisolated static func keyInput(from event: NSEvent) -> KeyInput? {
+        // ⌃C / ⌃V follow the Latin key. A Cyrillic letter is still `isLetter`,
+        // but it has no control code — the old path encoded "м" to zero bytes
+        // and the chord vanished.
         if event.modifierFlags.contains(.control),
-           let c = event.charactersIgnoringModifiers?.first, c.isLetter {
+           let c = ASCIILayoutKey.shortcutCharacter(for: event),
+           ("a"..."z").contains(c) {
             return .control(c)
         }
         let flags = event.modifierFlags
@@ -561,6 +697,8 @@ public final class TerminalSurface: NSView {
         case 53: return .escape
         case 126: return .up
         case 125: return .down
+        case 116: return .pageUp
+        case 121: return .pageDown
         case 124 where flags.contains(.command): return .lineEnd
         case 124 where word: return .wordRight
         case 124: return .right
@@ -575,60 +713,127 @@ public final class TerminalSurface: NSView {
 
     // MARK: - Rendering
 
-    public override func draw(_ dirtyRect: NSRect) {
+    /// Push the grid into the row layers. `changedFrom` is the previous grid for an
+    /// output-diffed update (same geometry): only rows that differ are touched.
+    /// `nil` resyncs every row (viewport scroll, resize, theme or scale change).
+    private func syncRowLayers(changedFrom old: TerminalGrid?) {
         let signpost = OSSignpostID(log: Self.performanceLog)
-        os_signpost(.begin, log: Self.performanceLog, name: "Terminal draw", signpostID: signpost)
-        defer { os_signpost(.end, log: Self.performanceLog, name: "Terminal draw", signpostID: signpost) }
-        BoardTheme.termBg.setFill()
-        dirtyRect.fill()
-        // Honor the damage rect: repaint only the rows it covers (refresh()
-        // invalidates per-row strips, so this is what makes the diff pay off).
-        if grid.rows > 0 {
-            let first = max(0, Int((dirtyRect.minY - inset) / cellSize.height))
-            let last = min(grid.rows - 1, Int((dirtyRect.maxY - inset) / cellSize.height))
-            if first <= last {
-                for row in first...last { drawRow(row) }
-            }
+        os_signpost(.begin, log: Self.performanceLog, name: "Terminal rows", signpostID: signpost)
+        defer { os_signpost(.end, log: Self.performanceLog, name: "Terminal rows", signpostID: signpost) }
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        rowCache.beginFrame()
+        let rowSize = rowImageSize(scale: scale)
+        let visible = grid.cols > 0 ? grid.rows : 0
+        let gridRect = NSRect(x: inset, y: inset, width: rowSize.width,
+                              height: CGFloat(visible) * rowSize.height)
+        if rowHost.frame != gridRect { rowHost.frame = gridRect }
+        rowHost.layout(rowCount: visible == 0 ? 0 : visible + 1, rowSize: rowSize, scale: scale)
+        rowHost.setScrollOffset(scrollFraction * rowSize.height)
+        for row in 0..<visible {
+            if let old, !rowChanged(old, grid, row) { continue }
+            rowHost.show(rowImage(row, scale: scale), atRow: row)
         }
+        if visible > 0 {
+            rowHost.show(rowBelow.flatMap { image(forCells: $0[...], scale: scale) }, atRow: visible)
+        }
+        // Only a full pass touched every visible row's entry, so only then can a
+        // trim tell "unused this frame" from "untouched because unchanged".
+        if old == nil { rowCache.trim(capacity: grid.rows * 5 + 32) }
+    }
+
+    /// A row image is exactly `cols` cells wide, rounded up to whole device pixels,
+    /// and its layer takes that same size so the composite is 1:1, never resampled.
+    private func rowImageSize(scale: CGFloat) -> CGSize {
+        CGSize(width: (CGFloat(grid.cols) * cellSize.width * scale).rounded(.up) / scale,
+               height: cellSize.height)
+    }
+
+    private func rowImage(_ row: Int, scale: CGFloat) -> CGImage? {
+        image(forCells: grid.cells[(row * grid.cols)..<((row + 1) * grid.cols)], scale: scale)
+    }
+
+    private func image(forCells cells: ArraySlice<TerminalCell>, scale: CGFloat) -> CGImage? {
+        guard cells.contains(where: { $0 != .blank }) else { return nil }   // bg shows through
+        return rowCache.image(for: TerminalRowKey(cells: Array(cells), scale: scale)) { renderRow($0) }
+    }
+
+    /// Lay out one row into an opaque bitmap at the backing scale, upright (flipped
+    /// CTM under a flipped `NSGraphicsContext` — the standard AppKit recipe) so Core
+    /// Animation shows it top-down. Opaque with font smoothing on keeps the glyph
+    /// anti-aliasing the direct-draw look had.
+    private func renderRow(_ key: TerminalRowKey) -> CGImage? {
+        let size = CGSize(width: CGFloat(key.cells.count) * cellSize.width, height: cellSize.height)
+        let width = Int((size.width * key.scale).rounded(.up))
+        let height = Int((size.height * key.scale).rounded())
+        guard width > 0, height > 0, let bitmap = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { return nil }
+        bitmap.setAllowsFontSmoothing(true)
+        bitmap.setShouldSmoothFonts(true)
+        bitmap.translateBy(x: 0, y: CGFloat(height))
+        bitmap.scaleBy(x: key.scale, y: -key.scale)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: bitmap, flipped: true)
+        // Outside draw(_:) a dynamic colour resolves against whatever appearance is
+        // current, so pin ours — the row must match the surface it sits on.
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            BoardTheme.termBg.setFill()
+            NSRect(x: 0, y: 0, width: CGFloat(width) / key.scale, height: size.height).fill()
+            drawRuns(key.cells)
+            drawLinkUnderlines(key.cells)
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        return bitmap.makeImage()
+    }
+
+    /// The overlay's paint — everything that is not a row, above the rows.
+    private func drawOverlay() {
         drawSelection()
         drawCursor()
         drawEndBanner()
+        drawScrollbackBadge()
     }
 
-    /// Draw one grid row as colour runs: consecutive cells sharing fg+bg are one
+    /// Where grid row `row` is drawn: rows shift up by the sub-row fraction.
+    private func rowTop(_ row: Int) -> CGFloat {
+        inset + (CGFloat(row) - scrollFraction) * cellSize.height
+    }
+
+    /// Draw one row as colour runs: consecutive cells sharing fg+bg+style are one
     /// fill + one string draw, so a full-width coloured line is a couple of draws,
     /// not one per cell. Monospace + zero kerning keeps the run grid-aligned.
-    private func drawRow(_ row: Int) {
+    private func drawRuns(_ cells: [TerminalCell]) {
         var col = 0
-        while col < grid.cols {
-            let first = grid.cell(col: col, row: row)
+        while col < cells.count {
+            let first = cells[col]
             let start = col
             col += 1
-            while col < grid.cols {
-                let c = grid.cell(col: col, row: row)
+            while col < cells.count {
+                let c = cells[col]
                 if c.fg != first.fg || c.bg != first.bg || c.style != first.style { break }
                 col += 1
             }
-            drawRun(row: row, from: start, to: col, cell: first)
+            drawRun(cells[start..<col], at: CGFloat(start) * cellSize.width, cell: first)
         }
-        drawLinkUnderlines(row)
     }
 
     /// Item 9 (18.08): URLs and file paths get a hairline underline in the link
     /// accent, so they read as clickable without repainting the glyphs themselves.
-    private func drawLinkUnderlines(_ row: Int) {
-        for link in links(in: row) {
-            let x = inset + CGFloat(link.columns.lowerBound) * cellSize.width
+    private func drawLinkUnderlines(_ cells: [TerminalCell]) {
+        for link in TerminalLinkDetector.links(in: Self.text(of: cells[...])) {
+            let x = CGFloat(link.columns.lowerBound) * cellSize.width
             let width = CGFloat(link.columns.count) * cellSize.width
-            let y = inset + CGFloat(row + 1) * cellSize.height - 1.5
             BoardTheme.termLink.setFill()
-            NSRect(x: x, y: y, width: width, height: 1).fill()
+            NSRect(x: x, y: cellSize.height - 1.5, width: width, height: 1).fill()
         }
     }
 
     private func links(in row: Int) -> [TerminalLink] {
         guard grid.cols > 0 else { return [] }
-        return TerminalLinkDetector.links(in: runText(row: row, from: 0, to: grid.cols))
+        let range = (row * grid.cols)..<((row + 1) * grid.cols)
+        return TerminalLinkDetector.links(in: Self.text(of: grid.cells[range]))
     }
 
     /// Resolve and open the link under `point`, if any. Returns whether one opened —
@@ -663,19 +868,19 @@ public final class TerminalSurface: NSView {
         }
     }
 
-    private func drawRun(row: Int, from start: Int, to end: Int, cell: TerminalCell) {
+    /// One run in row-local space (y = 0 is the row's top): its bg fill, then its
+    /// text as a single grid-aligned string.
+    private func drawRun(_ run: ArraySlice<TerminalCell>, at x: CGFloat, cell: TerminalCell) {
         let colors = effectiveColors(for: cell)
-        let x = inset + CGFloat(start) * cellSize.width
-        let y = inset + CGFloat(row) * cellSize.height
         if let bg = colors.bg {
             nsColor(bg).setFill()
-            NSRect(x: x, y: y, width: CGFloat(end - start) * cellSize.width, height: cellSize.height).fill()
+            NSRect(x: x, y: 0, width: CGFloat(run.count) * cellSize.width, height: cellSize.height).fill()
         }
         guard !cell.style.invisible else { return }
-        let text = runText(row: row, from: start, to: end)
+        let text = Self.text(of: run)
         guard text.contains(where: { $0 != " " }) else { return }   // blank run: bg only
         (text as NSString).draw(
-            at: NSPoint(x: x, y: y),
+            at: NSPoint(x: x, y: 0),
             withAttributes: glyphAttrs(fg: colors.fg, bg: colors.bg, style: cell.style))
     }
 
@@ -684,11 +889,11 @@ public final class TerminalSurface: NSView {
         return (cell.bg ?? grid.defaultBg, cell.fg ?? grid.defaultFg)
     }
 
-    private func runText(row: Int, from start: Int, to end: Int) -> String {
+    private static func text(of cells: ArraySlice<TerminalCell>) -> String {
         var s = ""
-        s.reserveCapacity(end - start)
-        for col in start..<end {
-            if let scalar = grid.cell(col: col, row: row).scalar {
+        s.reserveCapacity(cells.count)
+        for cell in cells {
+            if let scalar = cell.scalar {
                 s.unicodeScalars.append(scalar)
             } else {
                 s.append(" ")
@@ -705,7 +910,7 @@ public final class TerminalSurface: NSView {
         guard endBanner == nil, let cur = grid.cursor, cur.visible,
               cur.x < grid.cols, cur.y < grid.rows else { return }
         let x = inset + CGFloat(cur.x) * cellSize.width
-        let y = inset + CGFloat(cur.y) * cellSize.height
+        let y = rowTop(cur.y)
         BoardTheme.termCursor.withAlphaComponent(0.55).setFill()
         NSRect(x: x, y: y, width: cellSize.width, height: cellSize.height).fill()
         if let scalar = grid.cell(col: cur.x, row: cur.y).scalar {
@@ -723,6 +928,87 @@ public final class TerminalSurface: NSView {
         let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.systemGray]
         let y = inset + CGFloat(grid.rows + 1) * cellSize.height
         (endBanner as NSString).draw(at: NSPoint(x: inset, y: y), withAttributes: attrs)
+    }
+
+    // MARK: - Scrollback
+
+    /// True while the viewport is parked in history instead of on the live screen.
+    /// libghostty reports a viewport cursor only while the active screen is visible,
+    /// so this reads the emulator directly rather than counting our own scroll deltas
+    /// (a counter drifts the moment a scroll clamps at the top of the scrollback).
+    ///
+    /// This matters because a TUI's scrollback does not look like a transcript: Claude
+    /// Code repaints by erasing and reprinting whole frames, so history is full of
+    /// blank bands and orphaned frames. Parked there with no marker on screen, the
+    /// terminal reads as broken — "cut off" — rather than as scrolled.
+    var isViewingScrollback: Bool { grid.rows > 0 && !grid.live }
+
+    private static let scrollbackBadgeText = "↓ jump to live"
+
+    private var scrollbackBadgeAttributes: [NSAttributedString.Key: Any] {
+        [.font: NSFont.systemFont(ofSize: 11, weight: .medium),
+         .foregroundColor: BoardTheme.textMuted]
+    }
+
+    /// The pill's rect, bottom-right of the surface. Computed on demand so the hit
+    /// test and the drawing can never disagree about where it is.
+    func scrollbackBadgeRect() -> NSRect {
+        let size = (Self.scrollbackBadgeText as NSString)
+            .size(withAttributes: scrollbackBadgeAttributes)
+        let width = size.width + 20
+        let height = size.height + 8
+        return NSRect(x: bounds.maxX - inset - width, y: bounds.maxY - inset - height,
+                      width: width, height: height)
+    }
+
+    private func drawScrollbackBadge() {
+        guard isViewingScrollback else { return }
+        let rect = scrollbackBadgeRect()
+        let pill = NSBezierPath(roundedRect: rect, xRadius: rect.height / 2,
+                                yRadius: rect.height / 2)
+        BoardTheme.cardFillRaised.setFill()
+        pill.fill()
+        BoardTheme.cardStrokeStrong.setStroke()
+        pill.lineWidth = 1
+        pill.stroke()
+        let text = Self.scrollbackBadgeText as NSString
+        let size = text.size(withAttributes: scrollbackBadgeAttributes)
+        text.draw(at: NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2),
+                  withAttributes: scrollbackBadgeAttributes)
+    }
+
+    /// Snap the viewport back onto the live screen. Every keystroke does this, and so
+    /// does clicking the pill — the two ways out of history.
+    private func returnToLiveBottom() {
+        session.terminal.scrollViewportToBottom()
+        pendingScroll = 0
+        // `grid` still holds the pre-scroll viewport, so this asks "were we in
+        // history?". Only then is a full repaint owed; the common case — a keystroke
+        // while already live — stays on the cheap per-row damage diff.
+        guard isViewingScrollback else { return }
+        scrollFraction = 0
+        requestRefresh(.viewport)
+    }
+
+    /// Put the previous/next user prompt at the top of the viewport. Marks come
+    /// from the rendered transcript (``TranscriptMarks``), the position from the
+    /// emulator's own viewport offset. Past the last prompt, "next" returns to
+    /// the live screen; past the first, "previous" beeps and stays.
+    func jumpToUserPrompt(previous: Bool) {
+        let terminal = session.terminal
+        guard !terminal.alternateScreenActive, let lines = try? terminal.lines() else { return }
+        let marks = TranscriptMarks.userPromptRows(
+            in: lines, cursorRow: terminal.scrollbackRows + terminal.cursorRow)
+        let offset = terminal.viewportOffset
+        let target = previous ? marks.last(where: { $0 < offset }) : marks.first(where: { $0 > offset })
+        guard let target else {
+            if previous { NSSound.beep() } else { returnToLiveBottom() }
+            return
+        }
+        pendingScroll = 0
+        scrollFraction = 0
+        terminal.scrollViewport(delta: target - offset)
+        requestRefresh(.viewport)
     }
 
     // MARK: - Colour helpers
@@ -809,20 +1095,41 @@ public final class TerminalSurface: NSView {
 
     /// Test seams (item 9): install a deterministic screen and hit-test links the
     /// way the ⌘-click path does, without racing a live pty read.
+    // periphery:ignore - test-only seam (scan runs with exclude_tests)
+    /// The grid the last refresh painted — what is on screen, not what the emulator holds.
+    var gridForTesting: TerminalGrid { grid }
+
+    // periphery:ignore - test-only seam (scan runs with exclude_tests)
     func installGridForTesting(_ snapshot: TerminalGrid) {
         grid = snapshot
-        needsDisplay = true
+        syncRowLayers(changedFrom: nil)
+        overlay.needsDisplay = true
     }
 
+    /// The row image cache and the layer stack behind the viewport — lets a test
+    /// prove a scroll is pointer swaps (hits), not a repaint (misses).
+    // periphery:ignore - test-only seam (scan runs with exclude_tests)
+    var rowCacheForTesting: TerminalRowCache { rowCache }
+    // periphery:ignore - test-only seam (scan runs with exclude_tests)
+    var rowHostForTesting: TerminalRowLayerHost { rowHost }
+    // periphery:ignore - test-only seam (scan runs with exclude_tests)
+    var scrollFractionForTesting: CGFloat { scrollFraction }
+    /// Run one display-link frame by hand (headless tests have no link).
+    // periphery:ignore - test-only seam (scan runs with exclude_tests)
+    @discardableResult
+    func displayFrameForTesting() -> Bool { displayFrame() }
+
+    // periphery:ignore - test-only seam (scan runs with exclude_tests)
     func linkForTesting(atCol col: Int, row: Int) -> TerminalLink? {
         links(in: row).first { $0.columns.contains(col) }
     }
 
     /// The centre of a grid cell in this view's coords — lets the interaction test
     /// aim a real event without duplicating the font-metric math.
+    // periphery:ignore - test-only seam (scan runs with exclude_tests)
     func cellCenterForTesting(col: Int, row: Int) -> NSPoint {
         NSPoint(x: inset + (CGFloat(col) + 0.5) * cellSize.width,
-                y: inset + (CGFloat(row) + 0.5) * cellSize.height)
+                y: rowTop(row) + 0.5 * cellSize.height)
     }
 
     private struct GridPoint: Equatable {
@@ -833,7 +1140,7 @@ public final class TerminalSurface: NSView {
     private func gridPoint(at point: NSPoint) -> GridPoint {
         guard grid.rows > 0, grid.cols > 0 else { return GridPoint(row: 0, col: 0) }
         let col = max(0, min(grid.cols - 1, Int((point.x - inset) / cellSize.width)))
-        let row = max(0, min(grid.rows - 1, Int((point.y - inset) / cellSize.height)))
+        let row = max(0, min(grid.rows - 1, Int((point.y - inset) / cellSize.height + scrollFraction)))
         return GridPoint(row: row, col: col)
     }
 
@@ -845,6 +1152,9 @@ public final class TerminalSurface: NSView {
 
     private func drawSelection() {
         guard let range = orderedSelection() else { return }
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        rowHost.frame.clip()   // a shifted selection row must not bleed into the padding
         BoardTheme.brand.withAlphaComponent(0.32).setFill()
         for row in range.start.row...range.end.row {
             let startCol = row == range.start.row ? range.start.col : 0
@@ -852,7 +1162,7 @@ public final class TerminalSurface: NSView {
             guard endCol >= startCol else { continue }
             NSRect(
                 x: inset + CGFloat(startCol) * cellSize.width,
-                y: inset + CGFloat(row) * cellSize.height,
+                y: rowTop(row),
                 width: CGFloat(endCol - startCol + 1) * cellSize.width,
                 height: cellSize.height
             ).fill()
@@ -888,16 +1198,16 @@ public final class TerminalSurface: NSView {
         guard selectionAnchor != nil || selectionFocus != nil else { return }
         selectionAnchor = nil
         selectionFocus = nil
-        needsDisplay = true
+        overlay.needsDisplay = true
     }
 
     private func autoscrollSelectionIfNeeded(_ event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         if point.y < inset {
-            session.terminal.scrollViewport(delta: -1)
+            pendingScroll += 1
             requestRefresh(.viewport)
         } else if point.y > bounds.maxY - inset {
-            session.terminal.scrollViewport(delta: 1)
+            pendingScroll -= 1
             requestRefresh(.viewport)
         }
     }

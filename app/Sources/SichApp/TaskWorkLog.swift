@@ -66,6 +66,11 @@ final class TaskWorkLog {
                card: card, at: date)
     }
 
+    /// An operator-initiated event (account/harness switch, etc.).
+    func noteEvent(_ event: String, card: BoardCard, at date: Date = Date()) {
+        append(event, card: card, at: date)
+    }
+
     // MARK: - the file
 
     func fileURL(for cardID: UUID) -> URL {

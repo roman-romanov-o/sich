@@ -22,7 +22,8 @@ struct AgentTaskTallyTests {
             card(.claude, .waitingForInput),
             card(.claude, .done),          // at rest — not in progress
             card(.claude, .idle),          // at rest
-            card(.codex, .blocked),
+            card(.codex, .waitingForInput),
+            card(.codex, .blocked),        // external block — not waiting on you
             card(.codex, .unknown),        // not positively determined — not counted
         ])
         #expect(tallies[.claude] == AgentTaskTally(working: 2, waiting: 1))

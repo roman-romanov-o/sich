@@ -207,4 +207,33 @@ struct RemoteCardRestartTests {
         // is that the board *asked* to follow this host, from data on disk, unprompted.
         #expect(poller.relayHealth(for: "far.invalid") != nil)
     }
+
+    /// The case above installs the poller BEFORE restoring. The real launch does the
+    /// opposite — `finishStartupAfterFirstPaint` restores the session tree first and
+    /// starts the sessions bridge after — so the restore-time attach lands on a nil
+    /// poller and is silently dropped. Held here in production's order: whatever
+    /// remote sessions the registry already holds when the poller comes up must be
+    /// followed, or every remote card is an unobserved terminal after every restart.
+    @Test("AC-4: a poller that comes up AFTER restore still follows the restored host")
+    func pollerStartedAfterRestoreFollowsRestoredHost() throws {
+        let storeDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: storeDir) }
+        let spec = RemoteTmuxSpec(host: "far.invalid", user: "roman", sessionName: "agent")
+        let store = SessionSnapshotStore(directory: storeDir)
+        try store.save(remoteSnapshot(cardID: UUID(), spec: spec))
+
+        let local = try LocalSink()
+        defer { local.tearDown() }
+        try local.seed("")
+        let relaunched = BoardShell()
+        defer { relaunched.e2eTeardown() }
+        #expect(relaunched.sessionsPoller == nil, "launch order: restore runs with no poller yet")
+        _ = relaunched.restoreCardsForTesting(store: store)
+
+        let poller = SessionsPoller(eventsFile: local.file, interval: 86_400) { _ in }
+        defer { poller.stop() }
+        relaunched.adoptSessionsPoller(poller)
+        #expect(poller.relayHealth(for: "far.invalid") != nil,
+                "the poller must follow the host the restored session is bound to")
+    }
 }

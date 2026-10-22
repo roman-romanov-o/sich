@@ -208,7 +208,7 @@ public final class RemoteEventRelay: @unchecked Sendable {
 
 /// Content-based dedup over a bounded FIFO of SHA-256 digests.
 ///
-/// Digests and not lines: a `turn_diff` line runs to megabytes, and remembering 512
+/// Digests and not lines: a hook line can carry a large payload, and remembering 512
 /// of those would cost more than the board. A digest costs 32 bytes and answers the
 /// only question asked — "have I already ingested exactly these bytes".
 struct DedupWindow {

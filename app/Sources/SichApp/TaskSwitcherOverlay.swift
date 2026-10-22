@@ -155,6 +155,7 @@ final class TaskSwitcherOverlay: NSView {
         case .running: return "working"
         case .runningTests: return "tests"
         case .idle: return "idle"
+        case .parked: return "parked"
         case .done: return "done"
         // Never blank: a card whose host stopped answering must say so here too,
         // or the switcher becomes the one surface still showing stale calm (US-007).

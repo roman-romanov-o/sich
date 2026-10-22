@@ -4,13 +4,15 @@
 this document is the contract card movement should converge to. When observed
 behavior and this doc disagree, the behavior is the bug.
 
-The board renders four column groups (`BoardView.ColumnGroup`), left to right:
+The board renders six column groups (`BoardView.ColumnGroup`), left to right:
 
 | Column | Meaning | Underlying `CardState`s |
 |---|---|---|
-| **QUEUE** | not started / at rest | `idle`, `unknown` |
+| **QUEUE** | ready to pull / at rest | `idle` |
+| **PARKED** | shelved on purpose (defer, unknown host) | `parked`, `unknown`, `unreachable` |
 | **WORKING** | an agent is actively producing | `running`, `running-tests` |
-| **NEEDS YOU** | the operator must act | `waiting-for-input`, `blocked` |
+| **NEEDS YOU** | the agent waits on **you** | `waiting-for-input` |
+| **BLOCKED** | waiting on **external** factors (PR review, upstream) | `blocked` |
 | **DONE** | operator declared it finished | `done` |
 
 Every `CardState` maps to exactly one column — a card can never silently vanish
@@ -18,7 +20,7 @@ from the board.
 
 ---
 
-## Interactive flow (human-launched terminal: Claude Code / Codex)
+## Interactive flow (human-launched terminal: Claude Code / Codex / Cursor)
 
 1. **Not started → QUEUE.** The user created the card but has not launched or
    engaged an agent session in it. The card sits in QUEUE.
@@ -95,7 +97,7 @@ alone.
 ## Cross-cutting invariants
 
 - **Manual launches are first-class.** All of the above must hold even when the
-  user starts `claude` / `codex` **themselves in a terminal** — inside a card's
+  user starts `claude` / `codex` / `agent` **themselves in a terminal** — inside a card's
   terminal or any other terminal — rather than the app auto-starting the agent
   at task creation. This is the *common* case after an app restart: the card
   exists, its PTY is a plain shell, and the user types `claude` by hand. Status
@@ -112,3 +114,39 @@ alone.
 - **NEEDS YOU is the product.** False WORKING (agent actually waiting) hides
   work from the operator and is the worst failure mode; the stall guard (2.1)
   exists to bound how long that can last.
+
+## Cursor specifics
+
+- Cursor's CLI (`agent` / `cursor-agent`) has no per-invocation hooks flag, so the
+  board wires its hook script into the user-level `~/.cursor/hooks.json` once
+  (merged, never overwritten). The script emits nothing unless `SICH_CARD_ID`
+  is in its environment, so Cursor sessions outside a Sich terminal stay silent.
+- Cursor has no permission-request hook and no on-screen menu the board
+  scrapes, so a Cursor approval prompt does **not** light NEEDS YOU; the card
+  shows WORKING until the turn ends (`stop`).
+- Resume is `agent resume` (latest chat, not cwd-filtered): with several Cursor
+  cards open, a revived card may pick up the most recent chat rather than its own.
+- Cursor quota is MEASURED the same way Claude's is: a hidden pty runs `agent --trust` in `~/.sich/usage-probe`, types `/usage`, and parses the `Included NN% used` row + `Resets Mon D` (one monthly pool, no tokens or keychain touched). Refreshed every 5 min; `swift run sich-probe cursor` runs one scrape by hand.
+
+## Antigravity specifics
+
+- Google's Antigravity CLI (`agy`) is wired like Cursor: one hook script
+  (`~/.sich/hooks/sich-antigravity.sh`) merged as the named `"sich"` entry of the
+  user-level `~/.gemini/config/hooks.json`; the script emits nothing unless
+  `SICH_CARD_ID` is in its environment. The `~/.sich/bin/agy` shim pins the
+  launch cwd/pid and execs the real binary (`~/.local/bin/agy` or PATH).
+- Antigravity hook payloads carry **no event name**, so each installed command
+  passes it (`sich-antigravity.sh Stop`) and the script stamps `hook_event_name`.
+  `PreToolUse` is **not** hooked — Antigravity requires a permission `decision`
+  from it, which a watcher must never answer. `PreInvocation`/`PostInvocation`
+  (model call edges) and `PostToolUse` mean WORKING; `Stop` means the turn ended.
+- No permission-request hook → an Antigravity approval prompt does **not** light
+  NEEDS YOU; the card shows WORKING until `Stop`.
+- Resume is `agy --continue` (the most recent conversation in the workspace).
+- Antigravity quota is MEASURED via the same hidden-pty scrape: `agy` in
+  `~/.sich/usage-probe`, the "trust this folder" dialog accepted, `/usage` typed
+  once "? for shortcuts" shows, and the "Models & Quota" page parsed per model
+  bucket (`NN% used`, `resets in …`, `Disabled` rows skipped). The gauge shows the
+  TIGHTEST bucket. The page layout has only been seen described, not captured —
+  `swift run sich-probe antigravity` (after `agy` sign-in) validates it; drift
+  degrades to `unknown`, never a fake number.

@@ -7,7 +7,7 @@ import Testing
 /// into a terminal, so on return the columns — and the always-visible attention
 /// badge — already reflect reality instead of a frozen snapshot. These drive
 /// `BoardShell.applySessions` with a live state change while `focusedCardID != nil`
-/// and read the deterministic `attention.renderedCount` seam to prove the re-render
+/// and read the deterministic `lastAttentionCount` seam to prove the re-render
 /// happened (never a wall-clock latency assertion).
 @MainActor
 struct BoardShellTests {
@@ -38,12 +38,12 @@ struct BoardShellTests {
         let shell = ownedShell()
         let owned = shell.cards.first { $0.sessionID == "live-terminal" }!
         shell.drill(into: owned)                       // focusedCardID != nil
-        #expect(shell.attention.renderedCount == 0)    // idle → nothing waiting yet
+        #expect(shell.lastAttentionCount == 0)    // idle → nothing waiting yet
 
         shell.applySessions([waitingHook()])
 
         // Board re-rendered DESPITE being focused: the badge tracks the live count.
-        #expect(shell.attention.renderedCount == 1)
+        #expect(shell.lastAttentionCount == 1)
     }
 
     /// Edge case 1: drilling out then back in rapidly drops no update — the last
@@ -57,6 +57,6 @@ struct BoardShellTests {
         shell.drill(into: owned)                        // rapid in → out → in
 
         shell.applySessions([waitingHook()])
-        #expect(shell.attention.renderedCount == 1)     // update landed despite the churn
+        #expect(shell.lastAttentionCount == 1)     // update landed despite the churn
     }
 }

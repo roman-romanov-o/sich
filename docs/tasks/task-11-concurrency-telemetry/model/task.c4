@@ -1,0 +1,109 @@
+// task.c4 — task-11-concurrency-telemetry: make parallel-session utilization measurable.
+//
+// The product's thesis is parallel-session mission control with capacity planning,
+// yet the only work metric the app persists is a per-card ACCUMULATED total of
+// WORKING time (`BoardCard.accumulatedWorkingTime`). The interval boundaries are
+// known at the moment a card leaves WORKING (`workingSince` -> `transitionDate` in
+// `BoardCard.with(state:at:)`) and then discarded — only the sum survives. As a
+// result no artifact anywhere can distinguish "4 sessions in parallel at 15:00"
+// from "4 sessions back-to-back": the app cannot measure its own core quantity.
+
+model {
+  operator = actor 'Operator' {
+    description '''
+      The person running many agent sessions from the board who wants to know how
+      much of the day the agents actually ran in parallel — and to see the proof.
+    '''
+  }
+
+  sys = container 'Sich board app' {
+    description '''
+      Persist every completed WORKING interval (not just its duration) into a
+      durable append-only log, and give the operator a readout that answers:
+      "what was my peak concurrency and concurrent agent-hours on day X?"
+    '''
+    metadata {
+      goals 'Every completed WORKING interval survives durably with start+end; the operator can read per-day peak concurrency and agent-hours computed from intervals'
+      non_goals 'No board-UI charts or dashboards yet; no backfill of historical accumulated totals (they carry no interval data); no per-turn granularity'
+      constraints 'Watcher-not-spawner unchanged; log volume is tiny (tens of records/day) so no rotation machinery; the existing accumulatedWorkingTime stays authoritative for the card label'
+    }
+
+    card_model = component 'BoardCard state transitions' {
+      #existing
+      description '''
+        `with(state:at:)` already computes each closing WORKING interval
+        (`workingSince` -> `transitionDate`) before folding it into the
+        accumulated total. This is the single seam where interval boundaries
+        exist and get thrown away.
+      '''
+      metadata {
+        files 'app/Sources/SichCore/BoardCard.swift'
+      }
+    }
+
+    board_shell = component 'BoardShell card lifecycle' {
+      #existing
+      description '''
+        Owns every card state change (detector transitions, manual column drops,
+        launch hydration, teardown). The place that observes transitions and can
+        hand closed intervals to the log — including closing still-open intervals
+        on app termination.
+      '''
+      metadata {
+        files 'app/Sources/SichApp/BoardShell.swift'
+      }
+    }
+
+    interval_log = component 'Work-interval log' {
+      #new
+      description '''
+        Append-only durable record of completed WORKING intervals: card id, title,
+        project dir, host (nil = local), agent, start, end. One JSONL line per
+        interval, written the moment the interval closes.
+      '''
+      metadata {
+        files 'app/Sources/SichCore/WorkIntervalLog.swift'
+      }
+    }
+
+    stats_readout = component 'Concurrency readout' {
+      #new
+      description '''
+        Answers "peak concurrency and agent-hours for day X" by sweeping the
+        interval log (max simultaneously-open intervals; sum of durations).
+        Exposed where an operator can actually reach it.
+      '''
+      metadata {
+        files 'app/Sources/sich/main.swift'
+      }
+    }
+
+    interval_store = store 'work-intervals.jsonl' {
+      #new
+      description '''
+        Lives beside the task book in Application Support/Sich. Append-only;
+        survives restarts; readable by scripts for deeper offline analytics.
+      '''
+    }
+  }
+
+  operator -> sys.stats_readout 'asks for a day of concurrency stats'
+  sys.board_shell -> sys.card_model 'applies state transitions'
+  sys.board_shell -> sys.interval_log 'reports each closed WORKING interval'
+  sys.interval_log -> sys.interval_store 'appends one line per interval'
+  sys.stats_readout -> sys.interval_store 'sweeps intervals for the requested day'
+}
+
+views {
+  view task-context {
+    title 'task-11: concurrency telemetry'
+    description '''
+      Success: after a normal day of board use, the operator can name yesterday's
+      peak concurrency and agent-hours from recorded intervals — parallelism is a
+      measured fact, not a claim.
+    '''
+    include *, sys.*
+    include us-001 with { navigateTo us-001-flow }
+    include us-002 with { navigateTo us-002-flow }
+  }
+}

@@ -45,22 +45,17 @@ enum SessionsFeed {
         parse(lines, arrival: arrival).events
     }
 
-    /// One drained batch, classified: turn diffs for the drill-in review, signal
-    /// events for the reconciler. `Sendable` because the parse runs OFF the main
-    /// actor and only this result crosses back.
+    /// One drained batch: the signal events for the reconciler. `Sendable` because
+    /// the parse runs OFF the main actor and only this result crosses back.
     struct ParsedEventBatch: Sendable {
-        let diffs: [TurnDiff]
         let events: [SignalEvent]
     }
 
     /// Classify every drained line from ONE `JSONSerialization` pass. This used to
-    /// be normalize-to-exclude — each line was fully parsed 2–4 times (a multi-MB
-    /// `turn_diff` line twice, base64 decode included) — which, on the main actor,
-    /// was the typing-glitch stall. A line routes to exactly one normalizer:
-    /// `sich_event_type == "turn_diff"` → diff; `"source":"jsonl"` (the transcript
-    /// fallback stream's self-identifying tag) → JSONL; anything else → hook. A
-    /// turn-diff line with an undecodable payload falls through to the hook
-    /// normalizer as an unknown-kind signal, same as before.
+    /// be normalize-to-exclude — each line was fully parsed 2–4 times — which, on
+    /// the main actor, was the typing-glitch stall. A line routes to exactly one
+    /// normalizer: `"source":"jsonl"` (the transcript fallback stream's
+    /// self-identifying tag) → JSONL; anything else → hook.
     static func parse(_ lines: [Data], arrival: Date) -> ParsedEventBatch {
         collect(lines.count, arrival: arrival) { index in
             (try? JSONSerialization.jsonObject(with: lines[index])) as? [String: Any]
@@ -79,7 +74,6 @@ enum SessionsFeed {
     private static func collect(
         _ count: Int, arrival: Date, payload: (Int) -> [String: Any]?
     ) -> ParsedEventBatch {
-        var diffs: [TurnDiff] = []
         var events: [SignalEvent] = []
         for index in 0..<count {
             // File order IS arrival order. Hook payloads carry no timestamp, so a
@@ -91,22 +85,16 @@ enum SessionsFeed {
             let stamped = arrival.addingTimeInterval(Double(index) / 1_000)
             guard let payload = payload(index) else { continue }
             // non-JSON line: skipped, not fatal (US-003 edge 4)
-            route(payload, arrival: stamped, diffs: &diffs, events: &events)
+            events.append(normalize(payload, arrival: stamped))
         }
-        return ParsedEventBatch(diffs: diffs, events: events)
+        return ParsedEventBatch(events: events)
     }
 
-    private static func route(
-        _ payload: [String: Any], arrival: Date,
-        diffs: inout [TurnDiff], events: inout [SignalEvent]
-    ) {
-        if let diff = TurnDiffNormalizer.normalize(payload: payload, arrival: arrival) {
-            diffs.append(diff)
-        } else if payload["source"] as? String == "jsonl" {
-            events.append(JSONLNormalizer.normalize(payload: payload, arrival: arrival))
-        } else {
-            events.append(HookNormalizer.normalize(payload: payload, arrival: arrival))
+    private static func normalize(_ payload: [String: Any], arrival: Date) -> SignalEvent {
+        if payload["source"] as? String == "jsonl" {
+            return JSONLNormalizer.normalize(payload: payload, arrival: arrival)
         }
+        return HookNormalizer.normalize(payload: payload, arrival: arrival)
     }
 }
 
@@ -123,14 +111,13 @@ enum SessionsFeed {
 /// `Timer` is a BACKSTOP that covers a missed FS event or a rotation re-arm gap. Both
 /// call the same incremental `poll()`.
 ///
-/// The drain (file read + JSON parse) runs OFF the main actor: a dirty-repo `Stop`
-/// hook appends a multi-MB `turn_diff` line, and parsing it on the main actor stalled
-/// typing in the drilled-in terminal for hundreds of ms; a rotation or a cold start
-/// re-reads a whole file the same way (the launch stutter). Only the cheap tail —
-/// store ingest + the two sinks — hops back to the main actor. The `inFlight` guard
-/// keeps exactly one drain alive (the tail's offset file is read-modify-write, so
-/// drains must never overlap), and a trigger that lands mid-drain coalesces into one
-/// follow-up poll instead of being dropped.
+/// The drain (file read + JSON parse) runs OFF the main actor: parsing a big batch
+/// on the main actor stalled typing in the drilled-in terminal for hundreds of ms,
+/// and a rotation or a cold start re-reads a whole file the same way (the launch
+/// stutter). Only the cheap tail — store ingest + the sink — hops back to the main
+/// actor. The `inFlight` guard keeps exactly one drain alive (the tail's offset file
+/// is read-modify-write, so drains must never overlap), and a trigger that lands
+/// mid-drain coalesces into one follow-up poll instead of being dropped.
 ///
 /// Watcher-not-spawner: the file is read-only to the app; this loop spawns nothing,
 /// binds no port, and never replies.
@@ -141,30 +128,6 @@ public final class SessionsPoller {
     private let store: HookSessionStore
     private let backstopInterval: TimeInterval
     private let sink: ([BoardCard]) -> Void
-    private let diffSink: ([TurnDiff]) -> Void
-    /// Turns keyed by session IDENTITY — `host` included, because two machines
-    /// running one repo emit the same session id AND the same iteration, and an
-    /// id-only key made the second host's turn overwrite the first's (US-004 AC-3).
-    private var diffsBySession: [DiffKey: [TurnDiff]] = [:]
-    /// Every turn diff already folded into the review pane, by content identity — the
-    /// reconnect replay guard (US-008 AC-2). Digests only, 32 bytes a turn.
-    private var deliveredDiffs: Set<TurnDiffKey> = []
-
-    private struct DiffKey: Hashable {
-        let host: String?
-        let sessionID: String
-
-        // Spelled out rather than synthesized: both fields are load-bearing identity,
-        // and the dead-code scanner cannot see through a compiler-generated conformance.
-        static func == (lhs: Self, rhs: Self) -> Bool {
-            lhs.host == rhs.host && lhs.sessionID == rhs.sessionID
-        }
-
-        func hash(into hasher: inout Hasher) {
-            hasher.combine(host)
-            hasher.combine(sessionID)
-        }
-    }
     private var timer: Timer?
     private var watcher: FileWatcher?
     private var relays: [String: RemoteEventRelay] = [:]   // one per followed host
@@ -184,14 +147,12 @@ public final class SessionsPoller {
         eventsFile: URL = SessionsPoller.defaultEventsFile,
         interval: TimeInterval = SessionsPoller.defaultInterval,
         stallThreshold: TimeInterval = 600,
-        diffSink: @escaping ([TurnDiff]) -> Void = { _ in },
         sink: @escaping ([BoardCard]) -> Void
     ) {
         self.eventsFile = eventsFile
         self.tail = HookEventTail(file: eventsFile)
         self.store = HookSessionStore(stallThreshold: stallThreshold)
         self.backstopInterval = interval
-        self.diffSink = diffSink
         self.sink = sink
     }
 
@@ -273,36 +234,11 @@ public final class SessionsPoller {
         }
     }
 
-    /// Fold one batch — from either intake — into the store and out to the sinks.
+    /// Fold one batch — from either intake — into the store and out to the sink.
     /// Cheap, no parsing.
     private func applyBatch(_ batch: SessionsFeed.ParsedEventBatch, now: Date) {
-        var changed = false
-        for diff in batch.diffs where deliveredDiffs.insert(TurnDiffKey(diff)).inserted {
-            changed = true
-            let key = DiffKey(host: diff.host, sessionID: diff.sessionID)
-            var turns = diffsBySession[key, default: []]
-            // A fresh diff arriving with a LOWER iteration than the pile means the
-            // forwarder re-based after a commit and restarted its counter: everything
-            // accumulated is pre-commit history the operator already kept. Start the
-            // session's checkpoint list over (deliveredDiffs stays — replay guard).
-            if let last = turns.last, diff.iteration < last.iteration {
-                turns.removeAll()
-            }
-            // Insert in iteration order WITHOUT sorting: two Stops inside one turn are
-            // two distinct diffs under one iteration, and a sort is not stable — the
-            // pair would reorder arbitrarily between polls. Arrival order breaks the tie.
-            let index = turns.firstIndex { $0.iteration > diff.iteration } ?? turns.count
-            turns.insert(diff, at: index)
-            diffsBySession[key] = turns
-        }
         store.ingest(batch.events)
         store.sweepStale(now: now)
-        // Redeliver the diff set only when this batch actually changed it — the full
-        // flatMap used to run on EVERY poll (any hook line), re-rendering the
-        // drill-in's diff sidebar for nothing. A replayed diff changes nothing.
-        if changed {
-            diffSink(diffsBySession.values.flatMap { $0 })
-        }
         sink(SessionsFeed.cards(from: store.entries))
     }
 
@@ -328,9 +264,9 @@ public final class SessionsPoller {
         relay.start()
     }
 
-    /// The relay reads on its own thread; parse there (a `turn_diff` line runs to
-    /// megabytes and would stall typing on the main actor) and hop back with the
-    /// finished batch, exactly like the local drain does.
+    /// The relay reads on its own thread; parse there (a big batch would stall
+    /// typing on the main actor) and hop back with the finished batch, exactly like
+    /// the local drain does.
     private nonisolated func receiveRemote(_ lines: [RemoteEventLine]) {
         let now = Date()
         let batch = SessionsFeed.parse(lines, arrival: now)

@@ -91,7 +91,7 @@ final class BacklogPage: NSView {
         title.attributedStringValue = BoardTheme.caps("BACKLOG", color: BoardTheme.textFaint)
         header.addArrangedSubview(title)
         header.addArrangedSubview(NSView())   // flexible spacer
-        countLabel.font = BoardTheme.mono
+        countLabel.font = BoardTheme.numeric
         countLabel.textColor = BoardTheme.textFaint
         header.addArrangedSubview(countLabel)
         column.addArrangedSubview(header)

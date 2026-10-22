@@ -73,7 +73,7 @@ struct TaskSwitchTests {
         let blocked = card("c", .blocked), recent = card("d", .running)
         let ordered = TaskSwitcherOverlay.ordered(
             cards: [calm, waiting, blocked, recent], mru: [recent.id, blocked.id])
-        #expect(ordered.map(\.sessionID) == ["c", "b", "d", "a"])
+        #expect(ordered.map(\.sessionID) == ["b", "d", "c", "a"])
     }
 
     @Test("the highlight starts on the first entry that is not the current card")

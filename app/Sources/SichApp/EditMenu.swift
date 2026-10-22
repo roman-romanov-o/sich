@@ -20,7 +20,7 @@ enum EditMenu {
     }
 
     private static func menu() -> NSMenu {
-        let menu = NSMenu(title: "Edit")
+        let menu = LayoutAwareMenu(title: "Edit")
         // Undo/redo are responder actions with no exposed Swift selector.
         menu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
         let redo = menu.addItem(withTitle: "Redo", action: Selector(("redo:")),

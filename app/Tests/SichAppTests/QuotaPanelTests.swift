@@ -31,6 +31,46 @@ struct QuotaPanelTests {
     /// TC-E2E-201: interactive (40% window / 30% weekly used) + Agent SDK 60%
     /// remaining → TWO distinct Anthropic gauges, each its own remaining + reset,
     /// NOT merged into one number.
+    /// With a second Claude account the badge alone no longer says whose pools a
+    /// row shows. The account name gets a full-width caption instead of a sliver
+    /// truncated inside the 36pt logo rail.
+    @Test("a second Claude account is captioned by name at full row width")
+    func secondAccountCaptionIsReadable() throws {
+        let panel = QuotaPanel(frame: NSRect(x: 0, y: 0, width: 460, height: 560))
+        let work = ClaudeProfile(id: UUID(), name: "Work account", configDir: "~/.claude-work")
+        panel.render(
+            gauges: QuotaProjection.gauges(from: [
+                QuotaSeed.interactive(remainingFraction: 0.60, reset: QuotaSeed.hoursFromNow(1)),
+            ]),
+            claudeProfiles: [.defaultProfile, work])
+        panel.layoutSubtreeIfNeeded()
+
+        let captions = textFields(in: panel, identifier: "quota-account-name")
+        #expect(captions.map(\.stringValue) == ["Default", "Work account"])
+        for caption in captions {
+            #expect(caption.frame.width >= caption.attributedStringValue.size().width,
+                    "\(caption.stringValue) must not truncate")
+            #expect(caption.frame.width >= QuotaLayout.innerWidth)
+        }
+    }
+
+    @Test("a lone default Claude account carries no caption")
+    func singleAccountHasNoCaption() {
+        let panel = render([
+            QuotaSeed.interactive(remainingFraction: 0.60, reset: QuotaSeed.hoursFromNow(1)),
+        ])
+        #expect(textFields(in: panel, identifier: "quota-account-name").isEmpty)
+    }
+
+    private func textFields(in view: NSView, identifier: String) -> [NSTextField] {
+        var found: [NSTextField] = []
+        if let field = view as? NSTextField, field.identifier?.rawValue == identifier {
+            found.append(field)
+        }
+        for sub in view.subviews { found += textFields(in: sub, identifier: identifier) }
+        return found
+    }
+
     @Test("both Anthropic pools render as two distinct gauges, never merged (TC-E2E-201)")
     func bothAnthropicPoolsDistinct() throws {
         let panel = render([
@@ -139,7 +179,7 @@ struct QuotaPanelTests {
         ))
         #expect(active.resetText == "in 2h 15m", "countdown only — no prefix eating the width")
         #expect(
-            active.resetText.size(withAttributes: [.font: BoardTheme.monoSmall]).width
+            active.resetText.size(withAttributes: [.font: BoardTheme.numericSmall]).width
                 <= QuotaLayout.cellWidth,
             "the countdown must render un-truncated inside the cell"
         )
@@ -224,7 +264,8 @@ struct QuotaPanelTests {
         )
         #expect(panel.tallies[.claude] == AgentTaskTally(working: 2, waiting: 1))
         #expect(panel.taskLines["claude"] == ["2 working", "1 waiting"])
-        #expect(panel.taskLines["codex"] == ["1 waiting"])
+        #expect(panel.taskLines["codex"]?.isEmpty != false,
+                "external block is not agent-waiting load on the harness")
 
         // Both provider rows carry a visual harness badge (glyph + tooltip), not text.
         let badges = allSubviews(of: panel).compactMap { $0 as? HarnessBadge }

@@ -35,11 +35,16 @@ struct TerminalScrollAccumulator {
     static let preciseMultiplier: CGFloat = 2
     private(set) var residue: CGFloat = 0
 
-    mutating func rows(deltaY: CGFloat, precise: Bool, cellHeight: CGFloat) -> Int {
+    /// A wheel event's motion in rows, continuous — the smooth viewport path
+    /// consumes this directly; ``rows(deltaY:precise:cellHeight:)`` quantizes it
+    /// for the paths that must emit whole ticks (mouse reports, arrow keys).
+    static func rowDelta(deltaY: CGFloat, precise: Bool, cellHeight: CGFloat) -> CGFloat {
         guard cellHeight > 0 else { return 0 }
-        let rowDelta = precise
-            ? deltaY * Self.preciseMultiplier / cellHeight
-            : deltaY
+        return precise ? deltaY * preciseMultiplier / cellHeight : deltaY
+    }
+
+    mutating func rows(adding rowDelta: CGFloat) -> Int {
+        guard rowDelta != 0 else { return 0 }
         residue += rowDelta
         let rows = Int(residue) // rounds toward zero, preserving sub-row motion
         residue -= CGFloat(rows)
@@ -100,8 +105,12 @@ final class TerminalFrameCoordinator {
         idleFrames = 0
         guard let displayLink else {
             // Headless (no window, tests): deliver one coalesced frame on the next
-            // main-run-loop turn so the update is never lost.
-            DispatchQueue.main.async { [weak self] in _ = self?.onFrame() }
+            // main-run-loop turn so the update is never lost. Scheduled on the run
+            // loop rather than the main dispatch queue because a plain spun run loop
+            // — tests, nested AppKit modes — does not necessarily drain that queue.
+            RunLoop.main.perform(inModes: [.common]) { [weak self] in
+                MainActor.assumeIsolated { _ = self?.onFrame() }
+            }
             return
         }
         displayLink.isPaused = false

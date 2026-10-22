@@ -262,8 +262,8 @@ final class FlowOptionCard: NSView {
 /// same composite failure ``PaletteRow`` and ``FlowOptionCard`` were built to dodge.
 /// This reuses their proven idiom: layer-backed, owns its whole rect, real
 /// `mouseDown`. A 20pt box fills amber with a check when on, so the state reads at a
-/// glance. Off by default — a worktree is an opt-IN, never a surprise side branch.
-final class WorktreeToggle: NSView {
+/// glance. Every use is an opt-IN (worktree, Windows host), never a surprise default.
+final class PaletteToggle: NSView {
     var onToggle: ((Bool) -> Void)?
     private(set) var isOn: Bool
     private let box = NSView()
@@ -271,13 +271,13 @@ final class WorktreeToggle: NSView {
     private let title = makeSans(12, weight: .semibold)
     private let subtitle = makeMono(10)
 
-    init(isOn: Bool) {
+    init(title titleText: String, subtitle subtitleText: String, isOn: Bool) {
         self.isOn = isOn
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 9
-        title.stringValue = "Own git worktree"
-        subtitle.stringValue = "fresh task/<name> branch · isolated checkout"
+        title.stringValue = titleText
+        subtitle.stringValue = subtitleText
         check.stringValue = "✓"
         check.alignment = .center
         box.wantsLayer = true
@@ -401,7 +401,7 @@ final class PaletteFieldBox: NSView {
 /// logic (which owns the pool firewall + binding invariants). Reaching the "create"
 /// action for a saha task hands off to the shell, which enters planning mode.
 final class CreateCardPalette: NSView, NSTextFieldDelegate {
-    enum Stage { case destination, project, harness, task }
+    enum Stage { case destination, project, harness, agentAccount, task }
     /// Where the card runs. Remote is a stage-1 choice beside "This Mac" (US-009 AC-1),
     /// never a hidden keystroke; the payload is the raw `[user@]host[:port]` the
     /// operator picked or typed, parsed into a spec by the shell.
@@ -415,12 +415,16 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     enum Harness: CaseIterable {
         case claude
         case codex
+        case cursor
+        case antigravity
         case shell
 
         var title: String {
             switch self {
             case .claude: return "Claude Code"
             case .codex: return "Codex"
+            case .cursor: return "Cursor"
+            case .antigravity: return "Antigravity"
             case .shell: return "Interactive shell"
             }
         }
@@ -429,6 +433,8 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
             switch self {
             case .claude: return "claude · supports /saha:* commands"
             case .codex: return "codex · OpenAI coding agent CLI"
+            case .cursor: return "agent · Cursor's terminal agent CLI"
+            case .antigravity: return "agy · Google's Antigravity agent CLI"
             case .shell: return "bare login shell · run any CLI yourself"
             }
         }
@@ -437,19 +443,31 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
             switch self {
             case .claude: return .claude
             case .codex: return .codex
+            case .cursor: return .cursor
+            case .antigravity: return .antigravity
             case .shell: return nil
             }
+        }
+
+        var supportsAccountPicker: Bool {
+            guard let agent = cardAgent else { return false }
+            return AgentAccountBackend.supportsMultiAccount(agent)
         }
     }
 
     // Shell wires these. Each saha confirm returns an error string (nil = success,
     // shell has dismissed us + entered planning); interactive never fails visibly.
-    var confirmInteractive: ((_ title: String, _ dir: String, _ harness: Harness, _ inWorktree: Bool) -> Void)?
+    var confirmInteractive: ((
+        _ title: String, _ dir: String, _ harness: Harness, _ inWorktree: Bool,
+        _ claudeProfileID: UUID?
+    ) -> Void)?
     var confirmSahaNew: ((_ title: String, _ dir: String) -> String?)?
     var confirmSahaExisting: ((_ folder: URL, _ dir: String) -> String?)?
     /// The remote path (US-009): destination + optional far-side dir + card name. Same
     /// error contract as the saha confirms — nil means the shell created the card.
-    var confirmRemote: ((_ title: String, _ destination: String, _ dir: String) -> String?)?
+    var confirmRemote: ((
+        _ title: String, _ destination: String, _ dir: String, _ windows: Bool
+    ) -> String?)?
     var browse: (() -> String?)?
     var onCancel: (() -> Void)?
     // Discover the task folders under a chosen project dir (shell injects
@@ -468,15 +486,31 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     private(set) var stage: Stage = .destination
     private(set) var destination: Destination = .local
 
+    /// Called when the operator picks "+ Add account…" on the account stage.
+    var addAgentAccount: ((CardAgent) -> Void)?
+
     private let recents: [PaletteProject]
+    private var agentAccounts: [AgentAccountProfile]
     private(set) var remoteDir = ""
     private var projectDir: String
     private var harness: Harness = .claude
+    private var selectedAgentAccountID: UUID = AgentAccountProfile.defaultClaudeID
     /// Off by default: a worktree is an explicit opt-IN. When on, the task gets its
     /// own git worktree (fresh `task/<slug>` branch) so parallel cards on one repo
     /// don't share a checkout — but that's a deliberate choice, not a surprise.
     private(set) var inWorktree = false
-    private(set) var worktreeToggle: WorktreeToggle?
+    private var worktreeToggle: PaletteToggle?
+    // periphery:ignore - test-only seam (scan runs with exclude_tests)
+    var worktreeToggleForTesting: PaletteToggle? { worktreeToggle }
+    /// Whether the picked remote host is a Windows box (psmux, terminal-only card).
+    /// Defaults from ``windowsHosts`` when the folder stage opens, so a host the
+    /// operator already marked once comes pre-checked.
+    private(set) var remoteWindows = false
+    private var windowsToggle: PaletteToggle?
+    // periphery:ignore - test-only seam (scan runs with exclude_tests)
+    var windowsToggleForTesting: PaletteToggle? { windowsToggle }
+    /// Hosts the board remembers as Windows — the shell injects these at wiring time.
+    var windowsHosts: Set<String> = []
     private var flow: Flow = .interactive
     private var folders: [TaskFolderSummary] = []
     private var selected = 0
@@ -486,13 +520,17 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     private let header = NSStackView()
     private let footer = makeMono(9)
 
-    init(recents: [PaletteProject]) {
+    init(recents: [PaletteProject], agentAccounts: [AgentAccountProfile] = [.defaultClaude]) {
         self.recents = recents
+        self.agentAccounts = agentAccounts.isEmpty ? [.defaultClaude] : agentAccounts
         self.projectDir = recents.first { $0.host == nil }?.path ?? ""
+        self.selectedAgentAccountID = AgentAccountProfile.defaultClaudeID
         super.init(frame: .zero)
+        if let first = selectableAccounts.first?.id { selectedAgentAccountID = first }
         buildChrome()
         renderStage()
     }
+
     required init?(coder: NSCoder) { nil }
 
     override var acceptsFirstResponder: Bool { true }
@@ -609,6 +647,7 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         case .destination: renderDestination()
         case .project: renderProject()
         case .harness: renderHarness()
+        case .agentAccount: renderAgentAccount()
         case .task: renderTask()
         }
         highlight()
@@ -622,6 +661,7 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         case .destination: return hostField
         case .project: return destination == .local ? self : dirField
         case .harness: return self
+        case .agentAccount: return self
         case .task: return nameField
         }
     }
@@ -630,7 +670,9 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     /// runs whatever they like inside the far-side tmux), so the count differs.
     private func stageChip(_ name: String) -> String {
         let steps: [Stage] = destination == .local
-            ? [.destination, .project, .harness, .task]
+            ? (harness.supportsAccountPicker
+                ? [.destination, .project, .harness, .agentAccount, .task]
+                : [.destination, .project, .harness, .task])
             : [.destination, .project, .task]
         return "\((steps.firstIndex(of: stage) ?? 0) + 1)/\(steps.count) \(name)"
     }
@@ -725,6 +767,17 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         }
         addField(PaletteFieldBox(field: dirField,
                                  placeholder: "/home/you/project   (blank = the host's default)"))
+        // A Windows box speaks psmux, not tmux, and (password auth) serves no
+        // headless channel — the operator marks it once here, and the board
+        // remembers per host so the toggle comes pre-checked next time.
+        add(sectionLabel("HOST TYPE"))
+        let toggle = PaletteToggle(
+            title: "Windows host (psmux)",
+            subtitle: "attach via psmux · terminal-only (no hooks/relay)",
+            isOn: remoteWindows)
+        toggle.onToggle = { [weak self] on in self?.remoteWindows = on }
+        windowsToggle = toggle
+        add(toggle)
         setFooter(["↵ next: name", "↑↓ folder", "← back", "esc cancel"])
     }
 
@@ -759,7 +812,51 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
             let glyph = option.cardAgent.map { BoardTheme.agentGlyph($0) } ?? ""
             addNav(PaletteRow(glyph: glyph, title: option.title, subtitle: option.subtitle))
         }
+        setFooter(["↵ next: account", "↑↓ navigate", "← back", "esc cancel"])
+    }
+
+    // MARK: stage 3b — agent account (local + Claude/Codex/Cursor harness)
+
+    private var selectableAccounts: [AgentAccountProfile] {
+        guard let agent = harness.cardAgent else { return [] }
+        let host = destination.host
+        let stored = agentAccounts.filter { $0.agent == agent && $0.host == host }
+        if stored.contains(where: { AgentAccountBackend.isDefaultConfigRoot($0.configRoot, agent: agent) }) {
+            return stored
+        }
+        if let synthetic = AgentAccountProfile.syntheticDefault(for: agent, host: host) {
+            return [synthetic] + stored
+        }
+        return stored
+    }
+
+    private func renderAgentAccount() {
+        let agent = harness.cardAgent ?? .claude
+        addHeader(stageChip("account"), completed: [projLeaf, harness.title])
+        add(sectionLabel("\(AgentAccountBackend.displayName(for: agent).uppercased()) ACCOUNT"))
+        for account in selectableAccounts {
+            let auth = account.authStatus == .ready ? " · signed in" : " · sign in once"
+            addNav(PaletteRow(
+                glyph: BoardTheme.agentGlyph(agent),
+                title: account.name,
+                subtitle: "\(account.configRoot)\(auth)"))
+        }
+        let addRow = PaletteRow(
+            glyph: "+", title: "Add \(AgentAccountBackend.displayName(for: agent)) account…",
+            subtitle: "new config dir · separate subscription",
+            titleColor: BoardTheme.textMuted)
+        addRow.onClick = { [weak self] in self?.addAgentAccount?(agent) }
+        navRows.append(addRow)
+        add(addRow)
         setFooter(["↵ next: task", "↑↓ navigate", "← back", "esc cancel"])
+    }
+
+    private var selectedAgentAccount: AgentAccountProfile? {
+        selectableAccounts.first { $0.id == selectedAgentAccountID }
+    }
+
+    private var agentAccountChip: String {
+        selectedAgentAccount?.name ?? "Default"
     }
 
     // MARK: last stage — task
@@ -772,7 +869,10 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     }
 
     private func renderLocalTask() {
-        addHeader(stageChip("task"), completed: [projLeaf, harness.title])
+        let completed = harness.supportsAccountPicker
+            ? [projLeaf, harness.title, agentAccountChip]
+            : [projLeaf, harness.title]
+        addHeader(stageChip("task"), completed: completed)
         buildNameField()
         buildFlowGrid()
         if flow == .saha { buildFolderList() } else { buildWorktreeToggle() }
@@ -840,7 +940,10 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     /// lives there.
     private func buildWorktreeToggle() {
         add(sectionLabel("ISOLATION"))
-        let toggle = WorktreeToggle(isOn: inWorktree)
+        let toggle = PaletteToggle(
+            title: "Own git worktree",
+            subtitle: "fresh task/<name> branch · isolated checkout",
+            isOn: inWorktree)
         toggle.onToggle = { [weak self] on in self?.inWorktree = on }
         worktreeToggle = toggle
         add(toggle)
@@ -868,9 +971,9 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         case .project:
             activateProjectRow(idx)
         case .harness:
-            harness = Harness.allCases[idx]
-            folders = discoverFolders?(projectDir) ?? []
-            stage = .task; renderStage()
+            activateHarnessRow(idx)
+        case .agentAccount:
+            activateAgentAccountRow(idx)
         case .task:
             confirmTask(folderIndex: idx)
         }
@@ -885,6 +988,7 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     private func enterFolderStage() {
         remoteDir = ""
         dirField.stringValue = ""
+        remoteWindows = windowsHosts.contains(destination.host ?? "")
         stage = .project
         renderStage()
     }
@@ -911,7 +1015,38 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         }
         if idx == navRows.count - 1 { doBrowse(); return }   // last = Browse…
         projectDir = localRecents[idx].path
-        stage = .harness; renderStage()
+        stage = .harness
+        renderStage()
+    }
+
+    private func advanceFromHarness() {
+        if harness.supportsAccountPicker {
+            selectedAgentAccountID = selectableAccounts.first?.id ?? AgentAccountProfile.defaultClaudeID
+            stage = .agentAccount
+        } else {
+            stage = .task
+        }
+        renderStage()
+    }
+
+    private func activateHarnessRow(_ idx: Int) {
+        harness = Harness.allCases[idx]
+        folders = discoverFolders?(projectDir) ?? []
+        advanceFromHarness()
+    }
+
+    private func activateAgentAccountRow(_ idx: Int) {
+        let accounts = selectableAccounts
+        let addIndex = accounts.count
+        if idx == addIndex {
+            if let agent = harness.cardAgent { addAgentAccount?(agent) }
+            return
+        }
+        guard idx < accounts.count else { return }
+        selectedAgentAccountID = accounts[idx].id
+        folders = discoverFolders?(projectDir) ?? []
+        stage = .task
+        renderStage()
     }
 
     /// Return in the far-side folder field. A blank field is legitimate — with no
@@ -932,11 +1067,12 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     private func confirmTask(folderIndex: Int?) {
         let title = nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if case let .remote(host) = destination {
-            if let err = confirmRemote?(title, host, remoteDir) { showError(err) }
+            if let err = confirmRemote?(title, host, remoteDir, remoteWindows) { showError(err) }
             return
         }
         if flow == .interactive {
-            confirmInteractive?(title, projectDir, harness, inWorktree)
+            let profileID = harness.supportsAccountPicker ? selectedAgentAccountID : nil
+            confirmInteractive?(title, projectDir, harness, inWorktree, profileID)
             return
         }
         // saha: the last nav row is "Create new"; earlier rows are existing folders.
@@ -960,7 +1096,8 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     private func doBrowse() {
         guard let path = browse?(), !path.isEmpty else { return }
         projectDir = path
-        stage = .harness; renderStage()
+        stage = .harness
+        renderStage()
     }
 
     private func showError(_ text: String) {
@@ -973,7 +1110,16 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         case .destination: onCancel?()
         case .project: stage = .destination; renderStage()
         case .harness: stage = .project; renderStage()
-        case .task: stage = destination == .local ? .harness : .project; renderStage()
+        case .agentAccount: stage = .harness; renderStage()
+        case .task:
+            if case .remote = destination {
+                stage = .project
+            } else if harness.supportsAccountPicker {
+                stage = .agentAccount
+            } else {
+                stage = .harness
+            }
+            renderStage()
         }
     }
 
@@ -1043,6 +1189,24 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
 
     /// Called by the shell after the project is fixed so stage 3 can list its folders.
     func loadFolders(_ list: [TaskFolderSummary]) { folders = list }
+
+    /// Swap in the account list; the palette filters it by the picked harness and host.
+    func reloadAgentAccounts(_ accounts: [AgentAccountProfile]) {
+        agentAccounts = accounts
+        if !selectableAccounts.contains(where: { $0.id == selectedAgentAccountID }) {
+            selectedAgentAccountID = selectableAccounts.first?.id ?? AgentAccountProfile.defaultClaudeID
+        }
+        if stage == .agentAccount { renderStage() }
+    }
+
+    func selectAgentAccount(_ id: UUID) {
+        selectedAgentAccountID = id
+        if stage == .agentAccount {
+            folders = discoverFolders?(projectDir) ?? []
+            stage = .task
+            renderStage()
+        }
+    }
 
     /// Capture seam: jump to the harness stage for a known project.
     func presentHarnessStage(projectDir: String) {

@@ -56,6 +56,41 @@ struct EditMenuPasteTests {
         ))
     }
 
+    @Test("the main menu claims ⌘V when the V key types a Cyrillic glyph")
+    func mainMenuClaimsCmdVOnNonLatinLayout() throws {
+        let menu = LayoutAwareMenu()
+        menu.addItem(EditMenu.item())
+        let event = try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
+            windowNumber: 0, context: nil,
+            characters: "м", charactersIgnoringModifiers: "м",
+            isARepeat: false, keyCode: 9
+        ))
+        try withMainMenu(menu) {
+            #expect(menu.performKeyEquivalent(with: event),
+                "⌘V in a text field must survive a Ukrainian layout")
+        }
+    }
+
+    /// Claiming the chord is not enough — the Paste item has to run, once.
+    @Test("a Cyrillic ⌘V performs Paste exactly once")
+    func cyrillicCmdVPerformsPasteOnce() throws {
+        let spy = PasteSpy(frame: NSRect(x: 0, y: 0, width: 200, height: 40))
+        let menu = LayoutAwareMenu(title: "Edit")
+        let paste = NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)),
+                               keyEquivalent: "v")
+        paste.target = spy
+        menu.addItem(paste)
+        let event = try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
+            windowNumber: 0, context: nil,
+            characters: "м", charactersIgnoringModifiers: "м",
+            isARepeat: false, keyCode: 9
+        ))
+        #expect(menu.performKeyEquivalent(with: event))
+        #expect(spy.pastes == 1)
+    }
+
     @Test("the main menu claims ⌘V once the Edit menu is installed")
     func mainMenuClaimsCmdV() throws {
         let menu = NSMenu()

@@ -1,5 +1,19 @@
 import Foundation
 
+/// What shell and multiplexer the far side runs. Persisted with the spec, so a
+/// restore rebuilds the same attach without re-asking.
+public enum RemoteHostKind: String, Codable, Equatable, Sendable {
+    /// A POSIX host: tmux, `sh` quoting, `$HOME` — every channel works.
+    case posix
+    /// A Windows host running native OpenSSH + psmux (a tmux clone on ConPTY).
+    /// The remote command lands in cmd.exe or PowerShell, not `sh`, and such a box
+    /// is typically password-auth only — so the card is TERMINAL-ONLY: the attach
+    /// works (the operator types the password into the visible pane), while every
+    /// headless channel (session probe, hook install, event relay) refuses to build
+    /// an argv, and each caller already fails soft on that refusal.
+    case windowsPsmux = "windows-psmux"
+}
+
 /// Where a remote tmux session lives and what to call it. A card built from this
 /// spec SSHes into `host` and attaches to (or creates) tmux session `sessionName`
 /// — the app *being* the terminal for a session that lives on another machine.
@@ -20,10 +34,13 @@ public struct RemoteTmuxSpec: Equatable, Sendable {
     public var identityFile: String?
     /// Directory the session starts in when tmux *creates* it (ignored on attach).
     public var remoteDir: String?
+    /// What runs on the far side — decides which argv family the emitters build.
+    public var hostKind: RemoteHostKind
 
     public init(
         host: String, user: String? = nil, sessionName: String = "sich",
-        port: Int? = nil, identityFile: String? = nil, remoteDir: String? = nil
+        port: Int? = nil, identityFile: String? = nil, remoteDir: String? = nil,
+        hostKind: RemoteHostKind = .posix
     ) {
         self.host = host
         self.user = user
@@ -31,6 +48,7 @@ public struct RemoteTmuxSpec: Equatable, Sendable {
         self.port = port
         self.identityFile = identityFile
         self.remoteDir = remoteDir
+        self.hostKind = hostKind
     }
 
     /// `user@host` (or bare `host`) — a compact card label.
@@ -91,6 +109,12 @@ public enum RemoteTmuxCommand {
         case invalidDestination(String)
         /// The card id is not uuid-shaped, so it may not enter the remote shell word.
         case invalidCardID(String)
+        /// A token cmd.exe or PowerShell would re-parse — safety on a Windows far
+        /// side is validation, because there is no quoting both shells agree on.
+        case windowsUnsafeToken(String)
+        /// The probe/hook/relay channels are POSIX-only; a Windows (psmux) card is
+        /// terminal-only. Every caller of these emitters fails soft on a throw.
+        case posixChannelOnWindowsHost
 
         public var description: String {
             switch self {
@@ -101,6 +125,12 @@ public enum RemoteTmuxCommand {
                     + "Remove the leading dash."
             case .invalidCardID(let token):
                 return "Card id \"\(token)\" is not a UUID."
+            case .windowsUnsafeToken(let token):
+                return "\"\(token)\" has characters a Windows shell would re-parse. "
+                    + "Use letters, digits and dashes (a folder may add \\ / : . space)."
+            case .posixChannelOnWindowsHost:
+                return "hook and relay channels need a POSIX far side; "
+                    + "a Windows (psmux) card is terminal-only"
             }
         }
     }
@@ -165,14 +195,128 @@ public enum RemoteTmuxCommand {
     ///
     /// `cardID` binds the pane to a board card (US-004, DD-002). It is optional so a
     /// bare attach — an argv that only needs to reach a session — keeps its old shape.
-    public static func argv(for spec: RemoteTmuxSpec, cardID: String? = nil) throws -> [String] {
+    /// `tmuxEnvironment` seeds per-account env vars (`CLAUDE_CONFIG_DIR`, …) on the
+    /// far-side session before the login shell starts.
+    public static func argv(
+        for spec: RemoteTmuxSpec, cardID: String? = nil,
+        tmuxEnvironment: [(String, String)] = [],
+        agentCommand: String? = nil
+    ) throws -> [String] {
         let destination = try destination(for: spec)
         let session = sanitizeSessionName(spec.sessionName)
         guard !session.isEmpty else { throw Invalid.emptySessionName }
         if let cardID, !isWellFormedCardID(cardID) { throw Invalid.invalidCardID(cardID) }
 
+        // Both far sides attach in CONTROL MODE (`-CC`): the server hands the pane's
+        // output over as data and the local emulator owns the scrollback. The
+        // `agentCommand` (a claude start or resume) rides the session's own launch
+        // command on both, executed far-side on the CREATE branch of `-A` only — a
+        // re-attach never double-starts anything, and nothing is ever typed into the
+        // handshake, where keystrokes would feed ssh's password prompt or the
+        // control client's command reader instead of a shell.
+        //
+        // A Windows far side gets the psmux family. `tmuxEnvironment` is deliberately
+        // dropped there: those are per-account vars carrying POSIX config paths
+        // (`$HOME/...`), meaningless on a Windows box.
+        //
+        // `-T` (no remote PTY) on Windows, not `-t`: psmux's control mode is a line
+        // protocol over pipes, and under `-t` ConPTY consumes the protocol's DCS
+        // opener and injects cursor sequences into the stream, corrupting the parse.
+        // tmux is the opposite: its control client refuses to start WITHOUT a tty
+        // (`tcgetattr failed`), so the POSIX attach keeps `-t`.
+        if spec.hostKind == .windowsPsmux {
+            return ["/usr/bin/ssh", "-T"] + attachOptions + options(for: spec)
+                + [destination, try windowsScript(
+                    session: session, dir: spec.remoteDir, cardID: cardID,
+                    agentCommand: agentCommand)]
+        }
         return ["/usr/bin/ssh", "-t"] + attachOptions + options(for: spec)
-            + [destination, remoteScript(session: session, dir: spec.remoteDir, cardID: cardID)]
+            + [destination, remoteScript(
+                session: session, dir: spec.remoteDir, cardID: cardID,
+                tmuxEnvironment: tmuxEnvironment, agentCommand: agentCommand)]
+    }
+
+    /// The far-side command that starts a NEW interactive Claude conversation pinned
+    /// to `sessionID`, so the id is known up front and resumable later. Plain
+    /// `claude`, bare PATH lookup: the far side has no shim (its hooks arrive through
+    /// the forwarded event log). Never `claude -p`.
+    public static func claudeStart(sessionID: UUID) -> String {
+        "claude --session-id \(sessionID.uuidString.lowercased())"
+    }
+
+    /// The far-side command that RESUMES conversation `sessionID`. No `|| claude`
+    /// fallback here: the pane command keeps a shell behind the agent on both host
+    /// kinds, so a vanished transcript lands the operator at a prompt, not a dead pane.
+    public static func claudeResume(sessionID: UUID) -> String {
+        "claude --resume \(sessionID.uuidString.lowercased())"
+    }
+
+    /// The remote command for a Windows far side. Windows OpenSSH hands this string
+    /// to the account's DefaultShell — cmd.exe or PowerShell, NOT `sh` — so nothing
+    /// POSIX survives here: no single quotes, no `$HOME`, no `exec $SHELL`. The
+    /// command is plain space-separated tokens both shells pass through unchanged,
+    /// and safety comes from VALIDATION rather than quoting, because cmd and
+    /// PowerShell disagree on every quoting rule (`%` expands inside cmd quotes,
+    /// `$` and backticks inside PowerShell double quotes).
+    ///
+    /// psmux — a native-Windows tmux clone on ConPTY — covers everything this argv
+    /// needs: `-A` attach-or-create, `-c` start dir, and repeatable `-e KEY=VALUE`
+    /// session env, which replaces the whole POSIX `set-environment` +
+    /// `exec $SHELL -il` dance in one flag (on the attach branch of `-A` it is
+    /// ignored, exactly like tmux). tmux's `-D` takeover flag is not emitted: psmux
+    /// is single-client, so there is no stale co-client to detach.
+    ///
+    /// `-CC` attaches in CONTROL MODE: instead of repainting a full-screen UI,
+    /// psmux streams the pane as `%output` data that ``TmuxControlChannel``
+    /// decodes into the local emulator's normal buffer — which is what makes the
+    /// wheel scroll local scrollback on a Windows card instead of rewinding
+    /// claude's input history. Session persistence across drops is unchanged:
+    /// the panes live in the far-side server either way.
+    static func windowsScript(
+        session: String, dir: String?, cardID: String?, agentCommand: String? = nil
+    ) throws -> String {
+        guard isWindowsSafe(session, allowing: windowsNameChars) else {
+            throw Invalid.windowsUnsafeToken(session)
+        }
+        var words = ["psmux", "-CC", "new-session", "-A", "-s", session]
+        if let cardID { words += ["-e", "\(cardIDVariable)=\(cardID)"] }
+        let dir = dir?.trimmingCharacters(in: .whitespaces) ?? ""
+        if !dir.isEmpty {
+            guard isWindowsSafe(dir, allowing: windowsPathChars) else {
+                throw Invalid.windowsUnsafeToken(dir)
+            }
+            // Double quotes are the ONE quoting both shells treat as grouping; the
+            // charset above keeps everything inside them inert in both.
+            words += ["-c", "\"\(dir)\""]
+        }
+        // psmux runs everything after `--` instead of a shell (ignored on the attach
+        // branch of `-A`, so a re-attach never double-starts claude). The PowerShell
+        // `-NoExit` wrapper keeps a shell behind claude — exiting the agent lands the
+        // operator in a prompt, matching the POSIX cards where claude runs IN a shell.
+        if let agentCommand {
+            guard isWindowsSafe(agentCommand, allowing: windowsCommandChars) else {
+                throw Invalid.windowsUnsafeToken(agentCommand)
+            }
+            words += ["--", "powershell", "-NoExit", "-Command", agentCommand]
+        }
+        return words.joined(separator: " ")
+    }
+
+    /// Letters/digits/dash/underscore — inert in cmd.exe AND PowerShell, and a
+    /// superset of what ``defaultSessionName(for:)`` produces.
+    private static let windowsNameChars = CharacterSet(charactersIn:
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+    /// An agent command line: name-safe words separated by spaces — what
+    /// ``claudeStart(sessionID:)`` and ``claudeResume(sessionID:)`` produce.
+    private static let windowsCommandChars = windowsNameChars.union(CharacterSet(charactersIn: " "))
+    /// A Windows path inside double quotes. Excluded on purpose: `%` and `!` (cmd
+    /// expands both even inside quotes), `$` and `` ` `` (PowerShell expands both
+    /// inside double quotes), and every redirect/join metacharacter.
+    private static let windowsPathChars = CharacterSet(charactersIn:
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 _.:\\/()~-")
+
+    private static func isWindowsSafe(_ token: String, allowing chars: CharacterSet) -> Bool {
+        !token.isEmpty && token.unicodeScalars.allSatisfy(chars.contains)
     }
 
     /// What the INTERACTIVE attach adds on top of the relay's keepalive: a bounded dial.
@@ -209,6 +353,10 @@ public enum RemoteTmuxCommand {
     /// nonzero status means the transport failed, not that the session is missing —
     /// the difference between `absent` and `unknown`.
     public static func sessionProbeArgv(for spec: RemoteTmuxSpec, session: String) throws -> [String] {
+        // A Windows box cannot serve this: the command is POSIX and BatchMode over
+        // password auth fails anyway. The probe's `try?` maps this to `.unknown`,
+        // which is "proceed" — silence must not make remote cards unopenable.
+        guard spec.hostKind == .posix else { throw Invalid.posixChannelOnWindowsHost }
         let target = remoteQuoted("=" + session)
         let command = "tmux has-session -t \(target) 2>/dev/null || echo \(noSessionMarker); "
             + "tmux show-environment -t \(target) \(cardIDVariable) 2>/dev/null; exit 0"
@@ -251,22 +399,45 @@ public enum RemoteTmuxCommand {
     public static func installArgv(
         for spec: RemoteTmuxSpec, file: RemoteHookFile
     ) throws -> [String] {
-        let path = remoteHome(file.rawValue)
-        let command = "mkdir -p \(remoteHome(directory(of: file.rawValue)))"
+        try installArgv(for: spec, relativePath: file.rawValue, mode: file.mode)
+    }
+
+    /// Push one `$HOME`-relative file to the remote host, bytes on **stdin**.
+    public static func installArgv(
+        for spec: RemoteTmuxSpec, relativePath: String, mode: String
+    ) throws -> [String] {
+        guard isSafeHomeRelative(relativePath) else {
+            throw Invalid.invalidDestination(relativePath)
+        }
+        let path = remoteHome(relativePath)
+        let command = "mkdir -p \(remoteHome(directory(of: relativePath)))"
             + " && cat > \(path).new"
-            + " && chmod \(file.mode) \(path).new"
+            + " && chmod \(mode) \(path).new"
             + " && mv \(path).new \(path)"
         return try channelArgv(for: spec, command: command)
     }
 
-    /// Read one remote file back (US-005 AC-2). Ends in `exit 0` so that a
-    /// MISSING file is empty output and a nonzero exit means the transport
-    /// itself failed — the two facts `unknown` and `notInstalled` are made of.
     public static func probeArgv(
         for spec: RemoteTmuxSpec, file: RemoteHookFile
     ) throws -> [String] {
-        try channelArgv(
-            for: spec, command: "cat \(remoteHome(file.rawValue)) 2>/dev/null; exit 0")
+        try probeArgv(for: spec, relativePath: file.rawValue)
+    }
+
+    public static func probeArgv(
+        for spec: RemoteTmuxSpec, relativePath: String
+    ) throws -> [String] {
+        guard isSafeHomeRelative(relativePath) else {
+            throw Invalid.invalidDestination(relativePath)
+        }
+        return try channelArgv(
+            for: spec, command: "cat \(remoteHome(relativePath)) 2>/dev/null; exit 0")
+    }
+
+    private static func isSafeHomeRelative(_ path: String) -> Bool {
+        !path.isEmpty && !path.contains("..")
+            && path.unicodeScalars.allSatisfy {
+                CharacterSet.alphanumerics.contains($0) || "-_./".unicodeScalars.contains($0)
+            }
     }
 
     /// Follow the remote event log and stream it to the laptop (US-003 AC-5).
@@ -284,7 +455,10 @@ public enum RemoteTmuxCommand {
     ///
     /// No `-t`: a PTY would rewrite LF to CRLF and corrupt every JSON line.
     public static func relayArgv(for spec: RemoteTmuxSpec) throws -> [String] {
-        ["/usr/bin/ssh"] + keepAliveOptions + options(for: spec)
+        // No `tail`, no `$HOME`, no headless auth on a Windows box: the relay is
+        // simply not started for one (`attachRemoteHost` skips on this throw).
+        guard spec.hostKind == .posix else { throw Invalid.posixChannelOnWindowsHost }
+        return ["/usr/bin/ssh"] + keepAliveOptions + options(for: spec)
             + [try destination(for: spec), relayCommand]
     }
 
@@ -317,7 +491,10 @@ public enum RemoteTmuxCommand {
     private static func channelArgv(
         for spec: RemoteTmuxSpec, command: String
     ) throws -> [String] {
-        ["/usr/bin/ssh"] + options(for: spec) + [try destination(for: spec), command]
+        // Gates hook install AND hook probe: both commands are POSIX (`$HOME`,
+        // `cat`, `chmod`) and both callers fail soft (`.failed` → chip `unknown`).
+        guard spec.hostKind == .posix else { throw Invalid.posixChannelOnWindowsHost }
+        return ["/usr/bin/ssh"] + options(for: spec) + [try destination(for: spec), command]
     }
 
     /// A `$HOME`-relative path as a single remote shell word. The variable stays
@@ -364,16 +541,40 @@ public enum RemoteTmuxCommand {
     ///
     /// `new-session -e` would do both in one flag but needs tmux ≥ 3.2 (Ubuntu 20.04
     /// ships 3.0a, where it is a usage error and the session never starts).
-    static func remoteScript(session: String, dir: String?, cardID: String? = nil) -> String {
-        var tmux = "tmux new-session -A -D -s \(remoteQuoted(session))"
+    ///
+    /// `-CC` is CONTROL MODE: tmux draws no UI and streams the pane as data, which
+    /// is what gives a remote card local scrollback (see ``TmuxControlChannel``).
+    ///
+    /// An `agentCommand` runs INSIDE that login shell (`-c`, so the rc files still
+    /// shape PATH and prompt), with a plain login shell exec'd behind it: exiting
+    /// the agent lands the operator at a prompt in the same pane, never a dead one.
+    static func remoteScript(
+        session: String, dir: String?, cardID: String? = nil,
+        tmuxEnvironment: [(String, String)] = [], agentCommand: String? = nil
+    ) -> String {
+        var tmux = "tmux -CC new-session -A -D -s \(remoteQuoted(session))"
         let dir = dir?.trimmingCharacters(in: .whitespaces) ?? ""
         if !dir.isEmpty {
             tmux += " -c \(remotePath(dir))"
         }
-        guard let cardID else { return tmux }
-        return tmux + " " + remoteQuoted(
-            "tmux set-environment \(cardIDVariable) \(cardID); "
-            + "\(cardIDVariable)=\(cardID) exec $SHELL -il")
+        var shell = "exec $SHELL -il"
+        if let agentCommand {
+            shell += " -c " + remoteQuoted(agentCommand + "; exec $SHELL -il")
+        }
+        var inner = tmuxEnvironment.map { name, value in
+            "tmux set-environment \(remoteQuoted(name)) \(remoteQuoted(value))"
+        }.joined(separator: "; ")
+        if let cardID {
+            let bind = inner.isEmpty ? "" : inner + "; "
+            inner = bind + "tmux set-environment \(cardIDVariable) \(cardID); "
+                + "\(cardIDVariable)=\(cardID) " + shell
+            return tmux + " " + remoteQuoted(inner)
+        }
+        if inner.isEmpty {
+            guard agentCommand != nil else { return tmux }
+            return tmux + " " + remoteQuoted(shell)
+        }
+        return tmux + " " + remoteQuoted(inner + "; " + shell)
     }
 
     /// A far-side path as ONE shell word, with a leading `~` handed to the remote shell

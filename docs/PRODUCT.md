@@ -6,7 +6,7 @@
 
 A single-window macOS app that is **its own terminal emulator** (embeds libghostty, per DD-001), giving one board-level view of every parallel agentic-coding session the developer runs, plus a quota-aware "capacity brain" that suggests what to start next and on which billing pool.
 
-**One line:** a kanban cockpit for someone running 6–8 Claude Code / Codex / Gemini sessions at once, that knows how much of each subscription pool is left and routes new work to the pool with headroom.
+**One line:** a kanban cockpit for someone running 6–8 Claude Code / Codex / Cursor / Antigravity / Gemini sessions at once, that knows how much of each subscription pool is left and routes new work to the pool with headroom.
 
 ## The need we're covering
 

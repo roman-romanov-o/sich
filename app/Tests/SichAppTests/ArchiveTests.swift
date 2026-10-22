@@ -165,6 +165,154 @@ struct ArchiveTests {
         #expect(!shell.boardView.isHidden)
     }
 
+    // MARK: - Revive: the session comes back, local or remote
+
+    @Test("reviving an archived local task reopens its conversation and stays on the board")
+    func reviveLocalArchivedTaskReopensTheConversation() throws {
+        let taskDir = makeTempDir("revive-local")
+        let sessionDir = makeTempDir("revive-local-snap")
+        let work = makeTempDir("revive-local-work")
+        defer {
+            try? FileManager.default.removeItem(at: taskDir)
+            try? FileManager.default.removeItem(at: sessionDir)
+            try? FileManager.default.removeItem(at: work)
+        }
+        let resumeID = UUID()
+        let record = TaskRecord(
+            title: "Look at the importer",
+            placement: .board(.done),
+            agent: CardAgent.claude.rawValue,
+            mode: .interactive,
+            projectDir: work.path,
+            sessionRef: TaskSessionRef(claudeSessionID: resumeID, lastCwd: work.path),
+            archivedAt: Date()
+        )
+        try BoardTaskStore(directory: taskDir).save(tasks: [record])
+
+        let typed = TypedLaunch()
+        let shell = makeShell(taskDir: taskDir)
+        let root = shell.buildContentForTesting()
+        defer { shell.e2eTeardown() }
+        shell.launchOverrideForTesting = capturingLaunch(typed)
+        shell.hydrateForTesting(sessionStore: SessionSnapshotStore(directory: sessionDir))
+        let window = host(root)
+        shell.showArchivePage()
+        root.layoutSubtreeIfNeeded()
+
+        try clickRevive(on: shell, in: root, window: window)
+
+        let card = try #require(shell.cards.first { $0.id == record.id })
+        #expect(card.state == .idle)
+        #expect(shell.archivedTasks.isEmpty)
+        #expect(shell.archivePage.isHidden)
+        #expect(!shell.drillIn.isHidden)
+        #expect(shell.ptyForTesting(card.id) != nil)
+        #expect(typed.text.contains(resumeID.uuidString.lowercased()))
+        let onDisk = try #require(
+            BoardTaskStore(directory: taskDir).load()?.tasks.first { $0.id == record.id })
+        #expect(onDisk.archivedAt == nil)
+        #expect(onDisk.placement == .board(.idle))
+
+        // Quit and come back: the task is in play, not swept into the archive again.
+        shell.e2eTeardown()
+        let again = relaunch(taskDir: taskDir, sessionDir: sessionDir)
+        defer { again.e2eTeardown() }
+        #expect(again.cards.contains { $0.id == record.id })
+        #expect(!again.archivedTasks.contains { $0.id == record.id })
+        #expect(again.taskMetaForTesting(record.id)?.sessionRef?.claudeSessionID == resumeID)
+    }
+
+    @Test("reviving an archived remote task re-attaches over ssh without typing into it")
+    func reviveRemoteArchivedTaskReattaches() throws {
+        let taskDir = makeTempDir("revive-remote")
+        let sessionDir = makeTempDir("revive-remote-snap")
+        defer {
+            try? FileManager.default.removeItem(at: taskDir)
+            try? FileManager.default.removeItem(at: sessionDir)
+        }
+        let spec = RemoteTmuxSpec(host: "host.invalid", user: "roman", sessionName: "agent")
+        let record = TaskRecord(
+            title: "Far-side look",
+            placement: .board(.done),
+            agent: CardAgent.claude.rawValue,
+            mode: .interactive,
+            projectDir: spec.target,
+            sessionRef: TaskSessionRef(claudeSessionID: UUID(), lastCwd: "/home/roman/work"),
+            remote: RemoteSpecSnapshot(spec: spec),
+            archivedAt: Date()
+        )
+        try BoardTaskStore(directory: taskDir).save(tasks: [record])
+
+        let typed = TypedLaunch()
+        let shell = makeShell(taskDir: taskDir)
+        let root = shell.buildContentForTesting()
+        defer { shell.e2eTeardown() }
+        shell.launchOverrideForTesting = capturingLaunch(typed)
+        shell.hydrateForTesting(sessionStore: SessionSnapshotStore(directory: sessionDir))
+        let window = host(root)
+        shell.showArchivePage()
+        root.layoutSubtreeIfNeeded()
+
+        try clickRevive(on: shell, in: root, window: window)
+
+        let card = try #require(shell.cards.first { $0.id == record.id })
+        #expect(card.state == .idle)
+        #expect(card.sessionID == "remote/host.invalid/agent")
+        #expect(card.projectDir == "roman@host.invalid")
+        #expect(shell.archivedTasks.isEmpty)
+        #expect(!shell.drillIn.isHidden)
+        #expect(shell.ptyForTesting(card.id) != nil)
+        // Attach where the far side was last seen working, not only where the card
+        // was created — the same refresh a live remote drill-in already applies.
+        var expected = spec
+        expected.remoteDir = "/home/roman/work"
+        #expect(typed.argv == (try RemoteTmuxCommand.argv(for: expected, cardID: record.id.uuidString)))
+        // The far side still has the session (the probe cannot say otherwise under
+        // `swift test`), so revival attaches and does not type a resume over it.
+        #expect(typed.text.isEmpty)
+        #expect(typed.session?.remoteSpec == expected)
+    }
+
+    private func capturingLaunch(_ typed: TypedLaunch) -> (BoardSeed) -> Session? {
+        { seed in
+            let pty = try! PTYSession(command: ["/bin/cat"])
+            try! pty.start()
+            pty.onInput = { bytes in
+                typed.text += String(decoding: bytes, as: UTF8.self)
+            }
+            typed.argv = seed.command
+            let session = Session(
+                projectDir: seed.projectDir, agentType: .claude,
+                flowTag: .interactive, pty: pty, state: .running)
+            typed.session = session
+            return session
+        }
+    }
+
+    private func host(_ root: NSView) -> NSWindow {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1280, height: 720),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = root
+        root.layoutSubtreeIfNeeded()
+        return window
+    }
+
+    /// A real left-mouse-down on the Revive pill, dispatched to the view hit-testing
+    /// resolves — the interaction path, not a direct `reviveArchivedTask` call.
+    private func clickRevive(on shell: BoardShell, in root: NSView, window: NSWindow) throws {
+        let pill = try #require(shell.archivePage.rowsForTesting().first).revivePillForTesting()
+        #expect(pill.bounds.width > 0, "the Revive pill must lay out before it can be clicked")
+        let center = pill.convert(NSPoint(x: pill.bounds.midX, y: pill.bounds.midY), to: nil)
+        let hit = try #require(root.hitTest(center))
+        #expect(hit === pill)
+        let click = try #require(NSEvent.mouseEvent(
+            with: .leftMouseDown, location: center, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil,
+            eventNumber: 0, clickCount: 1, pressure: 1))
+        hit.mouseDown(with: click)
+    }
+
     private func firstButton(in view: NSView, identifier: String) -> NSButton? {
         if let button = view as? NSButton, button.identifier?.rawValue == identifier {
             return button
@@ -174,4 +322,11 @@ struct ArchiveTests {
         }
         return nil
     }
+}
+
+/// Argv and keystrokes a revived archive task's launch actually produced.
+private final class TypedLaunch: @unchecked Sendable {
+    var text = ""
+    var argv: [String] = []
+    var session: Session?
 }

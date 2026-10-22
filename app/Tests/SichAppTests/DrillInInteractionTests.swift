@@ -35,14 +35,12 @@ struct DrillInInteractionTests {
         // Starts on the board.
         #expect(shell.drillIn.isHidden == true)
         #expect(shell.boardView.isHidden == false)
-        #expect(shell.attention.isHidden == false)
 
         shell.drill(into: card)
 
         // The iter-1 defect was the board showing behind the terminal. The fix is
         // structural: board + attention hidden, terminal the only thing visible.
         #expect(shell.boardView.isHidden == true)
-        #expect(shell.attention.isHidden == true)
         #expect(shell.drillIn.isHidden == false)
     }
 
@@ -57,7 +55,6 @@ struct DrillInInteractionTests {
         shell.returnToBoard()
 
         #expect(shell.boardView.isHidden == false)
-        #expect(shell.attention.isHidden == false)
         #expect(shell.drillIn.isHidden == true)
         #expect(shell.cards.map(\.id) == before)   // nothing lost on the way back
     }
@@ -109,7 +106,6 @@ struct DrillInInteractionTests {
         #expect(shell.drillIn.isHidden == true,
             "clicking ← board must return to the board")
         #expect(shell.boardView.isHidden == false)
-        #expect(shell.attention.isHidden == false)
     }
 
     /// The keyboard path back (US-002 AC#2), driven by a REAL `⌘[` `NSEvent` through
@@ -153,7 +149,6 @@ struct DrillInInteractionTests {
         #expect(shell.drillIn.isHidden == true,
             "⌘[ must return to the board")
         #expect(shell.boardView.isHidden == false)
-        #expect(shell.attention.isHidden == false)
     }
 
     /// The reason the shortcut moved off Esc: a drilled-in interactive agent (Claude

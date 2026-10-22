@@ -7,10 +7,17 @@
 <p align="center"><strong>Mission control for parallel agentic coding sessions</strong></p>
 
 Sich is a native macOS app for running many coding agents (Claude Code, Codex,
-Gemini CLI) at once without losing track of them. It is a kanban board where
+Cursor, Antigravity, Gemini CLI) at once without losing track of them. It is a kanban board where
 every card **is** a live terminal session — Sich embeds
 [libghostty](https://ghostty.org) and becomes the terminal, so it reads agent
 state first-hand instead of scraping someone else's window.
+
+![The board: cards grouped by agent state, with quota gauges on the right](assets/screenshots/board.png)
+
+![Drilled into a card: the session's live terminal](assets/screenshots/drill-in.png)
+
+<sub>Screenshots use synthetic demo data — regenerate with
+`app/scripts/readme-screenshots.sh`.</sub>
 
 ## What it does
 
@@ -28,8 +35,6 @@ state first-hand instead of scraping someone else's window.
 - **Planning Mode** — drive Sahaidachny (the plan-then-execute agent pipeline
   bundled as slash-commands in [`.claude/`](.claude)) from inside the app:
   stepper, terminal, and rendered planning documents side by side.
-- **Per-turn diffs** — review what an agent changed after each turn, as native
-  word-level diffs.
 - **Remote sessions** — attach tmux sessions on remote boxes over SSH as
   first-class cards.
 
@@ -78,6 +83,7 @@ uv run pytest`.
 ## Learn more
 
 - [`docs/PRODUCT.md`](docs/PRODUCT.md) — product thesis and constraints
+- [`docs/OPERATING-RULES.md`](docs/OPERATING-RULES.md) — pace & attention rules (Rule 1 enforced in-app)
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — how the pieces fit
 - [`app/README.md`](app/README.md) — Swift package layout and dev workflow
 - [`docs/tasks/`](docs/tasks) — the Sahaidachny task plans this app was built from

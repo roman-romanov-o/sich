@@ -93,7 +93,7 @@ struct TerminalLinkTests {
             cells.append(TerminalCell(
                 scalar: col < scalars.count ? scalars[col] : nil, fg: nil, bg: nil))
         }
-        return TerminalGrid(cols: cols, rows: 1, cells: cells, cursor: nil,
+        return TerminalGrid(cols: cols, rows: 1, cells: cells, cursor: nil, live: true,
                             defaultFg: nil, defaultBg: nil)
     }
 

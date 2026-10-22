@@ -91,6 +91,12 @@ public struct TaskRecord: Codable, Sendable, Equatable, Identifiable {
     /// DONE column (and the per-refresh card rebuild) lean while the record itself
     /// stays durable. Optional on disk: older books decode without a version bump.
     public var archivedAt: Date?
+    /// Which Claude Code config dir this task's sessions use (`CLAUDE_CONFIG_DIR`).
+    /// Nil means the default `~/.claude` profile. Optional on disk for back-compat.
+    public var claudeProfileID: UUID?
+    /// Rule 1 (``docs/OPERATING-RULES.md``): explicit snooze off NEEDS YOU until this
+    /// instant. Optional on disk for back-compat.
+    public var needsYouDeferredUntil: Date?
 
     public init(
         id: UUID = UUID(),
@@ -105,7 +111,9 @@ public struct TaskRecord: Codable, Sendable, Equatable, Identifiable {
         sessionRef: TaskSessionRef? = nil,
         accumulatedWorkingTime: TimeInterval? = nil,
         remote: RemoteSpecSnapshot? = nil,
-        archivedAt: Date? = nil
+        archivedAt: Date? = nil,
+        claudeProfileID: UUID? = nil,
+        needsYouDeferredUntil: Date? = nil
     ) {
         self.id = id
         self.title = title
@@ -120,6 +128,8 @@ public struct TaskRecord: Codable, Sendable, Equatable, Identifiable {
         self.accumulatedWorkingTime = accumulatedWorkingTime
         self.remote = remote
         self.archivedAt = archivedAt
+        self.claudeProfileID = claudeProfileID
+        self.needsYouDeferredUntil = needsYouDeferredUntil
     }
 }
 

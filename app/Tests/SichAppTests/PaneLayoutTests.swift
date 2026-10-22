@@ -3,7 +3,7 @@ import Testing
 
 @testable import SichApp
 
-/// Hideable review rail + draggable pane boundaries (Planning Mode and drill-in).
+/// Hideable review rail + draggable pane boundary (Planning Mode).
 /// Per the Interaction-AC Binding Rule every interaction here is exercised by
 /// dispatching REAL `NSEvent`s (mouseDown/mouseDragged/mouseUp, ⌘J keyDown) at the
 /// genuinely hit-tested view — never by calling `toggleRail()`-style handlers alone.
@@ -157,33 +157,6 @@ struct PaneLayoutTests {
             #expect(view.paneDivider.isHidden == false, "⌘J expands the terminal")
             #expect(view.performKeyEquivalent(with: cmdJ) == true)
             #expect(view.paneDivider.isHidden == true, "⌘J collapses it again")
-        }
-    }
-
-    // MARK: - Drill-in
-
-    @Test("dragging the drill-in divider resizes the sidebar, clamps, and persists")
-    func drillInDividerDragResizesAndPersists() throws {
-        try withScratchDefaults { defaults in
-            let panel = DrillInPanel(paneLayout: PaneLayoutStore(defaults: defaults))
-            let window = mount(panel)
-            #expect(panel.sidebarPaneWidth == 300)
-
-            try drag(panel.paneDivider, by: -80, in: window)
-            #expect(panel.sidebarPaneWidth == 380)
-            #expect(defaults.double(forKey: PaneLayoutStore.drillInSidebarWidthKey) == 380)
-
-            // Right past the floor: the sidebar keeps its 220pt minimum.
-            try drag(panel.paneDivider, by: 10_000, in: window)
-            #expect(panel.sidebarPaneWidth == 220)
-
-            // Left past the ceiling: the terminal keeps its 400pt minimum
-            // (1280 window − 7 divider − 400 terminal).
-            try drag(panel.paneDivider, by: -10_000, in: window)
-            #expect(panel.sidebarPaneWidth == 873)
-
-            let restored = DrillInPanel(paneLayout: PaneLayoutStore(defaults: defaults))
-            #expect(restored.sidebarPaneWidth == 873)
         }
     }
 }

@@ -147,11 +147,9 @@ final class WorktreePill: NSTextField {
 
 /// The drill-in surface (US-002): when a card is selected, this panel takes over
 /// the full window (Altitude-1) hosting that session's embedded ``TerminalSurface``
-/// — in-app focus, not an OS window jump (DD-001). Reworked to the Task View POC:
-/// a breadcrumb header with a live status pill, an amber "waiting on you" banner,
-/// the terminal on the left, and a persistent sidebar with the working-tree change
-/// list on the right. Single responsibility: present one focused session and a
-/// way back.
+/// — in-app focus, not an OS window jump (DD-001). A breadcrumb header with a
+/// live status pill, an amber "waiting on you" banner, and the terminal filling
+/// the rest. Single responsibility: present one focused session and a way back.
 ///
 /// Built to mirror ``SessionCard`` exactly — `wantsLayer` + a `themedBackground`
 /// layer fill + stacks of label fields — because that is the render path the
@@ -178,17 +176,11 @@ final class DrillInPanel: NSView {
     private let bannerField = NSTextField(labelWithString:
         "Waiting on you — answer in the terminal below")
     private let termContainer = NSView()
-    private let sidebar = DrillInSidebar()
-    private let terminalBody = NSView()
-    private let changesView = ChangesView()
-    /// The draggable boundary between the terminal and the checkpoint sidebar.
-    /// Internal so a real mouse-drag test can dispatch events at it.
-    let paneDivider = PaneDivider()
-    private let paneLayout: PaneLayoutStore
-    private var sidebarWidthConstraint: NSLayoutConstraint?
-    /// Sidebar width when the current divider drag began; nil outside a drag.
-    private var dragStartWidth: CGFloat?
     private var surface: TerminalSurface?
+
+    // periphery:ignore - test-only seam (scan runs with exclude_tests)
+    /// The mounted terminal, so an E2E can read what the operator actually sees.
+    var surfaceForTesting: TerminalSurface? { surface }
     private var focusedCard: BoardCard?
     private var terminalFontSize: CGFloat = 20
 
@@ -196,33 +188,21 @@ final class DrillInPanel: NSView {
     /// teach TerminalGeometry their settled grid so future spawns are born pre-sized.
     /// Tests and E2E captures leave it false and never touch the real defaults.
     var teachesGeometry = false
-    private var availableDiffs: [TurnDiff] = []
-    /// The breadcrumb header (← board / status pill / quota). Collapsed while the
-    /// diff pane is open so ChangesView's own "← Terminal" is the only nav there.
-    private var headerHolder: NSView?
 
-    init(frame frameRect: NSRect = .zero,
-         paneLayout: PaneLayoutStore = PaneLayoutStore()) {
-        self.paneLayout = paneLayout
+    override init(frame frameRect: NSRect = .zero) {
         super.init(frame: frameRect)
         wantsLayer = true
         themedBackground = BoardTheme.canvas
         backPill.onClick = { [weak self] in self?.goBack() }
-        sidebar.onOpenDiff = { [weak self] turns, iteration, file in
-            self?.openDiff(turns: turns, iteration: iteration, file: file)
-        }
-        changesView.onClose = { [weak self] in self?.closeDiff() }
         build()
     }
 
     required init?(coder: NSCoder) { nil }
 
     /// Root column: header / banner (collapses when hidden — NSStackView detaches
-    /// hidden arranged views) / body row of terminal + sidebar.
+    /// hidden arranged views) / the terminal.
     private func build() {
-        let header = buildHeader()
-        headerHolder = header
-        let column = NSStackView(views: [header, buildBanner(), buildBody()])
+        let column = NSStackView(views: [buildHeader(), buildBanner(), termContainer])
         column.orientation = .vertical
         column.alignment = .leading
         column.spacing = 0
@@ -242,12 +222,17 @@ final class DrillInPanel: NSView {
     /// POC header: ← board / dir · title, the live status pill, then quota and the
     /// `libghostty · agent` tag on the right.
     private func buildHeader() -> NSView {
-        configure(dirField, font: BoardTheme.sansTiny, color: BoardTheme.textFaint)
-        configure(titleField, font: BoardTheme.cardTitle, color: BoardTheme.textPrimary)
-        configure(quotaField, font: BoardTheme.monoSmall, color: BoardTheme.textMuted)
+        // Long paths and the live quota readout must truncate — default 750 compression
+        // resistance on label fields pins the window wider than a laptop screen (the
+        // drill-in header showed "interactive … antigravity … co…" cut off with no
+        // way to edge-resize smaller).
+        configure(dirField, font: BoardTheme.sansTiny, color: BoardTheme.textFaint,
+                  yieldPriority: .defaultLow)
+        configure(titleField, font: BoardTheme.cardTitle, color: BoardTheme.textPrimary,
+                  yieldPriority: .defaultLow)
+        configure(quotaField, font: BoardTheme.monoSmall, color: BoardTheme.textMuted,
+                  yieldPriority: .defaultLow)
         configure(tagField, font: BoardTheme.monoSmall, color: BoardTheme.textDim)
-        titleField.lineBreakMode = .byTruncatingTail
-        titleField.setContentCompressionResistancePriority(.init(2), for: .horizontal)
 
         let slash = NSTextField(labelWithString: "/")
         configure(slash, font: BoardTheme.sansSmall, color: BoardTheme.textDim)
@@ -284,80 +269,12 @@ final class DrillInPanel: NSView {
         return banner
     }
 
-    /// Body row: the terminal container fills the left, the sidebar (draggable
-    /// width, persisted) rides right behind a divider.
-    private func buildBody() -> NSView {
-        sidebar.translatesAutoresizingMaskIntoConstraints = false
-        let terminalRow = NSStackView(views: [termContainer, paneDivider, sidebar])
-        terminalRow.orientation = .horizontal
-        terminalRow.alignment = .top
-        terminalRow.spacing = 0
-        terminalRow.translatesAutoresizingMaskIntoConstraints = false
-        terminalBody.addSubview(terminalRow)
-        changesView.translatesAutoresizingMaskIntoConstraints = false
-        terminalBody.addSubview(changesView)
-        let sidebarWidth = sidebar.widthAnchor.constraint(
-            equalToConstant: paneLayout.width(
-                forKey: PaneLayoutStore.drillInSidebarWidthKey, default: 300))
-        sidebarWidthConstraint = sidebarWidth
-        wireDividerDrag()
-        NSLayoutConstraint.activate([
-            sidebarWidth,
-            sidebar.heightAnchor.constraint(equalTo: terminalRow.heightAnchor),
-            paneDivider.heightAnchor.constraint(equalTo: terminalRow.heightAnchor),
-            termContainer.heightAnchor.constraint(equalTo: terminalRow.heightAnchor),
-            terminalRow.leadingAnchor.constraint(equalTo: terminalBody.leadingAnchor),
-            terminalRow.trailingAnchor.constraint(equalTo: terminalBody.trailingAnchor),
-            terminalRow.topAnchor.constraint(equalTo: terminalBody.topAnchor),
-            terminalRow.bottomAnchor.constraint(equalTo: terminalBody.bottomAnchor),
-            changesView.leadingAnchor.constraint(equalTo: terminalBody.leadingAnchor),
-            changesView.trailingAnchor.constraint(equalTo: terminalBody.trailingAnchor),
-            changesView.topAnchor.constraint(equalTo: terminalBody.topAnchor),
-            changesView.bottomAnchor.constraint(equalTo: terminalBody.bottomAnchor),
-        ])
-        changesView.isHidden = true
-        return terminalBody
-    }
-
-    // MARK: - Draggable terminal/sidebar boundary
-
-    /// Test seam: the sidebar's current width as the drag/persistence sees it.
-    var sidebarPaneWidth: CGFloat { sidebarWidthConstraint?.constant ?? 0 }
-
-    private func wireDividerDrag() {
-        paneDivider.onDragStart = { [weak self] in
-            self?.dragStartWidth = self?.sidebarWidthConstraint?.constant
-        }
-        paneDivider.onDrag = { [weak self] delta in
-            guard let self, let dragStartWidth else { return }
-            // The divider sits left of the sidebar: dragging LEFT grows the sidebar.
-            setSidebarWidth(dragStartWidth - delta)
-        }
-        paneDivider.onDragEnd = { [weak self] in
-            guard let self else { return }
-            dragStartWidth = nil
-            paneLayout.setWidth(sidebarPaneWidth,
-                                forKey: PaneLayoutStore.drillInSidebarWidthKey)
-        }
-    }
-
-    private func setSidebarWidth(_ proposed: CGFloat) {
-        guard let constraint = sidebarWidthConstraint else { return }
-        let minSidebar: CGFloat = 220
-        let minTerminal: CGFloat = 400
-        let ceiling = terminalBody.bounds.width - PaneDivider.thickness - minTerminal
-        guard ceiling > minSidebar else { return }
-        constraint.constant = min(max(proposed, minSidebar), ceiling)
-        terminalBody.layoutSubtreeIfNeeded()
-    }
-
     /// Focus a card's session: show its live embedded terminal, ready for input
     /// (US-002 AC#1). The previous surface is detached first so only the focused
     /// terminal is foreground-rendered (US-002 edge case #2 / TC-E2E-007).
     func focus(card: BoardCard, pty: PTYSession, terminalFontSize: CGFloat = 20) {
         focusedCard = card
         self.terminalFontSize = terminalFontSize
-        closeDiff()
         titleField.stringValue = card.title ?? BoardTheme.shortPath(card.projectDir)
         dirField.stringValue = BoardTheme.projectLabel(card.projectDir)
         tagField.stringValue = "libghostty"
@@ -376,7 +293,6 @@ final class DrillInPanel: NSView {
         surface.startReading()
         window?.makeFirstResponder(surface)   // ready for typed input
         self.surface = surface
-        renderAvailableDiffs()
     }
 
     /// Surface the amber worktree pill (with the branch name when readable) only when
@@ -409,6 +325,7 @@ final class DrillInPanel: NSView {
     static func statusLabel(_ state: CardState) -> String {
         switch state {
         case .idle: return "idle"
+        case .parked: return "parked"
         case .running: return "working"
         case .runningTests: return "testing"
         case .waitingForInput: return "needs you"
@@ -417,48 +334,6 @@ final class DrillInPanel: NSView {
         case .unknown: return "unknown"
         case .unreachable: return "unreachable"
         }
-    }
-
-    func update(diffs: [TurnDiff]) {
-        availableDiffs = diffs
-        renderAvailableDiffs()
-    }
-
-    private func renderAvailableDiffs() {
-        guard let card = focusedCard else { return }
-        let path = (card.projectDir as NSString).standardizingPath
-        // The card-id match is host-independent (a UUID we minted); the session-id and
-        // cwd matches are NOT — both are only unique within one machine, so a remote
-        // twin of this repo path must not spill its turns into a local card's review
-        // (US-004 AC-3).
-        let turns = availableDiffs.filter {
-            $0.cardID == card.id.uuidString
-                || ($0.host == card.host
-                    && ($0.sessionID == card.sessionID
-                        || $0.cwd.map { ($0 as NSString).standardizingPath == path } == true))
-        }
-        sidebar.render(turns: turns)
-    }
-
-    private func openDiff(turns: [TurnDiff], iteration: Int?, file: String?) {
-        changesView.render(turns: turns, filePath: file, selectedIteration: iteration)
-        changesView.isHidden = false
-        termContainer.superview?.isHidden = true
-        // Collapse the drill-in chrome so the diff is a clean full-window review:
-        // the header's "← board" and the waiting banner both go, leaving
-        // ChangesView's "← Terminal" as the single, unambiguous way back.
-        headerHolder?.isHidden = true
-        banner.isHidden = true
-    }
-
-    private func closeDiff() {
-        changesView.isHidden = true
-        termContainer.superview?.isHidden = false
-        headerHolder?.isHidden = false
-        // Restore the banner to whatever the live state dictates (it's driven by
-        // update(state:)) instead of leaving it force-hidden.
-        if let state = focusedCard?.state { banner.isHidden = state != .waitingForInput }
-        if let surface { window?.makeFirstResponder(surface) }
     }
 
     private func mount(_ surface: TerminalSurface) {
@@ -532,11 +407,16 @@ final class DrillInPanel: NSView {
         return holder
     }
 
-    private func configure(_ field: NSTextField, font: NSFont, color: NSColor) {
+    private func configure(
+        _ field: NSTextField, font: NSFont, color: NSColor,
+        yieldPriority: NSLayoutConstraint.Priority = .init(490)
+    ) {
         field.font = font
         field.textColor = color
         field.isBezeled = false
         field.drawsBackground = false
         field.isEditable = false
+        field.lineBreakMode = .byTruncatingTail
+        field.yieldWidthToWindow(yieldPriority)
     }
 }

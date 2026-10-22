@@ -50,26 +50,6 @@ struct ThemedSurfaceTests {
         #expect(view.layer?.backgroundColor == onNight)
     }
 
-    @Test("the regression itself: the drill-in sidebar no longer stays light under a dark terminal")
-    func sidebarFollowsFlip() throws {
-        let root = ThemedRootView()
-        root.appearance = NSAppearance(named: .darkAqua)
-        let sidebar = DrillInSidebar(frame: NSRect(x: 0, y: 0, width: 260, height: 400))
-        root.addSubview(sidebar)
-
-        let paperSidebar = try resolved(BoardTheme.canvasSunken, .aqua)
-        let nightSidebar = try resolved(BoardTheme.canvasSunken, .darkAqua)
-
-        // Light paper — the state the screenshot was taken in...
-        root.appearance = NSAppearance(named: .aqua)
-        #expect(sidebar.layer?.backgroundColor == paperSidebar)
-
-        // ...then the user switches the system to dark. The sidebar must move with it.
-        root.appearance = NSAppearance(named: .darkAqua)
-        #expect(sidebar.layer?.backgroundColor == nightSidebar)
-        #expect(sidebar.layer?.backgroundColor != paperSidebar)
-    }
-
     @Test("the walk reaches a deeply nested fill, not just the root's direct children")
     func flipReachesNestedSubviews() throws {
         let root = ThemedRootView()

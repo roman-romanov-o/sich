@@ -45,9 +45,24 @@ struct BoardColumnMoveReproTests {
         #expect(groupHoldingCard(view) == .working)
     }
 
-    @Test("columns read like classic kanban: QUEUE → WORKING → NEEDS YOU → DONE")
-    func classicKanbanColumnOrder() {
-        #expect(BoardView.ColumnGroup.allCases == [.queue, .working, .needsYou, .done])
+    @Test("columns left→right: QUEUE → PARKED → WORKING → NEEDS YOU → BLOCKED → DONE")
+    func boardColumnOrder() {
+        #expect(BoardView.ColumnGroup.allCases == [
+            .queue, .parked, .working, .needsYou, .blocked, .done,
+        ])
+    }
+
+    @Test("blocked and waiting land in separate columns")
+    func blockedVsNeedsYou() {
+        let view = board()
+        view.render(cards: [
+            BoardCard(id: UUID(), sessionID: "w", projectDir: "~/w",
+                      agent: .claude, flow: .b, state: .waitingForInput),
+            BoardCard(id: UUID(), sessionID: "b", projectDir: "~/b",
+                      agent: .claude, flow: .b, state: .blocked),
+        ])
+        #expect(sessionCards(view, in: .needsYou).count == 1)
+        #expect(sessionCards(view, in: .blocked).count == 1)
     }
 
     /// The "app becomes slow with many tasks" fix: a live state flap of one active

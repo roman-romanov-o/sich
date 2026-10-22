@@ -6,8 +6,24 @@ public enum AgentType: String, Codable, Sendable, Equatable, CaseIterable {
     case claude
     case codex
     case gemini
+    /// Cursor's terminal agent (`agent` / `cursor-agent`).
+    case cursor
+    /// Google's Antigravity CLI (`agy`).
+    case antigravity
     /// A plain interactive shell (no agent), e.g. the default `TerminalSurface`.
     case shell
+
+    /// Maps to the board's ``CardAgent`` for account env exports on restore.
+    public var cardAgent: CardAgent {
+        switch self {
+        case .claude: return .claude
+        case .codex: return .codex
+        case .gemini: return .gemini
+        case .cursor: return .cursor
+        case .antigravity: return .antigravity
+        case .shell: return .claude
+        }
+    }
 }
 
 /// Which scheduling flow launched the session — the two-pool distinction the

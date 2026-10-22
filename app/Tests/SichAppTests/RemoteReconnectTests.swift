@@ -7,63 +7,10 @@ import Testing
 /// US-008 — a reconnect must not duplicate history.
 ///
 /// The relay's raw-line window (ts-unit-02) is the first line of defence and catches
-/// a byte-identical replay. These are the cases it CANNOT catch, driven through the
-/// production path (fixture host → relay → poller → the drill-in's diff sink):
-///  * two Stops inside one turn ship two different diffs under ONE iteration number,
-///    and both must survive;
-///  * the same diff re-shipped under a different whole-second `timestamp` is different
-///    bytes, so it reaches the poller — and must land as one turn, not two.
+/// a byte-identical replay. These cover what a replay must never do to a card's
+/// state, driven through the production path (fixture host → relay → store).
 @Suite("Reconnect does not duplicate history (US-008)")
 struct RemoteReconnectTests {
-
-    @Test("AC-2: two Stops in one iteration are two turns in drill-in, not one overwrite")
-    @MainActor func twoStopsInOneIterationBothReachDrillIn() async throws {
-        let far = try RelayHost()
-        defer { far.tearDown() }
-        let (poller, diffs, transport, local) = try attachedPoller(to: far)
-        defer { poller.stop(); local.tearDown() }
-
-        // `iteration` bumps on UserPromptSubmit only; the Stop that ships a diff merely
-        // reads it. One prompt, two Stops, two different diffs, one iteration number.
-        transport.emit([
-            far.diff(iteration: 1, body: "--- a/x\n+++ b/x\n@@\n+one\n", stamp: "2026-07-30T10:00:00Z"),
-            far.diff(iteration: 1, body: "--- a/x\n+++ b/x\n@@\n+one\n+two\n", stamp: "2026-07-30T10:00:05Z"),
-        ])
-
-        // The relay hands the batch back through a main-actor hop, and a long
-        // main-actor-bound suite elsewhere can hold that actor for ~10s — hence the
-        // generous deadline. It resolves in milliseconds when the actor is free.
-        #expect(await waitUntil(timeout: 30) { diffs.all.count == 2 },
-                "the second Stop's diff must not overwrite the first — got \(diffs.all.count)")
-        #expect(Set(diffs.all.map(\.iteration)) == [1])
-        #expect(diffs.all.map(\.unifiedDiff).contains { $0.contains("+two") })
-    }
-
-    @Test("AC-2: the same diff re-shipped under a later timestamp is one turn")
-    @MainActor func aReShippedDiffIsNotADuplicateTurn() async throws {
-        let far = try RelayHost()
-        defer { far.tearDown() }
-        let (poller, diffs, transport, local) = try attachedPoller(to: far)
-        defer { poller.stop(); local.tearDown() }
-
-        let body = "--- a/x\n+++ b/x\n@@\n+same\n"
-        // Nothing was edited between the two Stops, so `git diff` against the uncleared
-        // checkpoint yields identical bytes — under a different second stamp.
-        transport.emit([far.diff(iteration: 2, body: body, stamp: "2026-07-30T10:00:00Z")])
-        // Same generous deadline as above: the delivery hop queues behind whatever else
-        // holds the main actor, so a short wait measures suite load, not this behaviour.
-        #expect(await waitUntil(timeout: 30) { diffs.all.count == 1 })
-
-        // The lines differ, so the relay's raw-byte window admits the replay: only the
-        // (host, session, iteration, sha256(diff)) key can collapse it.
-        transport.emit([
-            far.diff(iteration: 2, body: body, stamp: "2026-07-30T10:00:09Z"),
-            far.diff(iteration: 3, body: "--- a/x\n+++ b/x\n@@\n+later\n"),
-        ])
-        #expect(await waitUntil(timeout: 30) { diffs.all.count == 2 },
-                "one re-shipped turn plus one new turn — got \(diffs.all.count)")
-        #expect(diffs.all.map(\.iteration).sorted() == [2, 3])
-    }
 
     // MARK: - US-008 AC-1: a replay never moves the card backwards
 
@@ -147,24 +94,6 @@ struct RemoteReconnectTests {
                 ],
                 arrival: Date(timeIntervalSince1970: 1_000 + offset + Double(index) * 5))
         }
-    }
-
-    /// A poller fed by a local sink it will not see anything on, with `far` attached
-    /// over an IN-MEMORY transport — the same wiring the board uses, minus the ssh
-    /// child, so delivery is deterministic instead of racing a real `tail` under load.
-    @MainActor private func attachedPoller(
-        to far: RelayHost
-    ) throws -> (SessionsPoller, DiffBox, ReconnectTransport, LocalSink) {
-        let local = try LocalSink()
-        try local.seed(#"{"hook_event_name":"SessionStart","session_id":"local-only"}"#)
-        let diffs = DiffBox()
-        let poller = SessionsPoller(
-            eventsFile: local.file, interval: 86_400,
-            diffSink: { diffs.set($0) }, sink: { _ in })
-        poller.start()
-        let transport = ReconnectTransport()
-        poller.attachRemoteHost(far.spec, transport: transport)
-        return (poller, diffs, transport, local)
     }
 }
 

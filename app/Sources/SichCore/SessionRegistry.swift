@@ -206,18 +206,24 @@ public final class SessionRestorer {
     private let homeDirectory: String
     private let shellPath: String
     private let reopen: Reopen
+    private let accountEnv: (UUID?, CardAgent) -> String
+    private let accountFor: (UUID?) -> AgentAccountProfile?
 
     public init(
         isAlive: @escaping LivenessCheck = PTYSession.isProcessAlive,
         directoryExists: @escaping (String) -> Bool = SessionRestorer.pathIsDirectory,
         homeDirectory: String = NSHomeDirectory(),
         shellPath: String = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh",
+        accountEnv: @escaping (UUID?, CardAgent) -> String = { _, _ in "" },
+        accountFor: @escaping (UUID?) -> AgentAccountProfile? = { _ in nil },
         reopen: @escaping Reopen
     ) {
         self.isAlive = isAlive
         self.directoryExists = directoryExists
         self.homeDirectory = homeDirectory
         self.shellPath = shellPath
+        self.accountEnv = accountEnv
+        self.accountFor = accountFor
         self.reopen = reopen
     }
 
@@ -250,10 +256,15 @@ public final class SessionRestorer {
     /// persisted spec no longer yields a legal command.
     private func launchCommand(for pane: PaneSnapshot, cwd: String) -> [String]? {
         guard let remote = pane.remote else {
-            return Self.shellCommand(shell: shellPath, cwd: cwd, cardID: pane.cardID)
+            let agent = pane.agentType.cardAgent
+            return Self.shellCommand(
+                shell: shellPath, cwd: cwd, cardID: pane.cardID,
+                accountEnv: accountEnv(pane.claudeProfileID, agent))
         }
+        let tmuxEnv = accountFor(pane.claudeProfileID)
+            .map { AgentAccountBackend.remoteTmuxEnvironment(for: $0) } ?? []
         return try? RemoteTmuxCommand.argv(
-            for: remote.spec, cardID: pane.cardID?.uuidString)
+            for: remote.spec, cardID: pane.cardID?.uuidString, tmuxEnvironment: tmuxEnv)
     }
 
     /// Prefer the liveness recorded at snapshot time; fall back to probing the recorded
@@ -278,11 +289,12 @@ public final class SessionRestorer {
     /// `exec` the login shell. Both parts are load-bearing — a PTY does not chdir for us,
     /// so without the `cd` the shell opens wherever the app was launched from, and without
     /// `SICH_CARD_ID` the hook feed can never bind this card's agent again.
-    static func shellCommand(shell: String, cwd: String, cardID: UUID?) -> [String] {
+    static func shellCommand(
+        shell: String, cwd: String, cardID: UUID?, accountEnv: String = ""
+    ) -> [String] {
         let bind = cardID.map { "SICH_CARD_ID=\(shellQuoted($0.uuidString)) " } ?? ""
-        let codexShim = "\(NSHomeDirectory())/.sich/bin"
-        let path = "PATH=\(shellQuoted(codexShim)):\"$PATH\" "
-        let launch = "cd \(shellQuoted(cwd)) && \(path)\(bind)exec \(shellQuoted(shell)) -il"
+        let path = "PATH=\(shellQuoted("\(NSHomeDirectory())/.sich/bin")):\"$PATH\" "
+        let launch = "cd \(shellQuoted(cwd)) && \(path)\(accountEnv)\(bind)exec \(shellQuoted(shell)) -il"
         return ["/bin/sh", "-c", launch]
     }
 

@@ -141,7 +141,7 @@ struct RemoteEventRelayTests {
     func aHugeLineArrivesWhole() async throws {
         let host = try RelayHost()
         defer { host.tearDown() }
-        let huge = "{\"sich_event_type\":\"turn_diff\",\"blob\":\"" +
+        let huge = "{\"hook_event_name\":\"PostToolUse\",\"blob\":\"" +
             String(repeating: "d", count: 400_000) + "\"}"
         try host.write([huge, "{\"n\":\"after\"}"])
 

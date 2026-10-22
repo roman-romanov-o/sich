@@ -3,7 +3,7 @@ import Foundation
 /// A long-lived child process read as a stream of whole `\n`-terminated lines.
 ///
 /// Reassembly is the point: a pipe read boundary lands wherever the kernel put it,
-/// and a `turn_diff` line runs to megabytes, so anything that treated one read as
+/// and a hook line can run to kilobytes, so anything that treated one read as
 /// one record would hand the JSON parser halves of a line. A trailing fragment is
 /// held until its newline arrives, and an unterminated fragment at EOF is dropped
 /// rather than delivered half-parsed.

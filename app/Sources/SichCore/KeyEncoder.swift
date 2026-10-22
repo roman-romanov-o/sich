@@ -33,6 +33,11 @@ public enum KeyInput: Sendable, Equatable {
     /// before the cursor, so a mid-line cursor left the tail behind ("text doesn't
     /// disappear"); jumping to the end first makes the kill clear the entire line.
     case deleteLine
+    /// fn+↑ / fn+↓ (PageUp/PageDown) — how Claude Code scrolls its transcript on a
+    /// host that can't deliver the wheel (ConPTY below Windows build 22523). Unmapped,
+    /// AppKit's private-use chars (U+F72C/D) went down the pty as junk text.
+    case pageUp
+    case pageDown
     /// A Control-modified letter, e.g. `.control("c")` → ⌃C (0x03).
     case control(Character)
 }
@@ -61,6 +66,8 @@ public enum KeyEncoder {
         case .lineEnd: return [0x05]               // ⌃E
         case .deleteWord: return [0x1B, 0x7F]      // ESC DEL
         case .deleteLine: return [0x05, 0x15]      // ⌃E then ⌃U — clear the whole line
+        case .pageUp: return csi("5~")             // ESC [ 5 ~
+        case .pageDown: return csi("6~")           // ESC [ 6 ~
         case .control(let c): return controlBytes(for: c)
         }
     }
