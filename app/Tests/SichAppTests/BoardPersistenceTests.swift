@@ -147,8 +147,8 @@ struct BoardPersistenceTests {
         // (``ArchiveTests/doneTaskArchivesOnRelaunch`` proves that leg).
         let store = SessionSnapshotStore(directory: storeDir)
         let saved = shell.persistOnTerminate(store: store)
-        #expect((saved?.windows.flatMap(\.panes) ?? []).isEmpty,
-                "a finished task holds no shell at quit and books no pane")
+        let panes = saved?.windows.flatMap(\.panes) ?? []
+        #expect(panes.isEmpty, "a finished task holds no shell at quit and books no pane")
 
         let record = try #require(
             BoardTaskStore(directory: bookDir).load()?.tasks.first { $0.id == cardID })

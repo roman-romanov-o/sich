@@ -23,14 +23,17 @@ concurrency:
 jobs:
   swift:
     name: Build and test
-    # macos-26 ships Xcode 26 / Swift 6.2, the toolchain the suite is developed
-    # and verified against. Under Xcode 16.4 (Swift 6.1) the async relay tests
-    # never see their main-actor hops land and time out.
-    runs-on: macos-26
+    runs-on: macos-15
     timeout-minutes: 120
     defaults:
       run:
         working-directory: app
+    env:
+      # Pin the toolchain the suite is developed and verified against (Swift 6.2).
+      # The image's default Xcode 16.4 (Swift 6.1) never lets the async relay
+      # tests' main-actor hops land, and macos-26 already moved on to Swift 6.3.
+      # If the image drops this Xcode the first step fails loudly; bump it then.
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app
 
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0

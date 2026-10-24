@@ -15,10 +15,13 @@ struct RemoteTmuxCommandTests {
             for: RemoteTmuxSpec(host: "h", remoteDir: "/srv/app"), cardID: Self.cardID,
             agentCommand: RemoteTmuxCommand.claudeStart(sessionID: conversation))
         let lower = conversation.uuidString.lowercased()
-        #expect(argv.last == "tmux -CC new-session -A -D -s 'sich' -c '/srv/app' "
+        // Built outside the macro: a concatenation this long inside `#expect` is more
+        // than the Swift 6.3 type-checker will take.
+        let expected = "tmux -CC new-session -A -D -s 'sich' -c '/srv/app' "
             + "'tmux set-environment SICH_CARD_ID \(Self.cardID); "
             + "SICH_CARD_ID=\(Self.cardID) exec $SHELL -il -c "
-            + "'\\''claude --session-id \(lower); exec $SHELL -il'\\'''")
+            + "'\\''claude --session-id \(lower); exec $SHELL -il'\\'''"
+        #expect(argv.last == expected)
         #expect(try PoolFirewall.classify(argv) == .interactive)
         // Without a card binding the shell line stands alone.
         let bare = try RemoteTmuxCommand.argv(
