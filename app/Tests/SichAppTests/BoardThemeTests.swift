@@ -25,10 +25,10 @@ struct BoardThemeTests {
     /// Every surface/text token must land on a DIFFERENT colour in light vs dark —
     /// proof the palette follows the system theme rather than being a fixed dark hex.
     @Test("surface + text tokens differ between light and dark appearance", arguments: [
-        "canvas", "cardFill", "documentSurface", "cardStroke", "hairline",
+        "canvas", "cardFill", "cardStroke", "hairline",
         "needsYouColumn", "needsYouCard",
         "workingCard", "doneCard",
-        "textPrimary", "textMuted", "textFaint", "documentText", "textDim",
+        "textPrimary", "textMuted", "textFaint", "textDim",
         "termBg", "termFg",
     ])
     func tokenIsAppearanceAware(_ name: String) throws {
@@ -41,8 +41,7 @@ struct BoardThemeTests {
     /// A shared accent must resolve IDENTICALLY
     /// in both modes — a regression guard that we didn't accidentally split them.
     @Test("shared accents are identical across appearances", arguments: [
-        "brand", "attention", "alert", "codeInline",
-    ])
+        "brand", "attention", "alert", ])
     func accentIsStable(_ name: String) throws {
         let token = try #require(Self.tokens[name], "unknown token \(name)")
         let dark = try #require(rgb(token, in: .darkAqua))
@@ -63,8 +62,7 @@ struct BoardThemeTests {
     }
 
     @Test("light text tiers clear contrast on light surfaces", arguments: [
-        "textPrimary", "textMuted", "textFaint", "textDim", "documentText",
-    ])
+        "textPrimary", "textMuted", "textFaint", "textDim", ])
     func lightTextContrast(_ name: String) throws {
         let text = try #require(Self.tokens[name], "unknown token \(name)")
         let fg = try #require(rgb(text, in: .aqua), "\(name) has no light resolution")
@@ -81,16 +79,16 @@ struct BoardThemeTests {
 
     private static let tokens: [String: NSColor] = [
         "canvas": BoardTheme.canvas, "cardFill": BoardTheme.cardFill,
-        "documentSurface": BoardTheme.documentSurface, "cardStroke": BoardTheme.cardStroke,
+        "cardStroke": BoardTheme.cardStroke,
         "hairline": BoardTheme.hairline, "needsYouColumn": BoardTheme.needsYouColumn,
         "needsYouCard": BoardTheme.needsYouCard,
         "workingCard": BoardTheme.workingCard,
         "doneCard": BoardTheme.doneCard,
         "textPrimary": BoardTheme.textPrimary, "textMuted": BoardTheme.textMuted,
-        "textFaint": BoardTheme.textFaint, "documentText": BoardTheme.documentText,
+        "textFaint": BoardTheme.textFaint,
         "textDim": BoardTheme.textDim, "termBg": BoardTheme.termBg, "termFg": BoardTheme.termFg,
         "brand": BoardTheme.brand, "attention": BoardTheme.attention,
-        "alert": BoardTheme.alert, "codeInline": BoardTheme.codeInline,
+        "alert": BoardTheme.alert,
     ]
 
     private func contrast(
@@ -131,7 +129,6 @@ struct CardTitleTextTests {
         let traits = BoardTheme.cardTitle.fontDescriptor.object(forKey: .traits) as? [NSFontDescriptor.TraitKey: Any]
         let weight = traits?[.weight] as? CGFloat ?? 0
         #expect(weight == NSFont.Weight.regular.rawValue, "card title drifted back to a heavier weight")
-        #expect(BoardTheme.cardTitle.pointSize > BoardTheme.title.pointSize, "size, not weight, is the anchor")
     }
 
     @Test("titles carry tightened line height for the multi-line wrap")

@@ -16,8 +16,6 @@ enum BoardTheme {
     static let canvasSunken = dynamic(dark: hex(0x191D23), light: hex(0xE5EBF0))    // sunken tracks/rails
     static let cardFill = dynamic(dark: hex(0x282C34), light: hex(0xFFFFFF))        // Ghostty default / cards
     static let cardFillRaised = dynamic(dark: hex(0x323842), light: hex(0xF8FBFD))  // raised / hover
-    static let documentSurface = dynamic(dark: hex(0x282C34), light: hex(0xFFFFFF))
-    static let documentChrome = dynamic(dark: hex(0x171A20), light: hex(0xE7EDF2))  // chrome below the canvas
     static let cardStroke = dynamic(dark: hex(0x414956), light: hex(0xC8D2DA))      // cool light edge
     static let cardStrokeStrong = dynamic(dark: hex(0x596576), light: hex(0x9EACB8))
     static let hairline = dynamic(dark: hex(0x2C323B), light: hex(0xD3DCE3))
@@ -59,7 +57,6 @@ enum BoardTheme {
     static let textPrimary = dynamic(dark: hex(0xF0F2F5), light: hex(0x24313A))
     static let textMuted = dynamic(dark: hex(0xC5C8C6), light: hex(0x3A4A54))
     static let textFaint = dynamic(dark: hex(0x9299A5), light: hex(0x586975))
-    static let documentText = dynamic(dark: hex(0xE2E5E9), light: hex(0x24313A))
     /// Dimmest tier — card meta lines and footnotes.
     static let textDim = dynamic(dark: hex(0x747C89), light: hex(0x4F606B))
 
@@ -71,7 +68,6 @@ enum BoardTheme {
     static let attention = hex(0xD97A3A)         // solarized orange
     /// Cool cyan for inline `code` spans — deliberately distinct from the amber file-link
     /// color so identifiers and clickable paths never read as the same thing.
-    static let codeInline = hex(0x20A896)        // solarized cyan
     /// Red for blocked/overdue accents.
     static let alert = hex(0xE84C3D)             // solarized red
     /// Muted violet for quota-spent cards — distinct from agent-error red and
@@ -192,7 +188,6 @@ enum BoardTheme {
     static var numericSmall: NSFont { .monospacedDigitSystemFont(ofSize: scaled(10), weight: .regular) }
     /// The percent riding inside a quota bar — semibold so it holds up against the fill.
     static var gaugeLabel: NSFont { .monospacedDigitSystemFont(ofSize: scaled(11), weight: .semibold) }
-    static var title: NSFont { .systemFont(ofSize: scaled(13), weight: .semibold) }
     /// Column wayfinding caps — tracking (see ``caps(_:color:)``), not weight,
     /// does the work, so headers stop competing with card titles.
     static var columnTitle: NSFont { .systemFont(ofSize: scaled(11), weight: .semibold) }

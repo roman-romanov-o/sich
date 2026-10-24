@@ -18,7 +18,7 @@ struct WorktreeProvisionerTests {
             ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "seed"],
         ] {
             let r = try runner.run(executable: git, arguments: args, directory: repo)
-            try #require(r.exitCode == 0, Comment(rawValue: r.standardError))
+            try #require(r.exitCode == 0, Comment(rawValue: r.standardOutput))
         }
         return repo
     }

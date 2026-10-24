@@ -88,11 +88,19 @@ jobs:
       # Dead-code ratchet: fails only on findings absent from
       # .periphery-baseline.json. Shrink the baseline as things get cleaned up;
       # never widen it to silence a new finding.
+      # A pinned release binary, checksum-verified: the Homebrew cask lags years
+      # behind and does not understand this repo's config.
       - name: Dead code (Periphery, vs. baseline)
+        env:
+          PERIPHERY_VERSION: "3.8.0"
+          PERIPHERY_SHA256: 07d4e286e31dd79164df39097e0b59f533c94badbe18158464a455ea88a166d7
         run: |
-          brew install peripheryapp/periphery/periphery
-          periphery version
-          periphery scan --baseline .periphery-baseline.json --strict --format github-actions
+          curl -sSfL -o periphery.zip \
+            "https://github.com/peripheryapp/periphery/releases/download/${PERIPHERY_VERSION}/periphery-${PERIPHERY_VERSION}.zip"
+          echo "${PERIPHERY_SHA256}  periphery.zip" | shasum -a 256 -c
+          mkdir -p "$RUNNER_TEMP/periphery" && unzip -qo periphery.zip -d "$RUNNER_TEMP/periphery"
+          "$RUNNER_TEMP/periphery/periphery" version
+          "$RUNNER_TEMP/periphery/periphery" scan --baseline .periphery-baseline.json --strict --format github-actions
 
   forwarder:
     name: Hook forwarder test and lint

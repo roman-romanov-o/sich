@@ -31,7 +31,7 @@ CI runs the same gates on every PR. Running them locally saves a round trip:
 cd app
 swift build -Xswiftc -warnings-as-errors   # warnings fail the build
 swift test                                  # the full suite
-periphery scan --baseline .periphery-baseline.json --strict   # dead code, vs. baseline
+periphery scan --baseline .periphery-baseline.json --strict   # dead code, vs. baseline (Periphery 3.x)
 cd .. && uv run --with pytest pytest tests  # the forwarder's rotation test
 ```
 
