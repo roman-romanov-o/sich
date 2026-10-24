@@ -43,10 +43,12 @@ struct PTYBackpressureTests {
                 "an undrained child must be blocked on write, never reaching its side effect")
 
         // Now drain continuously — the child unblocks, finishes writing, hits the sentinel.
-        let deadline = Date().addingTimeInterval(4.0)
+        // The deadline is generous on purpose: this proves the mechanism, not the speed,
+        // and a loaded CI runner forks and schedules far slower than a desktop.
+        let deadline = Date().addingTimeInterval(30)
         while Date() < deadline, !FileManager.default.fileExists(atPath: sentinel) {
             _ = session.pumpAvailable()
-            Thread.sleep(forTimeInterval: 0.01)
+            Thread.sleep(forTimeInterval: 0.005)
         }
         #expect(FileManager.default.fileExists(atPath: sentinel),
                 "draining the pty unblocks the child so its work completes")

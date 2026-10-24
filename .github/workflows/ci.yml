@@ -23,7 +23,10 @@ concurrency:
 jobs:
   swift:
     name: Build and test
-    runs-on: macos-15
+    # macos-26 ships Xcode 26 / Swift 6.2, the toolchain the suite is developed
+    # and verified against. Under Xcode 16.4 (Swift 6.1) the async relay tests
+    # never see their main-actor hops land and time out.
+    runs-on: macos-26
     timeout-minutes: 120
     defaults:
       run:

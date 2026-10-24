@@ -18,7 +18,7 @@ permissions:
 jobs:
   release:
     name: Build, package, publish
-    runs-on: macos-15
+    runs-on: macos-26   # same toolchain as the CI test job
     timeout-minutes: 120
     permissions:
       contents: write   # creates the GitHub Release and uploads the zip
