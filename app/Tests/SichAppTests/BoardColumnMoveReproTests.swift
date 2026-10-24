@@ -35,12 +35,12 @@ struct BoardColumnMoveReproTests {
         let view = board()
         let id = UUID()
         let idle = BoardCard(id: id, sessionID: "t1", projectDir: "~/x",
-                             agent: .claude, flow: .b, state: .idle)
+                             agent: .claude, state: .idle)
         view.render(cards: [idle])
         #expect(groupHoldingCard(view) == .queue)
 
         let running = BoardCard(id: id, sessionID: "t1", projectDir: "~/x",
-                                agent: .claude, flow: .b, state: .running)
+                                agent: .claude, state: .running)
         view.render(cards: [running])
         #expect(groupHoldingCard(view) == .working)
     }
@@ -57,9 +57,9 @@ struct BoardColumnMoveReproTests {
         let view = board()
         view.render(cards: [
             BoardCard(id: UUID(), sessionID: "w", projectDir: "~/w",
-                      agent: .claude, flow: .b, state: .waitingForInput),
+                      agent: .claude, state: .waitingForInput),
             BoardCard(id: UUID(), sessionID: "b", projectDir: "~/b",
-                      agent: .claude, flow: .b, state: .blocked),
+                      agent: .claude, state: .blocked),
         ])
         #expect(sessionCards(view, in: .needsYou).count == 1)
         #expect(sessionCards(view, in: .blocked).count == 1)
@@ -75,9 +75,9 @@ struct BoardColumnMoveReproTests {
     func untouchedColumnsReuseTheirViews() throws {
         let view = board()
         let done = BoardCard(id: UUID(), sessionID: "d", projectDir: "~/x",
-                             agent: .claude, flow: .b, state: .done)
+                             agent: .claude, state: .done)
         let live = BoardCard(id: UUID(), sessionID: "r", projectDir: "~/x",
-                             agent: .claude, flow: .b, state: .running)
+                             agent: .claude, state: .running)
         view.render(cards: [done, live])
         let doneViewBefore = try #require(sessionCards(view, in: .done).first)
 

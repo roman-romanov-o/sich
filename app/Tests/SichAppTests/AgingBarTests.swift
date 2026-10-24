@@ -14,7 +14,7 @@ struct AgingBarTests {
 
     private func card(_ state: CardState, updatedAt: Date = .distantPast) -> BoardCard {
         BoardCard(id: UUID(), sessionID: "t", projectDir: "/tmp/proj",
-                  agent: .claude, flow: .b, state: state, updatedAt: updatedAt)
+                  agent: .claude, state: state, updatedAt: updatedAt)
     }
 
     // MARK: - The aging curve (pure functions)
@@ -110,7 +110,7 @@ struct AgingBarTests {
     @Test("moving a card into NEEDS YOU starts its clock and renders the bar; leaving clears both")
     func boardFeedsTheClock() throws {
         let seed = BoardSeed(sessionID: "aging-e2e", projectDir: "/tmp/aging-proj",
-                             agent: .claude, flow: .b, state: .running, scrollback: "")
+                             agent: .claude, state: .running, scrollback: "")
         let shell = BoardShell(seeds: [seed])
         _ = shell.buildContentForTesting()
         defer { shell.e2eTeardown() }

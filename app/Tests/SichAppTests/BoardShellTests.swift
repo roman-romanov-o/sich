@@ -16,7 +16,7 @@ struct BoardShellTests {
     private func ownedShell() -> BoardShell {
         let seed = BoardSeed(
             sessionID: "live-terminal", projectDir: "/work",
-            agent: .claude, flow: .b, state: .idle, scrollback: "ready"
+            agent: .claude, state: .idle, scrollback: "ready"
         )
         let shell = BoardShell(seeds: [seed])
         shell.buildContentForTesting()
@@ -27,7 +27,7 @@ struct BoardShellTests {
     /// dir → the owned card adopts it).
     private func waitingHook() -> BoardCard {
         BoardCard(sessionID: "claude-abc", projectDir: "/work",
-                  agent: .claude, flow: .b, state: .waitingForInput)
+                  agent: .claude, state: .waitingForInput)
     }
 
     /// AC#1 + edge case 2: with a terminal focused (drilled in), a live state change

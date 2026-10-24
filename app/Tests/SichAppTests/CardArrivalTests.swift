@@ -28,7 +28,7 @@ struct CardArrivalTests {
 
     private func card(_ id: String, _ state: CardState) -> BoardCard {
         BoardCard(sessionID: id, title: id, projectDir: "/tmp/\(id)",
-                  agent: .claude, flow: .b, state: state)
+                  agent: .claude, state: state)
     }
 
     private func arrival(of id: UUID, in view: BoardView, _ group: BoardView.ColumnGroup) -> Bool? {

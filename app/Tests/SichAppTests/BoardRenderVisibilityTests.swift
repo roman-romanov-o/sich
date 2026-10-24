@@ -5,7 +5,7 @@ import Testing
 @testable import SichApp
 
 /// Conservation law for the board: a card that exists in the model must render
-/// exactly one card on the view — for EVERY `(state, flow)` it can have. The bug
+/// exactly one card on the view — for EVERY state it can have. The bug
 /// that motivated this: a card whose state decayed to `.unknown` (agent quit with
 /// no Stop/SessionEnd hook, then the 30s stale sweep) mapped to a board column
 /// `BoardView` had no cell for, so `render` silently `continue`d past it and the
@@ -14,8 +14,8 @@ import Testing
 /// The old `BoardPlacementTests` only proved `state → column` at the model layer
 /// (a pure dict that can't drop a card); nothing drove the real `render()` and
 /// counted what landed on screen. These tests do exactly that, across the full
-/// `CardState × CardFlow` matrix from `.allCases` — so a NEW state or a NEW flow
-/// that the grid forgets a cell for fails here instead of vanishing in the field.
+/// `CardState.allCases` — so a NEW state that the grid forgets a cell for fails
+/// here instead of vanishing in the field.
 @MainActor
 @Suite("Board render visibility — no card silently vanishes")
 struct BoardRenderVisibilityTests {
@@ -26,9 +26,8 @@ struct BoardRenderVisibilityTests {
         return view
     }
 
-    private func card(_ state: CardState, _ flow: CardFlow) -> BoardCard {
-        BoardCard(sessionID: "s-\(state.rawValue)-\(flow.rawValue)", projectDir: "~/x",
-                  agent: .claude, flow: flow, state: state)
+    private func card(_ state: CardState) -> BoardCard {
+        BoardCard(sessionID: "s-\(state.rawValue)", projectDir: "~/x", agent: .claude, state: state)
     }
 
     /// Count `SessionCard` views placed anywhere under the board — the real "did
@@ -38,23 +37,19 @@ struct BoardRenderVisibilityTests {
             + view.subviews.reduce(0) { $0 + sessionCardCount($1) }
     }
 
-    @Test("every (state, flow) card renders exactly one card — none silently disappears")
-    func everyStateAndFlowRendersVisibly() {
+    @Test("every state's card renders exactly one card — none silently disappears")
+    func everyStateRendersVisibly() {
         for state in CardState.allCases {
-            for flow in CardFlow.allCases {
-                let view = board()
-                view.render(cards: [card(state, flow)])
-                #expect(sessionCardCount(view) == 1,
-                    "a \(state.rawValue)/\(flow.rawValue) card must render on the board, not vanish")
-            }
+            let view = board()
+            view.render(cards: [card(state)])
+            #expect(sessionCardCount(view) == 1,
+                "a \(state.rawValue) card must render on the board, not vanish")
         }
     }
 
     @Test("a full mixed board conserves every card — count in == count out")
     func fullMatrixConservesEveryCard() {
-        let cards = CardState.allCases.flatMap { state in
-            CardFlow.allCases.map { flow in card(state, flow) }
-        }
+        let cards = CardState.allCases.map { card($0) }
         let view = board()
         view.render(cards: cards)
         #expect(sessionCardCount(view) == cards.count,

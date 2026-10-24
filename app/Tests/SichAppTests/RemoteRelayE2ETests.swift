@@ -183,14 +183,14 @@ struct RemoteRelayE2ETests {
 
     // MARK: - TC-INT-006 / AC-4: structurally still observe-only
 
-    @Test("TC-INT-006 / AC-4: the only NWListener in the app is the LikeC4 file server")
-    func theOnlyListenerRemainsTheLikeC4FileServer() {
+    @Test("TC-INT-006 / AC-4: the app opens no NWListener anywhere")
+    func theAppOpensNoListener() {
         let sources = Self.repoRoot.appendingPathComponent("app/Sources")
         let files = Set(grep("NWListener", under: sources).compactMap {
             $0.split(separator: ":").first.map { URL(fileURLWithPath: String($0)).lastPathComponent }
         })
 
-        #expect(files == ["StaticFileServer.swift"],
+        #expect(files.isEmpty,
                 "US-003 adds no inbound listener; found NWListener in \(files.sorted())")
     }
 
@@ -389,7 +389,11 @@ final class LineCollector: @unchecked Sendable {
 
 /// Poll a condition to a deadline: the relay reads from a real child process, so
 /// arrival is asynchronous — nothing here sleeps a fixed "long enough" interval.
-func waitUntil(timeout: TimeInterval = 5, _ condition: @Sendable () -> Bool) async -> Bool {
+///
+/// The deadline is deliberately long: these assertions are about arrival, not speed,
+/// and a loaded 3-core CI runner starves the cooperative pool for seconds at a time
+/// while PTY-heavy suites run alongside. A real failure still fails — just later.
+func waitUntil(timeout: TimeInterval = 40, _ condition: @Sendable () -> Bool) async -> Bool {
     let deadline = Date().addingTimeInterval(timeout)
     while Date() < deadline {
         if condition() { return true }

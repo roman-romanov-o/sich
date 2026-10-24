@@ -60,7 +60,7 @@ struct FastTaskEntryTests {
             TerminalGeometry.remember(rows: 41, cols: 137)
             let seed = BoardSeed(
                 sessionID: "fast-entry", projectDir: "/tmp/fast-entry-proj",
-                agent: .claude, flow: .b, state: .running, scrollback: "",
+                agent: .claude, state: .running, scrollback: "",
                 commandOverride: ["/bin/cat"]
             )
             // No launch override: the seed goes through the REAL launch path —
@@ -93,7 +93,7 @@ struct FastTaskEntryTests {
         }
     }
 
-    @Test("a non-teaching surface (planning pane, tests) never touches the memory")
+    @Test("a non-teaching surface (tests) never touches the memory")
     func mutePaneDoesNotTeach() throws {
         try withFreshDefaults {
             let pty = try PTYSession(command: ["/bin/cat"])

@@ -1,0 +1,85 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '23 4 * * 1'   # weekly, Monday 04:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  actions:
+    name: CodeQL (actions)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@4bfa242aa49c5f7c6770b98670d354a7dfac05f8 # v3.39.1
+        with:
+          languages: actions
+      - uses: github/codeql-action/analyze@4bfa242aa49c5f7c6770b98670d354a7dfac05f8 # v3.39.1
+        with:
+          category: /language:actions
+
+  swift:
+    name: CodeQL (swift)
+    runs-on: macos-15
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Restore vendored libghostty-vt
+        id: ghostty
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: app/Frameworks/ghostty-vt.xcframework/**/*.a
+          key: ghostty-vt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('app/scripts/build-ghostty-vt.sh') }}
+
+      - name: Set up Zig
+        if: steps.ghostty.outputs.cache-hit != 'true'
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.15.2
+
+      - name: Build libghostty-vt (cache miss)
+        if: steps.ghostty.outputs.cache-hit != 'true'
+        run: app/scripts/build-ghostty-vt.sh
+
+      - name: Cache vendored libghostty-vt
+        if: steps.ghostty.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: app/Frameworks/ghostty-vt.xcframework/**/*.a
+          key: ${{ steps.ghostty.outputs.cache-primary-key }}
+
+      - uses: github/codeql-action/init@4bfa242aa49c5f7c6770b98670d354a7dfac05f8 # v3.39.1
+        with:
+          languages: swift
+          build-mode: manual
+
+      # Only the shipped library targets: tests and probes are not product code.
+      - name: Build for analysis
+        working-directory: app
+        run: swift build --product sich
+
+      - uses: github/codeql-action/analyze@4bfa242aa49c5f7c6770b98670d354a7dfac05f8 # v3.39.1
+        with:
+          category: /language:swift

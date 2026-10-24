@@ -77,8 +77,8 @@ struct RecentFolderStore {
 /// A clickable palette row (layer-backed, owns its whole rect for hit-testing +
 /// real `mouseDown` — the only click path that both composites and receives events
 /// on this dark UI; stock `NSButton` fails on both counts here). Renders a leading
-/// glyph, a title (+ optional mono id / subtitle), an optional trailing meta, and
-/// an optional 8-segment progress bar — enough for every row the three stages use.
+/// glyph, a title (+ optional mono id / subtitle), and an optional trailing meta —
+/// enough for every row the stages use.
 final class PaletteRow: NSView {
     var onClick: (() -> Void)?
     var isSelected = false { didSet { restyle() } }
@@ -88,14 +88,12 @@ final class PaletteRow: NSView {
     private let title = makeSans(12, weight: .semibold)
     private let subtitle = makeMono(10)
     private let meta = makeMono(9)
-    private var bar: NSStackView?
     private let accent: NSColor
 
-    /// `accent` tints the selected fill/glyph — amber for tasks/projects, done-green
-    /// for "create new". `progress` (when non-nil) adds the segmented bar below.
+    /// `accent` tints the selected fill/glyph — amber for tasks/projects.
     init(glyph: String, idChip: String? = nil, title: String, subtitle: String? = nil,
          meta: String? = nil, accent: NSColor = BoardTheme.attention,
-         progress: TaskFolderProgress? = nil, titleColor: NSColor? = nil) {
+         titleColor: NSColor? = nil) {
         self.accent = accent
         super.init(frame: .zero)
         wantsLayer = true
@@ -106,8 +104,7 @@ final class PaletteRow: NSView {
         idChip.map { self.idChip.stringValue = $0 }
         subtitle.map { self.subtitle.stringValue = $0 }
         meta.map { self.meta.stringValue = $0 }
-        buildLayout(hasID: idChip != nil, hasSubtitle: subtitle != nil,
-                    hasMeta: meta != nil, progress: progress)
+        buildLayout(hasID: idChip != nil, hasSubtitle: subtitle != nil, hasMeta: meta != nil)
         restyle()
     }
     required init?(coder: NSCoder) { nil }
@@ -127,8 +124,7 @@ final class PaletteRow: NSView {
     // NSView, unlike NSControl, otherwise eats it as window-activation).
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    private func buildLayout(hasID: Bool, hasSubtitle: Bool, hasMeta: Bool,
-                             progress: TaskFolderProgress?) {
+    private func buildLayout(hasID: Bool, hasSubtitle: Bool, hasMeta: Bool) {
         let head = NSStackView(views: [glyph] + (hasID ? [idChip] : []) + [title]
             + (hasMeta ? [meta] : []))
         head.spacing = 10
@@ -137,8 +133,7 @@ final class PaletteRow: NSView {
         title.setContentHuggingPriority(.defaultLow, for: .horizontal)
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         var rows: [NSView] = [head]
-        if hasSubtitle { rows.append(indented(subtitle, by: hasID || hasSubtitle ? 24 : 24)) }
-        if let progress { bar = makeBar(progress); rows.append(indented(bar!, by: 24)) }
+        if hasSubtitle { rows.append(indented(subtitle, by: 24)) }
         let col = NSStackView(views: rows)
         col.orientation = .vertical
         col.alignment = .leading
@@ -157,28 +152,6 @@ final class PaletteRow: NSView {
         idChip.textColor = BoardTheme.textMuted
     }
 
-    private func makeBar(_ progress: TaskFolderProgress) -> NSStackView {
-        let (done, total): (Int, Int) = {
-            if case let .known(c, t) = progress, t > 0 { return (c, t) }
-            return (0, 8)
-        }()
-        let segs = (0..<max(total, 1)).map { i -> NSView in
-            let s = NSView()
-            s.wantsLayer = true
-            s.layer?.cornerRadius = 2
-            // ponytail: pure completion bar — green done vs empty. No amber "next"
-            // segment: we have no in-progress signal, so it just contradicted the N/M badge.
-            s.themedBackground = i < done ? BoardTheme.stateColor(.done)
-                : BoardTheme.cardStroke
-            s.heightAnchor.constraint(equalToConstant: 4).isActive = true
-            return s
-        }
-        let stack = NSStackView(views: segs)
-        stack.spacing = 3
-        stack.distribution = .fillEqually
-        stack.widthAnchor.constraint(equalToConstant: 300).isActive = true
-        return stack
-    }
 
     private func indented(_ v: NSView, by pad: CGFloat) -> NSView {
         let wrap = NSView()
@@ -194,72 +167,10 @@ final class PaletteRow: NSView {
     }
 }
 
-/// An Interactive terminal / Saha radio-card (stage 3). Same click idiom as ``PaletteRow``.
-final class FlowOptionCard: NSView {
-    var onClick: (() -> Void)?
-    var isSelected = false { didSet { restyle() } }
-    private let dot = NSView()
-    private let title: NSTextField
-    private let desc: NSTextField
-
-    init(title: String, desc: String) {
-        self.title = makeSans(13, weight: .bold)
-        self.desc = makeSans(10.5, weight: .regular)
-        self.title.stringValue = title
-        self.desc.stringValue = desc
-        // A label factory makes a single-line field; without word-wrap the description
-        // truncates ("…docs/tasks/ fol") instead of flowing to the 3 lines it's given.
-        self.desc.maximumNumberOfLines = 3
-        self.desc.lineBreakMode = .byWordWrapping
-        self.desc.cell?.usesSingleLineMode = false
-        self.desc.cell?.wraps = true
-        self.desc.preferredMaxLayoutWidth = 230
-        super.init(frame: .zero)
-        wantsLayer = true
-        layer?.cornerRadius = 9
-        dot.wantsLayer = true
-        dot.layer?.cornerRadius = 7
-        dot.widthAnchor.constraint(equalToConstant: 14).isActive = true
-        dot.heightAnchor.constraint(equalToConstant: 14).isActive = true
-        let head = NSStackView(views: [dot, self.title])
-        head.spacing = 7
-        head.alignment = .centerY
-        let col = NSStackView(views: [head, self.desc])
-        col.orientation = .vertical
-        col.alignment = .leading
-        col.spacing = 5
-        col.edgeInsets = NSEdgeInsets(top: 11, left: 13, bottom: 11, right: 13)
-        pin(col, to: self)
-        self.desc.widthAnchor.constraint(lessThanOrEqualToConstant: 230).isActive = true
-        restyle()
-    }
-    required init?(coder: NSCoder) { nil }
-
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        bounds.contains(convert(point, from: superview)) ? self : nil
-    }
-    override func mouseDown(with event: NSEvent) { onClick?() }
-    override var mouseDownCanMoveWindow: Bool { false }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-
-    private func restyle() {
-        let a = BoardTheme.attention
-        // Quieter wash than a focused list row (0.08): the filled radio dot carries the
-        // "committed pick" signal, so this doesn't fight the arrow-key cursor for amber.
-        themedBackground = isSelected ? a.withAlphaComponent(0.05) : .clear
-        layer?.borderWidth = isSelected ? 1 : 1
-        themedBorder = isSelected ? a : BoardTheme.cardFillRaised
-        dot.layer?.borderWidth = isSelected ? 4 : 1
-        dot.themedBorder = isSelected ? a : BoardTheme.textDim
-        title.textColor = isSelected ? BoardTheme.textPrimary : BoardTheme.textMuted
-        desc.textColor = isSelected ? BoardTheme.hex(0xB39A6E) : BoardTheme.textDim
-    }
-}
-
-/// The interactive-flow "own git worktree" switch (stage 3). A custom-drawn toggle,
+/// The "own git worktree" switch (last stage). A custom-drawn toggle,
 /// NOT `NSButton(checkboxWithTitle:)`: the stock checkbox rendered near-invisible on
 /// this hand-painted dark UI — a washed-out glyph beside low-contrast grey text — the
-/// same composite failure ``PaletteRow`` and ``FlowOptionCard`` were built to dodge.
+/// same composite failure ``PaletteRow`` was built to dodge.
 /// This reuses their proven idiom: layer-backed, owns its whole rect, real
 /// `mouseDown`. A 20pt box fills amber with a check when on, so the state reads at a
 /// glance. Every use is an opt-IN (worktree, Windows host), never a surprise default.
@@ -397,9 +308,8 @@ final class PaletteFieldBox: NSView {
 
 /// The ⌘N create-card palette: a floating, keyboard-first wizard —
 /// project → harness → task — replacing the old NSAlert + bare task-chooser.
-/// A dumb view: the shell wires the four confirm closures to its card-creation
-/// logic (which owns the pool firewall + binding invariants). Reaching the "create"
-/// action for a saha task hands off to the shell, which enters planning mode.
+/// A dumb view: the shell wires the confirm closures to its card-creation
+/// logic (which owns the pool firewall + binding invariants).
 final class CreateCardPalette: NSView, NSTextFieldDelegate {
     enum Stage { case destination, project, harness, agentAccount, task }
     /// Where the card runs. Remote is a stage-1 choice beside "This Mac" (US-009 AC-1),
@@ -411,7 +321,6 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
 
         var host: String? { if case let .remote(h) = self { return h }; return nil }
     }
-    enum Flow { case saha, interactive }
     enum Harness: CaseIterable {
         case claude
         case codex
@@ -431,7 +340,7 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
 
         var subtitle: String {
             switch self {
-            case .claude: return "claude · supports /saha:* commands"
+            case .claude: return "claude · Anthropic's coding agent CLI"
             case .codex: return "codex · OpenAI coding agent CLI"
             case .cursor: return "agent · Cursor's terminal agent CLI"
             case .antigravity: return "agy · Google's Antigravity agent CLI"
@@ -455,28 +364,21 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         }
     }
 
-    // Shell wires these. Each saha confirm returns an error string (nil = success,
-    // shell has dismissed us + entered planning); interactive never fails visibly.
+    // Shell wires these. Interactive never fails visibly; remote returns an error
+    // string for the palette to show (nil = success, shell has dismissed us).
     var confirmInteractive: ((
         _ title: String, _ dir: String, _ harness: Harness, _ inWorktree: Bool,
         _ claudeProfileID: UUID?
     ) -> Void)?
-    var confirmSahaNew: ((_ title: String, _ dir: String) -> String?)?
-    var confirmSahaExisting: ((_ folder: URL, _ dir: String) -> String?)?
-    /// The remote path (US-009): destination + optional far-side dir + card name. Same
-    /// error contract as the saha confirms — nil means the shell created the card.
+    /// The remote path (US-009): destination + optional far-side dir + card name.
     var confirmRemote: ((
         _ title: String, _ destination: String, _ dir: String, _ windows: Bool
     ) -> String?)?
     var browse: (() -> String?)?
     var onCancel: (() -> Void)?
-    // Discover the task folders under a chosen project dir (shell injects
-    // TaskFolderIndex) — called when the task stage opens so the saha bind-list is live.
-    var discoverFolders: ((_ dir: String) -> [TaskFolderSummary])?
 
     // Test seams — the real gestures the integration tests dispatch.
     private(set) var navRows: [PaletteRow] = []
-    private(set) var flowCards: [FlowOptionCard] = []
     let nameField = NSTextField()
     /// Hand entry for a host the recents have never seen, and for a folder on it.
     let hostField = NSTextField()
@@ -511,8 +413,6 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     var windowsToggleForTesting: PaletteToggle? { windowsToggle }
     /// Hosts the board remembers as Windows — the shell injects these at wiring time.
     var windowsHosts: Set<String> = []
-    private var flow: Flow = .interactive
-    private var folders: [TaskFolderSummary] = []
     private var selected = 0
 
     private let card = NSView()
@@ -641,7 +541,6 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         header.arrangedSubviews.forEach { $0.removeFromSuperview() }
         body.arrangedSubviews.forEach { $0.removeFromSuperview() }
         navRows = []
-        flowCards = []
         fieldBoxes = []
         switch stage {
         case .destination: renderDestination()
@@ -874,17 +773,14 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
             : [projLeaf, harness.title]
         addHeader(stageChip("task"), completed: completed)
         buildNameField()
-        buildFlowGrid()
-        if flow == .saha { buildFolderList() } else { buildWorktreeToggle() }
-        // ponytail: ← / ↔ not ⌫ / ⇥ — the mono glyph font lacks U+232B & U+21E5
-        // (they fall back to unrelated substitutes); basic arrows render clean.
-        setFooter(flow == .saha
-            ? ["↵ create / bind", "↑↓ folder", "↔ flow", "← back", "esc cancel"]
-            : ["↵ create", "↔ flow", "← back", "esc cancel"])
+        buildWorktreeToggle()
+        // ponytail: ← not ⌫ — the mono glyph font lacks U+232B (it falls back to an
+        // unrelated substitute); basic arrows render clean.
+        setFooter(["↵ create", "← back", "esc cancel"])
     }
 
-    /// A remote card is a named tmux session on the far side: no saha pipeline and no
-    /// worktree (there is no local checkout to branch), so the name IS the stage — and
+    /// A remote card is a named tmux session on the far side: no worktree (there is
+    /// no local checkout to branch), so the name IS the stage — and
     /// that name is also the session the card re-attaches to after a restart.
     private func renderRemoteTask(host: String) {
         addHeader(stageChip("task"),
@@ -907,37 +803,8 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         fieldBoxes.first { $0.field === field }?.setFocused(focused)
     }
 
-    private func buildFlowGrid() {
-        let interactive = FlowOptionCard(title: "Interactive terminal",
-            desc: "Straight into a live terminal. No pipeline, no folder — you drive.")
-        let saha = FlowOptionCard(title: "Saha",
-            desc: "Structured pipeline. Binds a docs/tasks/ folder; you review each artifact.")
-        interactive.isSelected = flow == .interactive
-        saha.isSelected = flow == .saha
-        interactive.onClick = { [weak self] in self?.pick(flow: .interactive) }
-        saha.onClick = { [weak self] in self?.pick(flow: .saha) }
-        flowCards = [interactive, saha]
-        let grid = NSStackView(views: [interactive, saha])
-        grid.distribution = .fillEqually
-        grid.spacing = 8
-        add(grid)
-    }
 
-    private func buildFolderList() {
-        add(sectionLabel("BIND TO TASK FOLDER"))
-        for f in folders {
-            addNav(PaletteRow(glyph: "", idChip: f.url.lastPathComponent, title: Self.normalizeTitle(f.title),
-                              meta: progressText(f.progress), progress: f.progress))
-        }
-        let createRow = PaletteRow(glyph: "+", title: "Create new — scaffolds \(nextTaskID)",
-                                   accent: BoardTheme.stateColor(.done),
-                                   titleColor: BoardTheme.textMuted)
-        addNav(createRow)
-    }
-
-    /// Interactive flow only: the opt-in "own git worktree" switch (off by default).
-    /// Saha tasks stay in the repo checkout — their scaffolded docs/tasks folder
-    /// lives there.
+    /// The opt-in "own git worktree" switch (off by default).
     private func buildWorktreeToggle() {
         add(sectionLabel("ISOLATION"))
         let toggle = PaletteToggle(
@@ -975,7 +842,7 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         case .agentAccount:
             activateAgentAccountRow(idx)
         case .task:
-            confirmTask(folderIndex: idx)
+            confirmTask()
         }
     }
 
@@ -1031,7 +898,6 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
 
     private func activateHarnessRow(_ idx: Int) {
         harness = Harness.allCases[idx]
-        folders = discoverFolders?(projectDir) ?? []
         advanceFromHarness()
     }
 
@@ -1044,7 +910,6 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         }
         guard idx < accounts.count else { return }
         selectedAgentAccountID = accounts[idx].id
-        folders = discoverFolders?(projectDir) ?? []
         stage = .task
         renderStage()
     }
@@ -1064,33 +929,14 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         renderStage()
     }
 
-    private func confirmTask(folderIndex: Int?) {
+    private func confirmTask() {
         let title = nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if case let .remote(host) = destination {
             if let err = confirmRemote?(title, host, remoteDir, remoteWindows) { showError(err) }
             return
         }
-        if flow == .interactive {
-            let profileID = harness.supportsAccountPicker ? selectedAgentAccountID : nil
-            confirmInteractive?(title, projectDir, harness, inWorktree, profileID)
-            return
-        }
-        // saha: the last nav row is "Create new"; earlier rows are existing folders.
-        let idx = folderIndex ?? selected
-        let err: String?
-        if idx == folders.count {   // create-new row
-            guard !title.isEmpty else { showError("Name the task first."); return }
-            err = confirmSahaNew?(title, projectDir)
-        } else {
-            err = confirmSahaExisting?(folders[idx].url, projectDir)
-        }
-        if let err { showError(err) }
-    }
-
-    private func pick(flow newFlow: Flow) {
-        guard flow != newFlow else { return }
-        flow = newFlow
-        renderStage()   // rebuilds the folder list on/off
+        let profileID = harness.supportsAccountPicker ? selectedAgentAccountID : nil
+        confirmInteractive?(title, projectDir, harness, inWorktree, profileID)
     }
 
     private func doBrowse() {
@@ -1143,9 +989,6 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         switch selector {
         case #selector(NSResponder.insertNewline(_:)): commit(from: control); return true
         case #selector(NSResponder.cancelOperation(_:)): onCancel?(); return true
-        case #selector(NSResponder.insertTab(_:)):
-            guard control === nameField, destination == .local else { return false }
-            pick(flow: flow == .saha ? .interactive : .saha); return true
         case #selector(NSResponder.moveDown(_:)): move(1); return true
         case #selector(NSResponder.moveUp(_:)): move(-1); return true
         case #selector(NSResponder.deleteBackward(_:)):
@@ -1158,37 +1001,12 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     private func commit(from control: NSControl) {
         if control === hostField { commitDestination() }
         else if control === dirField { commitRemoteFolder() }
-        else { confirmTask(folderIndex: nil) }
+        else { confirmTask() }
     }
 
     // MARK: derived text
 
     private var projLeaf: String { (projectDir as NSString).lastPathComponent }
-
-    /// Uppercase a leading `task-NN:` id prefix so one lowercase source heading doesn't
-    /// read as a bug beside its ALL-CAPS siblings. ponytail: regex, no title parser.
-    static func normalizeTitle(_ t: String) -> String {
-        guard let r = t.range(of: #"(?i)^task-\d+:"#, options: .regularExpression) else { return t }
-        return t.replacingCharacters(in: r, with: t[r].uppercased())
-    }
-
-    private func progressText(_ p: TaskFolderProgress) -> String {
-        if case let .known(c, t) = p { return "\(c)/\(t)" }
-        return "unknown"
-    }
-
-    /// Next `task-NN` id the scaffolder will mint (max existing + 1, min 01).
-    private var nextTaskID: String {
-        let nums = folders.compactMap { f -> Int? in
-            let name = f.url.lastPathComponent          // task-08-slug
-            let parts = name.split(separator: "-")
-            return parts.count >= 2 ? Int(parts[1]) : nil
-        }
-        return String(format: "task-%02d", (nums.max() ?? 0) + 1)
-    }
-
-    /// Called by the shell after the project is fixed so stage 3 can list its folders.
-    func loadFolders(_ list: [TaskFolderSummary]) { folders = list }
 
     /// Swap in the account list; the palette filters it by the picked harness and host.
     func reloadAgentAccounts(_ accounts: [AgentAccountProfile]) {
@@ -1202,7 +1020,6 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     func selectAgentAccount(_ id: UUID) {
         selectedAgentAccountID = id
         if stage == .agentAccount {
-            folders = discoverFolders?(projectDir) ?? []
             stage = .task
             renderStage()
         }
@@ -1213,18 +1030,6 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         self.projectDir = projectDir
         self.destination = .local
         self.stage = .harness
-        renderStage()
-    }
-
-    /// Test/entry seam: jump straight to the saha task stage for a known project
-    /// (mirrors the old `beginSahaCreation` entry the invariant tests use).
-    func presentSahaTaskStage(projectDir: String, folders: [TaskFolderSummary]) {
-        self.projectDir = projectDir
-        self.folders = folders
-        self.destination = .local
-        self.harness = .claude
-        self.flow = .saha
-        self.stage = .task
         renderStage()
     }
 }

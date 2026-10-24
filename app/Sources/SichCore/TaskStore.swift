@@ -1,12 +1,5 @@
 import Foundation
 
-/// How a task runs once it leaves the backlog: a plain interactive terminal
-/// session the operator drives, or the saha planning/execution flow.
-public enum TaskMode: String, Codable, Sendable {
-    case interactive
-    case saha
-}
-
 /// Where a task lives right now: the backlog (pure intent, no session yet) or a
 /// board column, expressed as the ``CardState`` that column maps to. Encoded as a
 /// single string — `"backlog"` or the state's raw value — so the JSON stays flat
@@ -72,9 +65,7 @@ public struct TaskRecord: Codable, Sendable, Equatable, Identifiable {
     public var details: String
     public var placement: TaskPlacement
     public var agent: String?
-    public var mode: TaskMode?
     public var projectDir: String?
-    public var taskFolder: String?
     public var createdAt: Date
     public var sessionRef: TaskSessionRef?
     /// Cumulative seconds spent actively in WORKING. Optional on disk so task
@@ -104,9 +95,7 @@ public struct TaskRecord: Codable, Sendable, Equatable, Identifiable {
         details: String = "",
         placement: TaskPlacement,
         agent: String? = nil,
-        mode: TaskMode? = nil,
         projectDir: String? = nil,
-        taskFolder: String? = nil,
         createdAt: Date = Date(),
         sessionRef: TaskSessionRef? = nil,
         accumulatedWorkingTime: TimeInterval? = nil,
@@ -120,9 +109,7 @@ public struct TaskRecord: Codable, Sendable, Equatable, Identifiable {
         self.details = details
         self.placement = placement
         self.agent = agent
-        self.mode = mode
         self.projectDir = projectDir
-        self.taskFolder = taskFolder
         self.createdAt = createdAt
         self.sessionRef = sessionRef
         self.accumulatedWorkingTime = accumulatedWorkingTime

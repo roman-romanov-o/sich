@@ -3,9 +3,12 @@ import Foundation
 /// The interactive-pool probe: a hidden `claude`, its `/usage` panel read by
 /// ``ClaudeUsagePanel``. Ready markers are version-dependent, so all three known forms.
 public enum ClaudeUsageProbe {
-    public static func spec(configDir: String? = nil) -> TUIUsageProbeSpec<ClaudeUsagePanel.Reading> {
+    public static func spec(
+        configDir: String? = nil,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> TUIUsageProbeSpec<ClaudeUsagePanel.Reading> {
         ensureUsageProbeTrusted(configDir: configDir)
-        let launch = launchCommand(configDir: configDir)
+        let launch = launchCommand(configDir: configDir, home: home)
         return TUIUsageProbeSpec(
             launch: launch,
             readyMarkers: ["? for shortcuts", "shift+tab to cycle", "Try \""],
@@ -31,16 +34,15 @@ public enum ClaudeUsageProbe {
         TUIUsageProbe.scrape(spec: spec(configDir: configDir), deadline: deadline)
     }
 
-    private static func launchCommand(configDir: String?) -> String {
-        let claude = shellQuoted(resolvedClaudeExecutable())
+    private static func launchCommand(configDir: String?, home: URL) -> String {
+        let claude = shellQuoted(resolvedClaudeExecutable(home: home))
         let export = ClaudeLaunchEnv.configDirExport(configDir)
         return export.isEmpty ? claude : "\(export.trimmingCharacters(in: .whitespaces)) \(claude)"
     }
 
     /// The hidden probe runs under `/bin/zsh -lc` inside a GUI app — bare `claude`
     /// is not on PATH. Prefer the same Sich shim the board uses for card launches.
-    private static func resolvedClaudeExecutable() -> String {
-        let home = FileManager.default.homeDirectoryForCurrentUser
+    private static func resolvedClaudeExecutable(home: URL) -> String {
         let candidates = [
             home.appendingPathComponent(".sich/bin/claude"),
             home.appendingPathComponent(".local/bin/claude"),

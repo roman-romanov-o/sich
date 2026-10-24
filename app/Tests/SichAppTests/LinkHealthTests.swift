@@ -385,7 +385,7 @@ struct LinkHealthTests {
     private static func card(state: CardState) -> BoardCard {
         BoardCard(
             sessionID: "local-abc", title: "some work", projectDir: "/tmp/proj",
-            agent: .claude, flow: .b, state: state)
+            agent: .claude, state: state)
     }
 
     /// The worst-case detection budget ssh is actually told to use, read back out of

@@ -115,17 +115,6 @@ struct PillTextCenteringTests {
         pill.stringValue = "worktree"
         expectPaddingSpentEvenly(pill, "WorktreePill")
     }
-
-    @Test("the saha chooser row's label sits in the middle of its 28pt frame")
-    func chooserButtonIsCentered() {
-        expectPaddingSpentEvenly(ChooserButton(title: "Create new task"), "ChooserButton")
-    }
-
-    @Test("the planning action pill's label sits in the middle of its 26pt frame")
-    func planningActionPillIsCentered() {
-        let pill = PlanningActionPill(title: "Approve", fill: nil, text: BoardTheme.textPrimary)
-        expectPaddingSpentEvenly(pill, "PlanningActionPill")
-    }
 }
 
 /// A label styled like a pill but WITHOUT the centring cell — the unfixed render path,

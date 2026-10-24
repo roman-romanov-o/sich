@@ -10,10 +10,9 @@ private func card(
     _ id: String,
     _ dir: String,
     agent: CardAgent = .claude,
-    flow: CardFlow = .b,
     state: CardState
 ) -> BoardCard {
-    BoardCard(sessionID: id, projectDir: dir, agent: agent, flow: flow, state: state)
+    BoardCard(sessionID: id, projectDir: dir, agent: agent, state: state)
 }
 
 @Suite("Board placement — cards by state (US-003)")
@@ -56,13 +55,12 @@ struct BoardPlacementTests {
         }
     }
 
-    @Test("card carries cmux metadata: dir, agent, flow, state (US-003 AC#2)")
+    @Test("card carries cmux metadata: dir, agent, state (US-003 AC#2)")
     func cardMetadata() {
-        let c = card("projB", "~/proj-b", agent: .claude, flow: .b, state: .waitingForInput)
+        let c = card("projB", "~/proj-b", agent: .claude, state: .waitingForInput)
         #expect(c.projectDir == "~/proj-b")
         #expect(c.agent == .claude)
         #expect(c.agent.displayName == "Claude Code")
-        #expect(c.flow == .b)
         #expect(c.state == .waitingForInput)
     }
 

@@ -25,7 +25,6 @@ struct RemoteTmuxCardTests {
         #expect(shell.cards.contains { $0.id == card.id })
         #expect(card.projectDir == "roman@host.invalid")   // ssh destination, shown as the label
         #expect(card.sessionID == "remote/host.invalid/agent")
-        #expect(card.flow == .b)
     }
 
     @Test("the launched command is ssh attaching to tmux — never claude -p")
@@ -77,7 +76,7 @@ struct RemoteTmuxCardTests {
             let pty = try! PTYSession(command: ["/bin/cat"])
             try! pty.start()
             return Session(projectDir: seed.projectDir, agentType: .claude,
-                           flowTag: .interactive, pty: pty, state: .running)
+                           pty: pty, state: .running)
         }
 
         let spec = RemoteTmuxSpec(host: "far.invalid", user: "roman", sessionName: "agent")
@@ -272,7 +271,7 @@ struct RemoteTmuxCardTests {
                 MainActor.assumeIsolated { typed.text += String(decoding: bytes, as: UTF8.self) }
             }
             return Session(projectDir: seed.projectDir, agentType: .claude,
-                           flowTag: .interactive, pty: pty, state: .running)
+                           pty: pty, state: .running)
         }
 
         let spec = RemoteTmuxSpec(

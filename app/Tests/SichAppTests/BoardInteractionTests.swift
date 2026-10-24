@@ -49,7 +49,7 @@ struct BoardInteractionTests {
         var moved: (id: UUID, column: BoardColumn)?
         view.onMove = { id, col in moved = (id, col) }
 
-        let card = BoardCard(sessionID: "s", projectDir: "~/x", agent: .claude, flow: .b, state: .idle)
+        let card = BoardCard(sessionID: "s", projectDir: "~/x", agent: .claude, state: .idle)
         view.render(cards: [card])   // lands in the idle column
 
         let pb = NSPasteboard.withUniqueName()

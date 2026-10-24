@@ -4,9 +4,8 @@ name: Release
 # GitHub Release. App bundles are distributed ONLY as release artifacts — never
 # committed to the repository.
 #
-# Runs on the same self-hosted Mac as CI, for the same reasons (see ci.yml):
-# the vendored libghostty-vt static archives are git-ignored and restored from
-# a local cache keyed on the pinned ghostty rev.
+# Same hosted runner as ci.yml, but NO cache: a release artifact is built from
+# source end to end so nothing restored from a cache can end up in the bundle.
 
 on:
   push:
@@ -14,33 +13,34 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   release:
-    name: build · package · publish
-    runs-on: [self-hosted, macOS]
+    name: Build, package, publish
+    runs-on: macos-15
+    timeout-minutes: 120
+    permissions:
+      contents: write   # creates the GitHub Release and uploads the zip
     defaults:
       run:
         working-directory: app
     env:
-      # Same PATH note as ci.yml: the runner is a LaunchAgent with no
-      # interactive-shell PATH.
-      PATH: /Users/romanromanov/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app   # same toolchain as ci.yml
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
-      # Identical to the CI restore step — the *.a slices never live in git.
-      - name: Restore vendored libghostty-vt
-        run: |
-          rev=ae52f97dcac558735cfa916ea3965f247e5c6e9e
-          cache="$HOME/Library/Caches/sich/ghostty-vt/$rev"
-          if [ ! -d "$cache" ]; then
-            echo "::error::No cached libghostty-vt for rev $rev at $cache. Rebuild it (pinned rev + Zig 0.15.2) per app/Frameworks/README.md, then copy the *.a files into that path."
-            exit 1
-          fi
-          rsync -a "$cache"/ Frameworks/ghostty-vt.xcframework/
+      - name: Set up Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.15.2
+          use-cache: false
+
+      - name: Build libghostty-vt
+        run: scripts/build-ghostty-vt.sh
 
       - name: Build Sich.app
         run: ./make-app.sh
@@ -54,36 +54,51 @@ jobs:
       # no Open Anyway escape). Re-sign after stamping, and verify the seal holds.
       - name: Stamp version
         if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG: ${{ github.ref_name }}
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="${TAG#v}"
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" build/Sich.app/Contents/Info.plist
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GITHUB_RUN_NUMBER" build/Sich.app/Contents/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $RUN_NUMBER" build/Sich.app/Contents/Info.plist
           codesign --force --deep --sign - build/Sich.app
           codesign --verify --verbose=1 build/Sich.app
 
       # ditto preserves resource forks/permissions the way Archive Utility
       # expects; a plain `zip -r` produces bundles Gatekeeper mistrusts more.
       - name: Package
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
-          suffix="${GITHUB_REF_NAME:-dev}"
+          suffix="${TAG:-dev}"
           # `universal`, not `arm64`: make-app.sh builds both macOS slices so the
           # release runs on Intel too. Keep the name honest — it is the only thing
           # a downloader can check before installing.
           ditto -c -k --keepParent build/Sich.app "build/Sich-${suffix}-universal.zip"
-          shasum -a 256 "build/Sich-${suffix}-universal.zip"
+          shasum -a 256 "build/Sich-${suffix}-universal.zip" | tee "build/Sich-${suffix}-universal.zip.sha256"
           lipo -archs build/Sich.app/Contents/MacOS/sich
 
+      # Creates the release if the tag has none yet, otherwise attaches to the
+      # existing one (so a release drafted by hand keeps its notes).
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: app/build/Sich-*.zip
-          generate_release_notes: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" build/Sich-*.zip build/Sich-*.zip.sha256 --clobber
+          else
+            gh release create "$TAG" build/Sich-*.zip build/Sich-*.zip.sha256 \
+              --verify-tag --generate-notes
+          fi
 
       # Manual runs still leave the zip inspectable as a workflow artifact.
       - name: Upload workflow artifact
         if: "!startsWith(github.ref, 'refs/tags/v')"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: Sich.app
-          path: app/build/Sich-*.zip
+          path: |
+            app/build/Sich-*.zip
+            app/build/Sich-*.zip.sha256

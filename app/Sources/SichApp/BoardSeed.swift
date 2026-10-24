@@ -15,7 +15,6 @@ public struct BoardSeed: Sendable {
     let title: String?
     let projectDir: String
     let agent: CardAgent
-    let flow: CardFlow
     let state: CardState
     /// The scrollback line the fake terminal prints, so a drilled-in card shows
     /// believable content (e.g. the prompt a waiting session is blocked on).
@@ -29,7 +28,6 @@ public struct BoardSeed: Sendable {
     /// `SICH_CARD_ID` (identity binding). The card built for this seed must
     /// reuse it, or the binding points at nothing.
     let cardID: String?
-    let taskFolder: String?
     /// Deterministic duration fixtures for the screenshot harness. Production
     /// live-terminal seeds leave both at zero and start tracking on state changes.
     let accumulatedWorkingTime: TimeInterval
@@ -37,21 +35,19 @@ public struct BoardSeed: Sendable {
 
     init(
         sessionID: String, title: String? = nil, projectDir: String, agent: CardAgent,
-        flow: CardFlow, state: CardState, scrollback: String,
+        state: CardState, scrollback: String,
         commandOverride: [String]? = nil, cardID: String? = nil,
-        taskFolder: String? = nil, accumulatedWorkingTime: TimeInterval = 0,
+        accumulatedWorkingTime: TimeInterval = 0,
         currentWorkingTime: TimeInterval = 0
     ) {
         self.sessionID = sessionID
         self.title = title
         self.projectDir = projectDir
         self.agent = agent
-        self.flow = flow
         self.state = state
         self.scrollback = scrollback
         self.commandOverride = commandOverride
         self.cardID = cardID
-        self.taskFolder = taskFolder
         self.accumulatedWorkingTime = max(0, accumulatedWorkingTime)
         self.currentWorkingTime = max(0, currentWorkingTime)
     }
@@ -95,7 +91,7 @@ public struct BoardSeed: Sendable {
         let launch = "cd \(shellQuoted(projectDir)) && \(path)\(config)\(bind)exec \(shellQuoted(shell)) -il"
         return BoardSeed(
             sessionID: sessionID, title: title, projectDir: projectDir,
-            agent: agent, flow: .b, state: .idle, scrollback: "",
+            agent: agent, state: .idle, scrollback: "",
             commandOverride: ["/bin/sh", "-c", launch], cardID: id
         )
     }
@@ -131,7 +127,7 @@ extension BoardSeed {
             // `projectDir` is a display/label field for a remote card (no local path);
             // show the ssh destination so drill-in and the card subtitle read sensibly.
             projectDir: spec.target,
-            agent: agent, flow: .b, state: .idle, scrollback: "",
+            agent: agent, state: .idle, scrollback: "",
             commandOverride: argv, cardID: id
         )
     }
@@ -142,16 +138,16 @@ private func shellQuoted(_ s: String) -> String {
 }
 
 extension BoardSeed {
-    /// A representative spread across states and both flows — enough to populate
-    /// the board for a screenshot and to exercise the attention count (two cards
-    /// waiting/blocked). Mirrors the HELM POC's example cards.
+    /// A representative spread across states — enough to populate the board for a
+    /// screenshot and to exercise the attention count (two cards waiting/blocked).
+    /// Mirrors the HELM POC's example cards.
     public static let demo: [BoardSeed] = [
-        BoardSeed(sessionID: "saha/task-03", title: "Aggregate quota across pools", projectDir: "~/quota-aggregation", agent: .claude, flow: .a, state: .running, scrollback: "it3 · QA · 2/5 stories — running tests…", accumulatedWorkingTime: 4_320, currentWorkingTime: 17 * 60),
-        BoardSeed(sessionID: "saha/task-04", title: "Refactor the card schema", projectDir: "~/card-schema-refactor", agent: .claude, flow: .a, state: .blocked, scrollback: "agent paused — decision required: flat vs nested fields?", accumulatedWorkingTime: 3 * 3_600 + 42 * 60),
-        BoardSeed(sessionID: "saha/task-05", title: "Embed Ghostty focus handling", projectDir: "~/ghostty-focus", agent: .claude, flow: .a, state: .done, scrollback: "DoD passed — 5/5 stories green.", accumulatedWorkingTime: 4 * 3_600 + 12 * 60),
-        BoardSeed(sessionID: "feat/oauth-refresh", title: "Add OAuth token refresh", projectDir: "~/auth-service", agent: .codex, flow: .b, state: .waitingForInput, scrollback: "› proceed with token rotation? [y/N]", accumulatedWorkingTime: 54 * 60),
-        BoardSeed(sessionID: "feat/settings-panel", title: "Build the settings panel", projectDir: "~/desktop-app", agent: .claude, flow: .b, state: .running, scrollback: "editing SettingsView.swift…", accumulatedWorkingTime: 2 * 3_600, currentWorkingTime: 8 * 60),
-        BoardSeed(sessionID: "feat/export-csv", title: "Export reports to CSV", projectDir: "~/reports", agent: .gemini, flow: .b, state: .runningTests, scrollback: "pytest -q — 18 passed", accumulatedWorkingTime: 45 * 60, currentWorkingTime: 32 * 60),
-        BoardSeed(sessionID: "feat/keyboard-nav", title: "Keyboard navigation for the board", projectDir: "~/board-ui", agent: .codex, flow: .b, state: .idle, scrollback: "idle — awaiting next instruction"),
+        BoardSeed(sessionID: "feat/quota-pools", title: "Aggregate quota across pools", projectDir: "~/quota-aggregation", agent: .claude, state: .running, scrollback: "running tests — 2/5 suites green…", accumulatedWorkingTime: 4_320, currentWorkingTime: 17 * 60),
+        BoardSeed(sessionID: "feat/card-schema", title: "Refactor the card schema", projectDir: "~/card-schema-refactor", agent: .claude, state: .blocked, scrollback: "agent paused — decision required: flat vs nested fields?", accumulatedWorkingTime: 3 * 3_600 + 42 * 60),
+        BoardSeed(sessionID: "feat/ghostty-focus", title: "Embed Ghostty focus handling", projectDir: "~/ghostty-focus", agent: .claude, state: .done, scrollback: "All 5 suites green — ready for review.", accumulatedWorkingTime: 4 * 3_600 + 12 * 60),
+        BoardSeed(sessionID: "feat/oauth-refresh", title: "Add OAuth token refresh", projectDir: "~/auth-service", agent: .codex, state: .waitingForInput, scrollback: "› proceed with token rotation? [y/N]", accumulatedWorkingTime: 54 * 60),
+        BoardSeed(sessionID: "feat/settings-panel", title: "Build the settings panel", projectDir: "~/desktop-app", agent: .claude, state: .running, scrollback: "editing SettingsView.swift…", accumulatedWorkingTime: 2 * 3_600, currentWorkingTime: 8 * 60),
+        BoardSeed(sessionID: "feat/export-csv", title: "Export reports to CSV", projectDir: "~/reports", agent: .gemini, state: .runningTests, scrollback: "pytest -q — 18 passed", accumulatedWorkingTime: 45 * 60, currentWorkingTime: 32 * 60),
+        BoardSeed(sessionID: "feat/keyboard-nav", title: "Keyboard navigation for the board", projectDir: "~/board-ui", agent: .codex, state: .idle, scrollback: "idle — awaiting next instruction"),
     ]
 }

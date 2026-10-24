@@ -1,0 +1,20 @@
+name: Feature request
+description: Something Sich should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do while running several agent sessions, and where Sich gets in the way or falls short.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like to see
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Anything this must not break
+      description: For example, the app never spawns headless `claude -p`, and the two Anthropic quota pools are never summed. See docs/PRODUCT.md.

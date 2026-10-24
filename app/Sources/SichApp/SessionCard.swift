@@ -345,9 +345,7 @@ final class SessionCard: NSView, NSDraggingSource {
     }
 
     /// The top line: project identity left, harness badge in the top-right
-    /// corner. The flow is labelled only when it's the exception — a small
-    /// "auto" for an autonomous run; a terminal session (the default) carries
-    /// no flow text at all.
+    /// corner.
     private func headerRow() -> NSView {
         let row = NSStackView()
         row.spacing = 6
@@ -357,9 +355,6 @@ final class SessionCard: NSView, NSDraggingSource {
         if quotaBlock.isBlocked { row.addArrangedSubview(QuotaChip(block: quotaBlock, now: now)) }
         if let status = hostChipStatus() { row.addArrangedSubview(hostChip(status)) }
         row.addArrangedSubview(NSView())   // flexible spacer
-        if card.flow == .a {
-            row.addArrangedSubview(label("auto", font: BoardTheme.sansTiny, color: BoardTheme.textDim))
-        }
         row.addArrangedSubview(HarnessBadge(agent: card.agent))
         return row
     }

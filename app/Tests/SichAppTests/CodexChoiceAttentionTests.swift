@@ -16,7 +16,6 @@ struct CodexChoiceAttentionTests {
             return Session(
                 projectDir: seed.projectDir,
                 agentType: .codex,
-                flowTag: .interactive,
                 pty: sessionPTY,
                 state: .running
             )
@@ -45,7 +44,7 @@ struct CodexChoiceAttentionTests {
         shell.applySessions([
             BoardCard(
                 sessionID: "codex-hook-session", projectDir: card.projectDir,
-                agent: .codex, flow: .b, state: .waitingForInput,
+                agent: .codex, state: .waitingForInput,
                 updatedAt: Date(), boundCardID: card.id.uuidString
             )
         ])
@@ -65,7 +64,7 @@ struct CodexChoiceAttentionTests {
         shell.applySessions([
             BoardCard(
                 sessionID: "codex-hook-session", projectDir: card.projectDir,
-                agent: .codex, flow: .b, state: .waitingForInput,
+                agent: .codex, state: .waitingForInput,
                 updatedAt: Date(), boundCardID: card.id.uuidString
             )
         ])

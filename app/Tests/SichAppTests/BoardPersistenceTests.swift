@@ -54,8 +54,8 @@ struct BoardPersistenceTests {
         )
         seed = BoardSeed(
             sessionID: seed.sessionID, title: seed.title, projectDir: seed.projectDir,
-            agent: seed.agent, flow: seed.flow, state: state, scrollback: seed.scrollback,
-            commandOverride: seed.command, cardID: seed.cardID, taskFolder: seed.taskFolder
+            agent: seed.agent, state: state, scrollback: seed.scrollback,
+            commandOverride: seed.command, cardID: seed.cardID
         )
         return seed
     }
@@ -102,8 +102,7 @@ struct BoardPersistenceTests {
             let cardID = UUID()
             let store = SessionSnapshotStore(directory: storeDir)
             _ = try store.save(windows: [WindowSnapshot(panes: [PaneSnapshot(
-                sessionID: UUID(), cwd: work.path, agentType: agent, flowTag: .interactive,
-                childPID: nil, title: "Resume me", cardID: cardID, cardState: .idle,
+                sessionID: UUID(), cwd: work.path, agentType: agent, childPID: nil, title: "Resume me", cardID: cardID, cardState: .idle,
                 wasAlive: true)])])
 
             let relaunched = BoardShell()
@@ -133,7 +132,7 @@ struct BoardPersistenceTests {
             let pty = try! PTYSession(command: ["/bin/cat"])
             try! pty.start()
             return Session(projectDir: seed.projectDir, agentType: .claude,
-                           flowTag: .interactive, pty: pty, state: .running)
+                           pty: pty, state: .running)
         }
         defer { shell.e2eTeardown() }
         let card = try #require(
@@ -148,8 +147,8 @@ struct BoardPersistenceTests {
         // (``ArchiveTests/doneTaskArchivesOnRelaunch`` proves that leg).
         let store = SessionSnapshotStore(directory: storeDir)
         let saved = shell.persistOnTerminate(store: store)
-        #expect((saved?.windows.flatMap(\.panes) ?? []).isEmpty,
-                "a finished task holds no shell at quit and books no pane")
+        let panes = saved?.windows.flatMap(\.panes) ?? []
+        #expect(panes.isEmpty, "a finished task holds no shell at quit and books no pane")
 
         let record = try #require(
             BoardTaskStore(directory: bookDir).load()?.tasks.first { $0.id == cardID })
@@ -254,8 +253,7 @@ struct BoardPersistenceTests {
 
         let store = SessionSnapshotStore(directory: storeDir)
         let corpse = PaneSnapshot(
-            sessionID: UUID(), cwd: "/tmp", agentType: .claude, flowTag: .interactive,
-            childPID: 4242, wasAlive: false
+            sessionID: UUID(), cwd: "/tmp", agentType: .claude, childPID: 4242, wasAlive: false
         )
         _ = try store.save(windows: [WindowSnapshot(panes: [corpse])])
 

@@ -51,10 +51,10 @@ struct ProjectColorTests {
             _ = shell.buildContentForTesting()
             defer { shell.e2eTeardown() }
 
-            let localColor = BoardTheme.repoColor("/Users/x/sahaidachny")
+            let localColor = BoardTheme.repoColor("/Users/x/my-app")
             let spec = RemoteTmuxSpec(host: "studio.invalid", user: "roman",
                                       sessionName: "agent",
-                                      remoteDir: "/home/roman/work/sahaidachny")
+                                      remoteDir: "/home/roman/work/my-app")
             let card = try #require(shell.createRemoteTmuxSession(spec: spec))
 
             #expect(card.projectDir == "roman@studio.invalid",
@@ -91,7 +91,7 @@ struct ProjectColorTests {
             _ = first.buildContentForTesting()
             first.taskStore = BoardTaskStore(directory: bookDir)
             let spec = RemoteTmuxSpec(host: "studio.invalid", sessionName: "agent",
-                                      remoteDir: "~/work/sahaidachny")
+                                      remoteDir: "~/work/my-app")
             let card = try #require(first.createRemoteTmuxSession(spec: spec))
             let liveColor = BoardTheme.repoColor(for: card)
             first.e2eTeardown()
@@ -107,7 +107,7 @@ struct ProjectColorTests {
 
             let restored = try #require(second.cards.first { $0.id == card.id })
             #expect(BoardTheme.repoColor(for: restored) == liveColor)
-            #expect(liveColor == BoardTheme.repoColor("/Users/x/sahaidachny"),
+            #expect(liveColor == BoardTheme.repoColor("/Users/x/my-app"),
                     "the link is by trailing dir name, machine-independent")
         }
     }

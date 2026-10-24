@@ -69,29 +69,6 @@ from the board.
 
 ---
 
-## Saha flow
-
-Which rules apply depends on the *phase* the card is in, not on the flow tag
-alone.
-
-1. **Planning phase (interactive planning mode).** Planning is a human-driven
-   conversation in a terminal that produces the planning docs (`model/*.c4`,
-   `progress.yaml`, …). Status tracks **that terminal exactly like the
-   interactive flow**: agent producing → WORKING; agent stopped awaiting the
-   planner's answer → NEEDS YOU; 10-minute silent stall → NEEDS YOU; manual
-   DONE sticky. There is no special "planning" status.
-
-2. **Agentic phase (`saha run …` in the CLI).** The card mirrors the agentic
-   loop, which has only two live states:
-   - **Loop running → WORKING.** The execution loop is iterating
-     (implementer / QA / manager / DoD agents cycling). Individual agent
-     handoffs and waits inside the loop are still WORKING.
-   - **Loop stopped → NEEDS YOU.** The loop exited for *any* reason — DoD
-     reached, iteration cap, failure, interrupt. A stopped loop always needs a
-     human verdict (sign off, resume, or fix), so it never parks in QUEUE and
-     is never auto-guessed into DONE (rule: DONE stays manual, same as the
-     interactive flow).
-
 ---
 
 ## Cross-cutting invariants

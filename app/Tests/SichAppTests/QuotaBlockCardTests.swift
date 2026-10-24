@@ -9,7 +9,7 @@ final class QuotaBlockCardTests: XCTestCase {
     func testQuotaSpentChipRendersOnIdleCard() {
         let card = BoardCard(
             sessionID: "s-1", title: "Finance search", projectDir: "/tmp/p",
-            agent: .claude, flow: .b, state: .idle)
+            agent: .claude, state: .idle)
         let block = CardQuotaBlock.exhausted(reset: nil)
         let view = SessionCard(card: card, quotaBlock: block)
         let chip = allSubviews(of: view).first {
@@ -24,7 +24,7 @@ final class QuotaBlockCardTests: XCTestCase {
         let board = BoardView()
         let card = BoardCard(
             sessionID: "s-2", title: "Task", projectDir: "/tmp",
-            agent: .claude, flow: .b, state: .idle)
+            agent: .claude, state: .idle)
         board.render(cards: [card], quotaBlocks: [card.id: .exhausted(reset: nil)])
         board.layoutSubtreeIfNeeded()
         let view = board.cellForTesting(.queue)?.arrangedSubviews
@@ -57,7 +57,7 @@ final class HarnessSwitchTests: XCTestCase {
             }
             return Session(
                 projectDir: seed.projectDir, agentType: .claude,
-                flowTag: .interactive, pty: pty, state: .running)
+                pty: pty, state: .running)
         }
         return shell
     }
@@ -114,7 +114,7 @@ final class HarnessSwitchTests: XCTestCase {
         _ = shell.buildContentForTesting()
         let card = BoardCard(
             id: UUID(), sessionID: "remote/host/s-1", title: "Remote",
-            projectDir: "user@host", agent: .claude, flow: .b, state: .idle, host: "host")
+            projectDir: "user@host", agent: .claude, state: .idle, host: "host")
         shell.insertCardForTesting(card, remote: RemoteTmuxSpec(
             host: "host", user: "user", sessionName: "s-1", hostKind: .posix))
         shell.refreshForTesting()
@@ -151,11 +151,11 @@ final class HarnessSwitchTests: XCTestCase {
             }
             return Session(
                 projectDir: seed.projectDir, agentType: .claude,
-                flowTag: .interactive, pty: pty, state: .running)
+                pty: pty, state: .running)
         }
         let card = BoardCard(
             id: UUID(), sessionID: "remote/box/s-1", title: "Remote task",
-            projectDir: "user@box", agent: .claude, flow: .b, state: .idle, host: "box")
+            projectDir: "user@box", agent: .claude, state: .idle, host: "box")
         shell.insertCardForTesting(card, remote: RemoteTmuxSpec(
             host: "box", user: "user", sessionName: "s-1",
             remoteDir: "/srv/app", hostKind: .posix))

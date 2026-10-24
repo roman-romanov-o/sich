@@ -25,8 +25,5 @@ app/Frameworks/*.xcframework/**/*.a
 # smoke.c + RESULT.md stay tracked).
 spike/phase00-pty-smoke/smoke
 
-# Sahaidachny execution-loop runtime logs — transient, machine-local.
-.saha_logs/
-
 # Private transcript-derived datasets (contain work content)
 research/stop-replies/

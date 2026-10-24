@@ -248,7 +248,7 @@ struct QuotaPanelTests {
     func providerRowsShowHarnessLoad() throws {
         func c(_ agent: CardAgent, _ state: CardState) -> BoardCard {
             BoardCard(sessionID: UUID().uuidString, projectDir: "/tmp/p",
-                      agent: agent, flow: .b, state: state)
+                      agent: agent, state: state)
         }
         let panel = QuotaPanel(frame: NSRect(x: 0, y: 0, width: 460, height: 560))
         panel.render(

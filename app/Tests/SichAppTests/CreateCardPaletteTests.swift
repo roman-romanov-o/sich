@@ -10,11 +10,8 @@ import Testing
 /// genuine `leftMouseDown` for row activation. Never `performClick`/direct handler
 /// calls: this is the interaction-AC-binding-rule the repo has shipped broken before.
 @MainActor
-private func makePalette(
-    recents: [PaletteProject], folders: [TaskFolderSummary]
-) -> (CreateCardPalette, NSView, NSWindow) {
+private func makePalette(recents: [PaletteProject]) -> (CreateCardPalette, NSView, NSWindow) {
     let palette = CreateCardPalette(recents: recents)
-    palette.discoverFolders = { _ in folders }
     let root = NSView(frame: NSRect(x: 0, y: 0, width: 900, height: 640))
     palette.translatesAutoresizingMaskIntoConstraints = false
     root.addSubview(palette)
@@ -60,81 +57,16 @@ private func clickRow(_ view: NSView, root: NSView, window: NSWindow) throws {
     window.sendEvent(event)
 }
 
-private func summary(_ dir: URL, name: String, done: Int, total: Int) -> TaskFolderSummary {
-    TaskFolderSummary(
-        url: dir.appendingPathComponent("docs/tasks/\(name)"),
-        title: name, progress: .known(completed: done, total: total))
-}
-
 private let kReturn: UInt16 = 36
 
 // MARK: - Tests
 
-/// Saha "create new": Return advances project → harness → task (real key events); a real
-/// click on the "Create new" row fires `confirmSahaNew` with the typed title + chosen dir.
-@MainActor
-@Test func sahaNewPathReachesConfirmViaRealEvents() throws {
-    let proj = URL(fileURLWithPath: "/tmp/demo-project", isDirectory: true)
-    let folders = [summary(proj, name: "task-08-existing", done: 6, total: 8)]
-    let (palette, root, window) = makePalette(
-        recents: [PaletteProject(path: proj.path, activeCards: 2)], folders: folders)
-
-    var captured: (title: String, dir: String)?
-    palette.confirmSahaNew = { title, dir in captured = (title, dir); return nil }
-
-    #expect(palette.stage == .destination)
-    pressKey(kReturn, chars: "\r", in: window)     // "This Mac"
-    #expect(palette.stage == .project)
-    pressKey(kReturn, chars: "\r", in: window)     // pick the recent project
-    #expect(palette.stage == .harness)
-    pressKey(kReturn, chars: "\r", in: window)     // pick Claude Code → account stage
-    #expect(palette.stage == .agentAccount)
-    pressKey(kReturn, chars: "\r", in: window)     // default account → task stage
-    #expect(palette.stage == .task)
-
-    let sahaCard = try #require(palette.flowCards.last) // Saha is the second choice
-    try clickRow(sahaCard, root: root, window: window)
-    palette.nameField.stringValue = "Fix the login redirect"
-    let createRow = try #require(palette.navRows.last)   // last nav row = "Create new"
-    try clickRow(createRow, root: root, window: window)
-
-    let got = try #require(captured)
-    #expect(got.title == "Fix the login redirect")
-    #expect(got.dir == proj.path)
-}
-
-/// Saha "bind existing": Return to the task stage, then a real click on an existing
-/// folder row fires `confirmSahaExisting` with that folder's URL.
-@MainActor
-@Test func sahaExistingPathReachesConfirmViaRealEvents() throws {
-    let proj = URL(fileURLWithPath: "/tmp/demo-project", isDirectory: true)
-    let folders = [summary(proj, name: "task-08-existing", done: 6, total: 8)]
-    let (palette, root, window) = makePalette(
-        recents: [PaletteProject(path: proj.path, activeCards: 0)], folders: folders)
-
-    var boundFolder: URL?
-    palette.confirmSahaExisting = { folder, _ in boundFolder = folder; return nil }
-
-    pressKey(kReturn, chars: "\r", in: window)     // "This Mac"
-    pressKey(kReturn, chars: "\r", in: window)     // project
-    pressKey(kReturn, chars: "\r", in: window)     // harness → account
-    pressKey(kReturn, chars: "\r", in: window)     // default account → task
-    #expect(palette.stage == .task)
-
-    let sahaCard = try #require(palette.flowCards.last) // Saha is the second choice
-    try clickRow(sahaCard, root: root, window: window)
-    let existingRow = try #require(palette.navRows.first)   // first nav row = existing folder
-    try clickRow(existingRow, root: root, window: window)
-    #expect(boundFolder == folders[0].url)
-}
-
-/// Interactive terminal is the first/default path: the task stage starts without the
-/// Saha bind-list, and a real Return fires `confirmInteractive` with the chosen harness + dir.
+/// The task stage: a real Return fires `confirmInteractive` with the chosen harness + dir.
 @MainActor
 @Test func interactivePathReachesConfirmViaRealEvents() throws {
     let proj = URL(fileURLWithPath: "/tmp/demo-project", isDirectory: true)
     let (palette, _, window) = makePalette(
-        recents: [PaletteProject(path: proj.path, activeCards: 0)], folders: [])
+        recents: [PaletteProject(path: proj.path, activeCards: 0)])
 
     var captured: (title: String, dir: String, harness: CreateCardPalette.Harness, inWorktree: Bool)?
     palette.confirmInteractive = { title, dir, harness, inWorktree, _ in
@@ -147,13 +79,8 @@ private let kReturn: UInt16 = 36
     pressKey(kReturn, chars: "\r", in: window)     // default account → task
     #expect(palette.stage == .task)
 
-    let interactiveCard = try #require(palette.flowCards.first)
-    let sahaCard = try #require(palette.flowCards.last)
-    #expect(palette.flowCards.count == 2)
-    #expect(interactiveCard.isSelected, "interactive terminal is the selected first choice")
-    #expect(!sahaCard.isSelected, "Saha is the unselected second choice")
-    #expect(palette.navRows.isEmpty, "interactive terminal is selected by default")
-    #expect(palette.worktreeToggleForTesting != nil, "the first/default choice shows interactive options")
+    #expect(palette.navRows.isEmpty, "the task stage is a name field, not a list")
+    #expect(palette.worktreeToggleForTesting != nil, "the task stage shows the worktree option")
 
     palette.nameField.stringValue = "poke around"
     pressKey(kReturn, chars: "\r", in: window)     // Return in the field editor confirms
@@ -170,7 +97,7 @@ private let kReturn: UInt16 = 36
 @Test func cursorHarnessReachesInteractiveConfirmViaRealEvents() throws {
     let proj = URL(fileURLWithPath: "/tmp/demo-project", isDirectory: true)
     let (palette, _, window) = makePalette(
-        recents: [PaletteProject(path: proj.path, activeCards: 0)], folders: [])
+        recents: [PaletteProject(path: proj.path, activeCards: 0)])
 
     var captured: CreateCardPalette.Harness?
     palette.confirmInteractive = { _, _, harness, _, _ in captured = harness }
@@ -195,7 +122,7 @@ private let kReturn: UInt16 = 36
 @Test func antigravityHarnessReachesInteractiveConfirmViaRealEvents() throws {
     let proj = URL(fileURLWithPath: "/tmp/demo-project", isDirectory: true)
     let (palette, _, window) = makePalette(
-        recents: [PaletteProject(path: proj.path, activeCards: 0)], folders: [])
+        recents: [PaletteProject(path: proj.path, activeCards: 0)])
 
     var captured: CreateCardPalette.Harness?
     palette.confirmInteractive = { _, _, harness, _, _ in captured = harness }
@@ -220,7 +147,7 @@ private let kReturn: UInt16 = 36
 @Test func codexHarnessReachesInteractiveConfirmViaRealEvents() throws {
     let proj = URL(fileURLWithPath: "/tmp/demo-project", isDirectory: true)
     let (palette, _, window) = makePalette(
-        recents: [PaletteProject(path: proj.path, activeCards: 0)], folders: [])
+        recents: [PaletteProject(path: proj.path, activeCards: 0)])
 
     var captured: CreateCardPalette.Harness?
     palette.confirmInteractive = { _, _, harness, _, _ in captured = harness }
@@ -247,7 +174,7 @@ private let kReturn: UInt16 = 36
 @Test func worktreeToggleOptInReachesConfirm() throws {
     let proj = URL(fileURLWithPath: "/tmp/demo-project", isDirectory: true)
     let (palette, root, window) = makePalette(
-        recents: [PaletteProject(path: proj.path, activeCards: 0)], folders: [])
+        recents: [PaletteProject(path: proj.path, activeCards: 0)])
     var captured: Bool?
     palette.confirmInteractive = { _, _, _, inWorktree, _ in captured = inWorktree }
 
@@ -270,7 +197,7 @@ private let kReturn: UInt16 = 36
 @MainActor
 @Test func escapeAtFirstStageCancels() throws {
     let (palette, _, window) = makePalette(
-        recents: [PaletteProject(path: "/tmp/demo-project", activeCards: 0)], folders: [])
+        recents: [PaletteProject(path: "/tmp/demo-project", activeCards: 0)])
     var cancelled = false
     palette.onCancel = { cancelled = true }
     pressKey(53, chars: "\u{1b}", in: window)   // esc, carrying the character a real key sends

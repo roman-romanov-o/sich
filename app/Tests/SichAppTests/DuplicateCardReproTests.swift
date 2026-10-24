@@ -19,7 +19,7 @@ struct DuplicateCardReproTests {
         //    owned card yet it is NOT surfaced — the board shows only what we created.
         let observed = [
             BoardCard(sessionID: "e00c9e6d-x", projectDir: dir, agent: .claude,
-                      flow: .b, state: .running, updatedAt: Date()),
+                      state: .running, updatedAt: Date()),
         ]
         shell.applySessions(observed)
         #expect(shell.cards.isEmpty)   // external session, not ours → not shown
@@ -47,8 +47,7 @@ struct DuplicateCardReproTests {
         let taskCard = shell.cards.first { $0.title == "test" }!
 
         let observed = [BoardCard(
-            sessionID: "e00c9e6d-x", projectDir: dir, agent: .claude, flow: .b,
-            state: .running, updatedAt: Date(), boundCardID: taskCard.id.uuidString)]
+            sessionID: "e00c9e6d-x", projectDir: dir, agent: .claude, state: .running, updatedAt: Date(), boundCardID: taskCard.id.uuidString)]
         shell.applySessions(observed)
 
         #expect(shell.cards.count == 2, "no duplicate: \(shell.cards.map(\.sessionID))")
@@ -67,7 +66,7 @@ struct DuplicateCardReproTests {
 
         shell.applySessions([BoardCard(
             sessionID: "e00c9e6d-x", projectDir: dir, agent: .claude,
-            flow: .b, state: .running, updatedAt: Date())])
+            state: .running, updatedAt: Date())])
 
         #expect(shell.cards.count == 2, "extra card: \(shell.cards.map(\.sessionID))")
         #expect(!shell.cards.contains { $0.sessionID == "e00c9e6d-x" })
@@ -83,8 +82,7 @@ struct DuplicateCardReproTests {
         shell.createSession(title: "solo", projectDir: dir)
         let card = shell.cards[0]
         shell.applySessions([BoardCard(
-            sessionID: "s1", projectDir: dir, agent: .claude, flow: .b,
-            state: .waitingForInput, updatedAt: Date(), boundCardID: card.id.uuidString)])
+            sessionID: "s1", projectDir: dir, agent: .claude, state: .waitingForInput, updatedAt: Date(), boundCardID: card.id.uuidString)])
         #expect(shell.cards.count == 1)
         #expect(shell.cards[0].state == .waitingForInput)
     }

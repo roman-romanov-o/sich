@@ -25,15 +25,13 @@ struct SessionRegistryTests {
         let session = try registry.launch(
             command: ["/bin/sh", "-c", "sleep 2"],
             projectDir: "/tmp/proj",
-            agentType: .shell,
-            flowTag: .interactive
+            agentType: .shell
         )
         defer { session.pty.finish() }
 
         #expect(registry.session(id: session.id) === session)
         #expect(session.projectDir == "/tmp/proj")
         #expect(session.agentType == .shell)
-        #expect(session.flowTag == .interactive)
         #expect(session.state == .running)
     }
 

@@ -4,8 +4,8 @@
 # no localhost sidecar, no HTTP wire (DD-001 / DD-002). The Swift package lives
 # in `app/`; build it with `cd app && swift build`, test with `swift test`.
 #
-# Only repo-level tooling config remains below (ruff for any stray scripts, and
-# the saha task runner). There is no Python package to build or install here.
+# Only repo-level tooling config remains below (ruff for the one pytest that
+# drives the bash hook forwarder). There is no Python package to build or install here.
 
 [tool.ruff]
 line-length = 100
@@ -13,6 +13,3 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "C4", "RUF"]
-
-[tool.saha]
-tasks_dir = "docs/tasks"

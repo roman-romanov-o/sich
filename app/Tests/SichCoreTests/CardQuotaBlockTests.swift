@@ -7,7 +7,7 @@ import Testing
 struct CardQuotaBlockTests {
 
     private func card(agent: CardAgent = .claude) -> BoardCard {
-        BoardCard(sessionID: "s-1", projectDir: "/tmp/p", agent: agent, flow: .b, state: .idle)
+        BoardCard(sessionID: "s-1", projectDir: "/tmp/p", agent: agent, state: .idle)
     }
 
     private func gauge(
@@ -57,11 +57,9 @@ struct HarnessHandoffTests {
             priorAgent: .claude,
             priorAccountName: "personal",
             priorTranscriptPath: "/Users/me/.claude/projects/-tmp-app/s.jsonl",
-            workLogTail: "2026-01-01 | agent started working",
-            taskFolder: "/tmp/app/docs/tasks/task-1")
+            workLogTail: "2026-01-01 | agent started working")
         #expect(prompt.contains("Fix login"))
         #expect(prompt.contains("personal"))
-        #expect(prompt.contains("task-1"))
         #expect(prompt.contains("/Users/me/.claude/projects/-tmp-app/s.jsonl"))
         #expect(prompt.contains("read/search this file"))
         #expect(!prompt.contains("terminal output"))

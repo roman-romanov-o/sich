@@ -33,14 +33,4 @@ struct LaunchProjectDirTests {
         )
         #expect(dir == "/Users/tester/repo")
     }
-
-    @Test("saha scaffolder follows the selected project on Finder launch")
-    func sahaScaffolderFollowsSelectedProject() {
-        let project = URL(fileURLWithPath: "/Users/tester/chosen-project", isDirectory: true)
-
-        let script = BoardShell.sahaInitScript(in: project)
-
-        #expect(script.path == "/Users/tester/chosen-project/.claude/scripts/init_task.sh")
-        #expect(!script.path.hasPrefix("/.claude/"))
-    }
 }

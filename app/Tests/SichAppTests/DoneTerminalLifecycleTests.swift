@@ -32,7 +32,7 @@ struct DoneTerminalLifecycleTests {
                 MainActor.assumeIsolated { typed.text += String(decoding: bytes, as: UTF8.self) }
             }
             let session = Session(projectDir: seed.projectDir, agentType: .claude,
-                                  flowTag: .interactive, pty: pty, state: .running)
+                                  pty: pty, state: .running)
             MainActor.assumeIsolated {
                 typed.argv = seed.command
                 typed.session = session

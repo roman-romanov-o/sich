@@ -26,7 +26,7 @@ struct HookSessionStoreTests {
     private func ownedShell() -> BoardShell {
         let seed = BoardSeed(
             sessionID: "live-terminal", projectDir: "/work",
-            agent: .claude, flow: .b, state: .idle, scrollback: "ready"
+            agent: .claude, state: .idle, scrollback: "ready"
         )
         let shell = BoardShell(seeds: [seed])
         _ = shell.buildContentForTesting()
@@ -34,8 +34,7 @@ struct HookSessionStoreTests {
     }
 
     private func run(_ id: String, _ state: CardState, at: Date) -> BoardCard {
-        BoardCard(sessionID: id, projectDir: "/work", agent: .claude, flow: .b,
-                  state: state, updatedAt: at)
+        BoardCard(sessionID: id, projectDir: "/work", agent: .claude, state: state, updatedAt: at)
     }
 
     private func normalized(_ json: String, arrival: Date) -> SignalEvent {

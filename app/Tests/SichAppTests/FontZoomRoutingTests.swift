@@ -7,7 +7,7 @@ import Testing
 
 /// Checklist 18.08, item 3: the "Terminal − +" pill is gone; ⌘+/⌘− is the ONE
 /// zoom gesture everywhere, and it routes by context — board scale on the board,
-/// terminal points while a terminal fills the window (drill-in or planning mode).
+/// terminal points while a terminal fills the window (drill-in).
 @MainActor
 @Suite(.serialized)
 struct FontZoomRoutingTests {
@@ -27,7 +27,7 @@ struct FontZoomRoutingTests {
             let pty = try! PTYSession(command: ["/bin/cat"])
             try! pty.start()
             return Session(projectDir: seed.projectDir, agentType: .claude,
-                           flowTag: .interactive, pty: pty, state: .running)
+                           pty: pty, state: .running)
         }
         return shell
     }

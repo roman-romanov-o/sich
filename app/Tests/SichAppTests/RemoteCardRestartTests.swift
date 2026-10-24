@@ -39,8 +39,7 @@ struct RemoteCardRestartTests {
     /// without depending on a real ssh child still being alive at snapshot time.
     private func remoteSnapshot(cardID: UUID, spec: RemoteTmuxSpec) -> SessionSnapshot {
         SessionSnapshot(createdAt: Date(), windows: [WindowSnapshot(panes: [PaneSnapshot(
-            sessionID: UUID(), cwd: spec.target, agentType: .claude, flowTag: .interactive,
-            childPID: 4242, title: "\(spec.target) · \(spec.sessionName)",
+            sessionID: UUID(), cwd: spec.target, agentType: .claude, childPID: 4242, title: "\(spec.target) · \(spec.sessionName)",
             cardID: cardID, cardState: .idle, wasAlive: true,
             remote: RemoteSpecSnapshot(spec: spec))])])
     }
@@ -127,14 +126,12 @@ struct RemoteCardRestartTests {
     func restoredRemotePaneSendsNoAgentCommand() throws {
         let spec = RemoteTmuxSpec(host: "host.invalid", user: "roman", sessionName: "agent")
         let pane = PaneSnapshot(
-            sessionID: UUID(), cwd: spec.target, agentType: .claude, flowTag: .interactive,
-            childPID: 4242, wasAlive: true, remote: RemoteSpecSnapshot(spec: spec))
+            sessionID: UUID(), cwd: spec.target, agentType: .claude, childPID: 4242, wasAlive: true, remote: RemoteSpecSnapshot(spec: spec))
         #expect(BoardShell.restoredAgentCommand(for: pane) == nil)
         // The local pane it is derived from still resumes — this is a remote carve-out,
         // not a regression of the resume feature.
         let local = PaneSnapshot(
-            sessionID: UUID(), cwd: "/tmp", agentType: .claude, flowTag: .interactive,
-            childPID: 4242, wasAlive: true)
+            sessionID: UUID(), cwd: "/tmp", agentType: .claude, childPID: 4242, wasAlive: true)
         #expect(BoardShell.restoredAgentCommand(for: local) != nil)
     }
 

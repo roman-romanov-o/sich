@@ -85,13 +85,6 @@ public enum CardAgent: String, Sendable, Equatable, CaseIterable, Codable {
     }
 }
 
-/// Two-flow tag: `a` autonomous (saha / Agent SDK pool) vs. `b` interactive
-/// (human-launched subscription window). Mirrors the Python `Flow` enum.
-public enum CardFlow: String, Sendable, Equatable, CaseIterable {
-    case a = "A"
-    case b = "B"
-}
-
 /// One session's board card: identity + cmux metadata + current detected state
 /// (US-003 AC#2). A faithful Swift port of the (now-retired) Python `Card` model
 /// — pure data the board renders. Rendering, focus, and timing are the Swift app's
@@ -107,7 +100,6 @@ public struct BoardCard: Identifiable, Sendable, Equatable {
     public let title: String?
     public let projectDir: String
     public let agent: CardAgent
-    public let flow: CardFlow
     public let state: CardState
     /// When the card most recently entered the WORKING column. It survives the
     /// `running` ↔ `runningTests` sub-state change, and clears as soon as the card
@@ -135,9 +127,6 @@ public struct BoardCard: Identifiable, Sendable, Equatable {
     /// session id in the same project dir, and only this keeps them apart
     /// (US-004 AC-3).
     public let host: String?
-    /// Authoritative task artifact folder for saha-flow cards. This is captured at
-    /// creation time; it is never recomputed from the project's shared current-task.
-    public let taskFolder: String?
 
     public init(
         id: UUID = UUID(),
@@ -145,33 +134,27 @@ public struct BoardCard: Identifiable, Sendable, Equatable {
         title: String? = nil,
         projectDir: String,
         agent: CardAgent,
-        flow: CardFlow,
         state: CardState,
         workingSince: Date? = nil,
         accumulatedWorkingTime: TimeInterval = 0,
         updatedAt: Date = .distantPast,
         boundCardID: String? = nil,
-        host: String? = nil,
-        taskFolder: String? = nil
+        host: String? = nil
     ) {
         self.id = id
         self.sessionID = sessionID
         self.title = title
         self.projectDir = projectDir
         self.agent = agent
-        self.flow = flow
         self.state = state
         self.workingSince = state.isWorking ? workingSince : nil
         self.accumulatedWorkingTime = max(0, accumulatedWorkingTime)
         self.updatedAt = updatedAt
         self.boundCardID = boundCardID
         self.host = host
-        self.taskFolder = taskFolder.map {
-            ($0 as NSString).standardizingPath
-        }
     }
 
-    /// The same card in a new lifecycle state — identity, title, dir, agent, and flow
+    /// The same card in a new lifecycle state — identity, title, dir, and agent
     /// all preserved. Used when only a card's *state* changes (it moves columns): a
     /// manual column drop, or an owned terminal adopting the detected state of the
     /// agent running inside it. Keeps "what the card IS" intact while it moves.
@@ -188,9 +171,9 @@ public struct BoardCard: Identifiable, Sendable, Equatable {
         }
         return BoardCard(
             id: id, sessionID: sessionID, title: title, projectDir: projectDir,
-            agent: agent, flow: flow, state: newState, workingSince: nextWorkingSince,
+            agent: agent, state: newState, workingSince: nextWorkingSince,
             accumulatedWorkingTime: nextAccumulated, updatedAt: updatedAt,
-            boundCardID: boundCardID, host: host, taskFolder: taskFolder
+            boundCardID: boundCardID, host: host
         )
     }
 
@@ -210,9 +193,9 @@ public struct BoardCard: Identifiable, Sendable, Equatable {
     public func with(accumulatedWorkingTime duration: TimeInterval) -> BoardCard {
         BoardCard(
             id: id, sessionID: sessionID, title: title, projectDir: projectDir,
-            agent: agent, flow: flow, state: state, workingSince: workingSince,
+            agent: agent, state: state, workingSince: workingSince,
             accumulatedWorkingTime: duration, updatedAt: updatedAt,
-            boundCardID: boundCardID, host: host, taskFolder: taskFolder
+            boundCardID: boundCardID, host: host
         )
     }
 
@@ -220,9 +203,9 @@ public struct BoardCard: Identifiable, Sendable, Equatable {
     public func with(agent newAgent: CardAgent) -> BoardCard {
         BoardCard(
             id: id, sessionID: sessionID, title: title, projectDir: projectDir,
-            agent: newAgent, flow: flow, state: state, workingSince: workingSince,
+            agent: newAgent, state: state, workingSince: workingSince,
             accumulatedWorkingTime: accumulatedWorkingTime, updatedAt: updatedAt,
-            boundCardID: boundCardID, host: host, taskFolder: taskFolder
+            boundCardID: boundCardID, host: host
         )
     }
 
@@ -234,10 +217,10 @@ public struct BoardCard: Identifiable, Sendable, Equatable {
         return BoardCard(
             id: id, sessionID: sessionID,
             title: (trimmed?.isEmpty ?? true) ? nil : trimmed,
-            projectDir: projectDir, agent: agent, flow: flow, state: state,
+            projectDir: projectDir, agent: agent, state: state,
             workingSince: workingSince, accumulatedWorkingTime: accumulatedWorkingTime,
             updatedAt: updatedAt,
-            boundCardID: boundCardID, host: host, taskFolder: taskFolder
+            boundCardID: boundCardID, host: host
         )
     }
 }
