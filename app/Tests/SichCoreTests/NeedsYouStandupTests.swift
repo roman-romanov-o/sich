@@ -38,9 +38,9 @@ struct NeedsYouStandupTests {
         let young = UUID()
         let cards = [
             BoardCard(id: young, sessionID: "y", projectDir: "/y",
-                      agent: .claude, flow: .b, state: .waitingForInput),
+                      agent: .claude, state: .waitingForInput),
             BoardCard(id: old, sessionID: "o", projectDir: "/o",
-                      agent: .claude, flow: .b, state: .waitingForInput),
+                      agent: .claude, state: .waitingForInput),
         ]
         let since: [UUID: Date] = [
             old: now.addingTimeInterval(-20 * 3600),

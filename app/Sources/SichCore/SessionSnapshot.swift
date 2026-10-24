@@ -83,7 +83,6 @@ public struct PaneSnapshot: Codable, Equatable, Sendable {
     public let sessionID: UUID
     public let cwd: String
     public let agentType: AgentType
-    public let flowTag: FlowTag
     public let childPID: Int32?
     /// The Claude conversation id the pane was driving, if any — the resume token a
     /// restart replays with `claude --resume <uuid>`. Optional (decodes to nil from a
@@ -97,10 +96,6 @@ public struct PaneSnapshot: Codable, Equatable, Sendable {
     /// the same cwd. Optional (decodes nil from a pre-title snapshot → no version bump,
     /// same precedent as `claudeSessionID`) and nil for a card that was never named.
     public let title: String?
-    /// The saha task-artifact folder this card was bound to at creation, if any —
-    /// captured so a restored saha-flow card still points at its own task, not the
-    /// project's shifting current-task. Optional for the same back-compat reason.
-    public let taskFolder: String?
     /// The board card's stable `id` this pane belongs to. Persisted so a restored card
     /// keeps its identity instead of being minted a fresh UUID: the restored shell is
     /// re-opened carrying this same id as `SICH_CARD_ID`, which is what lets the
@@ -134,11 +129,9 @@ public struct PaneSnapshot: Codable, Equatable, Sendable {
         sessionID: UUID,
         cwd: String,
         agentType: AgentType,
-        flowTag: FlowTag,
         childPID: Int32?,
         claudeSessionID: UUID? = nil,
         title: String? = nil,
-        taskFolder: String? = nil,
         cardID: UUID? = nil,
         cardState: CardState? = nil,
         wasAlive: Bool? = nil,
@@ -148,11 +141,9 @@ public struct PaneSnapshot: Codable, Equatable, Sendable {
         self.sessionID = sessionID
         self.cwd = cwd
         self.agentType = agentType
-        self.flowTag = flowTag
         self.childPID = childPID
         self.claudeSessionID = claudeSessionID
         self.title = title
-        self.taskFolder = taskFolder
         self.cardID = cardID
         self.cardState = cardState
         self.wasAlive = wasAlive
@@ -162,15 +153,15 @@ public struct PaneSnapshot: Codable, Equatable, Sendable {
 
     /// The same pane with its app-level card metadata filled in. Core builds a pane from
     /// the session (which has no card notion); the app layer joins the card in by PTY
-    /// identity and stamps what only it knows — the card's id, name, column, and folder.
+    /// identity and stamps what only it knows — the card's id, name, and column.
     public func with(
-        cardID: UUID?, cardState: CardState?, title: String?, taskFolder: String?,
+        cardID: UUID?, cardState: CardState?, title: String?,
         claudeProfileID: UUID? = nil
     ) -> PaneSnapshot {
         PaneSnapshot(
-            sessionID: sessionID, cwd: cwd, agentType: agentType, flowTag: flowTag,
+            sessionID: sessionID, cwd: cwd, agentType: agentType,
             childPID: childPID, claudeSessionID: claudeSessionID,
-            title: title, taskFolder: taskFolder,
+            title: title,
             cardID: cardID, cardState: cardState, wasAlive: wasAlive, remote: remote,
             claudeProfileID: claudeProfileID ?? self.claudeProfileID
         )

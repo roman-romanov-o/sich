@@ -317,7 +317,7 @@ enum BoardTheme {
     /// same hue and never the hue of the project itself. A card linked via
     /// ``linkProject(card:toDirectory:)`` keys on the REMOTE directory's trailing
     /// name instead — the same key a local checkout of that project produces — so
-    /// "sahaidachny here" and "sahaidachny on the mac studio" read as one project.
+    /// "my-app here" and "my-app on the mac studio" read as one project.
     static func repoColor(for card: BoardCard) -> NSColor {
         if let key = projectLinkByCard[card.id] { return color(forKey: key) }
         return repoColor(card.projectDir)
@@ -368,7 +368,7 @@ enum BoardTheme {
     /// Display form of a card's project dir. A deep absolute path collapses to its
     /// leaf — the project name is the only useful part on a narrow card, and the
     /// parent (`/Users/.../MyProjects`) is noise that truncates the leaf off-screen.
-    /// A short relative path the seed author chose (`saha/task-03`, `~/quota`) is
+    /// A short relative path the seed author chose (`feat/quota`, `~/quota`) is
     /// already legible, so it's kept verbatim. Used where the leaf itself needs to
     /// stay unique (e.g. an untitled card's fallback headline) — for "which repo
     /// is this" chips, see ``projectLabel(_:)`` instead.

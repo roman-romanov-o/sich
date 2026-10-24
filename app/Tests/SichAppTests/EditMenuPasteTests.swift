@@ -77,6 +77,11 @@ struct EditMenuPasteTests {
     func cyrillicCmdVPerformsPasteOnce() throws {
         let spy = PasteSpy(frame: NSRect(x: 0, y: 0, width: 200, height: 40))
         let menu = LayoutAwareMenu(title: "Edit")
+        // This asserts ROUTING, not validation: with auto-enabling on, AppKit asks the
+        // target's `validateMenuItem(_:)` first, and `NSTextView` answers from whatever
+        // is on the real pasteboard right now — an empty clipboard would disable the
+        // item and the action would never run, making the test depend on the machine.
+        menu.autoenablesItems = false
         let paste = NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)),
                                keyEquivalent: "v")
         paste.target = spy

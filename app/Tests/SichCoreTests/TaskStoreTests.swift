@@ -28,7 +28,7 @@ struct TaskStoreTests {
             ),
             TaskRecord(
                 title: "Fix login redirect", placement: .board(.done), agent: "claude",
-                mode: .interactive, projectDir: "/tmp/proj", createdAt: createdAt,
+                projectDir: "/tmp/proj", createdAt: createdAt,
                 sessionRef: TaskSessionRef(claudeSessionID: UUID(), lastCwd: "/tmp/proj"),
                 accumulatedWorkingTime: 5_400
             ),

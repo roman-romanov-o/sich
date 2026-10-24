@@ -38,12 +38,12 @@ public struct GitWorktreeProvisioner: WorktreeProvisioning, @unchecked Sendable 
     private static let git = URL(fileURLWithPath: "/usr/bin/git")
     private static let maxSlugAttempts = 5
 
-    private let runner: any TaskScaffoldRunning
+    private let runner: any ProcessRunning
     private let baseDirectory: URL
     private let fileManager: FileManager
 
     public init(
-        runner: any TaskScaffoldRunning = FoundationTaskScaffoldRunner(),
+        runner: any ProcessRunning = FoundationProcessRunner(),
         baseDirectory: URL? = nil,
         fileManager: FileManager = .default
     ) {

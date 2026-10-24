@@ -1,6 +1,6 @@
 # Agentic Coding Mission Control — Product Requirements
 
-> Derived from the project's own decision record (design decisions, task-01 spec, and delivery state). This is a synthesis of choices already made, not a new proposal.
+> Derived from the project's own decision record. This is a synthesis of choices already made, not a new proposal.
 
 ## What we're building
 
@@ -18,17 +18,16 @@ The secondary, differentiating need: **subscription quota is now split into non-
 
 ## Core capabilities (the pillars)
 
-1. **Mission-control board** — every active session as a card with live state (idle / running / waiting-for-me / blocked) and a "who needs me now" attention signal. Board altitude is organized by *two flows*: autonomous (saha) vs. interactive.
+1. **Mission-control board** — every active session as a card with live state (idle / running / waiting-for-me / blocked) and a "who needs me now" attention signal.
 2. **Drill-in terminal** — click a card to get the real live terminal for that task *inside the app* (we own the PTY). Run `claude` in it directly.
 3. **Two-pool / multi-provider quota panel** — four distinct, **never-summed** gauges: the two Anthropic pools (interactive + Agent-SDK credit) plus Codex / Gemini. Reads Claude's real `/api/oauth/usage`.
-4. **Backlog → capacity allocator (the differentiator)** — given remaining quota per pool and historical burn, *suggest* which backlog item to start next and which launch command to use (`/saha:execute` → interactive pool when the window has headroom, else `saha run` / Codex / Gemini). Suggest-only, never auto-dispatch.
+4. **Backlog → capacity allocator (the differentiator)** — given remaining quota per pool and historical burn, *suggest* which backlog item to start next and on which harness/account (the Anthropic pool with headroom, else Codex / Gemini). Suggest-only, never auto-dispatch.
 
 ## Hard constraints (non-negotiable invariants)
 
 - **Watcher, not spawner** — the app itself never invokes `claude -p` / Agent SDK. An in-code pool firewall is mandatory (owning the PTY makes dispatch-creep easy).
 - **Never net the two Anthropic pools** — grouped visually but never summed; they don't fungibly trade.
 - **Launch is suggest-only** — auto-dispatch = spawner = wrong pool.
-- **saha integration = ingest its telemetry**, don't rebuild its loop. A saha task is a first-class card type.
 - **Faithful evidence for visual ACs** — pixel-level claims get human sign-off, not synthetic screenshots.
 
 ## Explicitly out of scope
@@ -41,12 +40,12 @@ The secondary, differentiating need: **subscription quota is now split into non-
 
 ## Current delivery state
 
-- **task-01** (all six stories US-001..006) — complete and human-signed-off: embedded terminal, drill-in, board, attention signal, state detection, two-pool quota.
-- **task-04** (live detection) — complete.
+- Shipped: embedded terminal, drill-in, board, attention signal, live hook-driven state detection, two-pool quota, multiple harnesses and accounts, remote tmux sessions, backlog and archive.
 - The assembled app (`swift run sich`) folds board + quota + live terminal into one window and polls live data.
-- Roadmap continues with **task-02** (estimation) and **task-03** (native core).
+- Not built yet: the capacity allocator's recommendation (pillar 4) beyond per-card quota blocks.
 
 ## References
 
-- `docs/tasks/task-01-initial/` — original stories, design decisions (DD-001 embed libghostty), task description
-- Decision record: watcher-not-spawner quota constraint · two-flow / two-pool allocator thesis · saha as the depth engine this cockpit sits atop
+- `docs/ARCHITECTURE.md` — how the pieces fit
+- `docs/OPERATING-RULES.md` — the pace and attention rules the board enforces
+- Decision record: watcher-not-spawner quota constraint · two-pool allocator thesis · DD-001 (embed libghostty, own the PTY)

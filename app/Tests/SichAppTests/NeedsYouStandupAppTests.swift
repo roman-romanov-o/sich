@@ -28,7 +28,7 @@ struct NeedsYouStandupAppTests {
             let pty = try! PTYSession(command: ["/bin/cat"])
             try! pty.start()
             return Session(projectDir: seed.projectDir, agentType: .claude,
-                           flowTag: .interactive, pty: pty, state: .running)
+                           pty: pty, state: .running)
         }
         defer { shell.e2eTeardown() }
 

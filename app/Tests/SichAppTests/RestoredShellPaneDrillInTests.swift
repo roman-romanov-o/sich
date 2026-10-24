@@ -33,8 +33,7 @@ struct RestoredShellPaneDrillInTests {
         let cardID = UUID()
         let store = SessionSnapshotStore(directory: storeDir)
         _ = try store.save(windows: [WindowSnapshot(panes: [PaneSnapshot(
-            sessionID: UUID(), cwd: work.path, agentType: .shell, flowTag: .interactive,
-            childPID: nil, title: "Test Cursor", cardID: cardID, cardState: .idle, wasAlive: true)])])
+            sessionID: UUID(), cwd: work.path, agentType: .shell, childPID: nil, title: "Test Cursor", cardID: cardID, cardState: .idle, wasAlive: true)])])
 
         let shell = BoardShell()
         let root = shell.buildContentForTesting()

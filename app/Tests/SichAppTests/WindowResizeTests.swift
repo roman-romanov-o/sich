@@ -24,15 +24,15 @@ struct WindowResizeTests {
             BoardCard(
                 sessionID: "q", title: "task-06-generations-per-link-longer-still",
                 projectDir: "/Users/x/MyProjects/barbershop-idea-testing",
-                agent: .claude, flow: .a, state: .idle),
+                agent: .claude, state: .idle),
             BoardCard(
                 sessionID: "w", title: "another-extremely-long-working-task-title",
                 projectDir: "/Users/x/MyProjects/agentic-coding-kanban",
-                agent: .codex, flow: .b, state: .running),
+                agent: .codex, state: .running),
             BoardCard(
                 sessionID: "n", title: "a-blocked-task-with-a-very-verbose-name",
-                projectDir: "/Users/x/MyProjects/sahaidachny",
-                agent: .gemini, flow: .a, state: .waitingForInput),
+                projectDir: "/Users/x/MyProjects/my-app",
+                agent: .gemini, state: .waitingForInput),
         ])
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1400, height: 860),
@@ -62,7 +62,7 @@ struct WindowResizeTests {
     @Test func drilledInWithLongQuotaHeaderStaysShrunk() throws {
         let shell = BoardShell(seeds: [
             BoardSeed(sessionID: "demo/one", projectDir: "~/demo",
-                      agent: .claude, flow: .b, state: .running, scrollback: "ready"),
+                      agent: .claude, state: .running, scrollback: "ready"),
         ])
         let root = shell.buildContentForTesting()
         let card = try #require(shell.cards.first)

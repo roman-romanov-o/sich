@@ -57,7 +57,7 @@ private func makeBoard(seeding: [(host: String?, path: String)] = []) -> Board {
         let pty = try! PTYSession(command: ["/bin/cat"])
         try! pty.start()
         let session = Session(projectDir: seed.projectDir, agentType: .claude,
-                              flowTag: .interactive, pty: pty, state: .running)
+                              pty: pty, state: .running)
         launched.set(seed.command, session: session)
         return session
     }
@@ -280,7 +280,6 @@ func paletteCardMatchesTheDirectlyConstructedCard() throws {
 
     #expect(fromPalette.sessionID == fromAlert.sessionID)
     #expect(fromPalette.projectDir == fromAlert.projectDir)
-    #expect(fromPalette.flow == fromAlert.flow)
     #expect(fromPalette.agent == fromAlert.agent)
     #expect(normalized(viaPalette.launched.argv, cardID: fromPalette.id)
             == normalized(direct.launched.argv, cardID: fromAlert.id),

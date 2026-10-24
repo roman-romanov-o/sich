@@ -25,22 +25,22 @@ struct BoardKeyboardNavTests {
 
     @Test("right arrow walks focus across cards; Return drills into the focused one")
     func arrowsThenReturnSelects() throws {
-        let a = BoardCard(sessionID: "a", projectDir: "~/a", agent: .claude, flow: .a, state: .running)
-        let b = BoardCard(sessionID: "b", projectDir: "~/b", agent: .claude, flow: .b, state: .idle)
+        let a = BoardCard(sessionID: "a", projectDir: "~/a", agent: .claude, state: .running)
+        let b = BoardCard(sessionID: "b", projectDir: "~/b", agent: .claude, state: .idle)
         let board = makeBoard(cards: [a, b])
         var selected: BoardCard?
         board.onSelect = { selected = $0 }
 
         #expect(board.acceptsFirstResponder)
-        board.keyDown(with: try key(124))   // → focuses first card (flow-A)
-        board.keyDown(with: try key(124))   // → second card (flow-B)
+        board.keyDown(with: try key(124))   // → focuses first card
+        board.keyDown(with: try key(124))   // → second card
         board.keyDown(with: try key(36))    // Return drills in
         #expect(selected?.id == b.id)
     }
 
     @Test("focus survives a re-render and drops when the card disappears")
     func focusSurvivesRerender() throws {
-        let a = BoardCard(sessionID: "a", projectDir: "~/a", agent: .claude, flow: .a, state: .running)
+        let a = BoardCard(sessionID: "a", projectDir: "~/a", agent: .claude, state: .running)
         let board = makeBoard(cards: [a])
         var selected: BoardCard?
         board.onSelect = { selected = $0 }

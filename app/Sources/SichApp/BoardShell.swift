@@ -29,8 +29,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// "DONE column need to be archived time to time").
     let archivePage = ArchivePage()
     let drillIn = DrillInPanel()
-    let planningMode = PlanningModeView()
-    private(set) var sahaTaskChooser: SahaTaskChooserView?
     private(set) var createPalette: CreateCardPalette?
     // The quota panel folded in as a right-side region — one assembled window
     // shows the board AND the four never-netted gauges (no separate binary).
@@ -105,7 +103,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     private var operatorHeldCardIDs: Set<UUID> = []
     private var selection = BoardSelection()
     private(set) var cards: [BoardCard] = []
-    private(set) var planningModeCardID: UUID?
     private var ptyByCard: [UUID: PTYSession] = [:]
     var launchOverrideForTesting: ((BoardSeed) -> Session?)?
     /// Durable task persistence — the task, not the session, is the root entity.
@@ -215,29 +212,9 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         if ProcessInfo.processInfo.environment["SICH_OPEN_PALETTE"] != nil {
             openCreatePalette()
             // Capture the richest stage without keystroke automation: jump straight in.
-            let stage = ProcessInfo.processInfo.environment["SICH_PALETTE_STAGE"]
-            if let dir = recentProjectDirs().first {
-                if stage == "task" {
-                    let real = TaskFolderIndex().discover(in: URL(fileURLWithPath: dir, isDirectory: true))
-                    let folders = real.isEmpty ? Self.demoTaskFolders(dir) : real
-                    createPalette?.presentSahaTaskStage(projectDir: dir, folders: folders)
-                } else if stage == "harness" {
-                    createPalette?.presentHarnessStage(projectDir: dir)
-                }
-            }
-            if let n = window?.windowNumber { FileHandle.standardError.write(Data("SICH_WINDOW=\(n)\n".utf8)) }
-        }
-        // Capture seam: `SICH_OPEN_PLANNING=<taskFolder>` enters Planning Mode against
-        // a real task folder so a screenshot can verify the markdown doc pane renders.
-        if let folder = ProcessInfo.processInfo.environment["SICH_OPEN_PLANNING"] {
-            let dir = recentProjectDirs().first ?? folder
-            enterPlanningMode(BoardCard(
-                sessionID: "planning", projectDir: dir, agent: .claude,
-                flow: .a, state: .idle, taskFolder: folder))
-            // Capture seam: `SICH_OPEN_FILEREF=<ref>` drives straight into the file viewer
-            // so a screenshot can verify the "← doc" back affordance.
-            if let ref = ProcessInfo.processInfo.environment["SICH_OPEN_FILEREF"] {
-                planningMode.openFileRef(ref)
+            if ProcessInfo.processInfo.environment["SICH_PALETTE_STAGE"] == "harness",
+               let dir = recentProjectDirs().first {
+                createPalette?.presentHarnessStage(projectDir: dir)
             }
             if let n = window?.windowNumber { FileHandle.standardError.write(Data("SICH_WINDOW=\(n)\n".utf8)) }
         }
@@ -414,7 +391,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         if pumpTick % Int(pumpHz) == 0 { reconcileDeadSessions() }   // ~1s cadence
         var sawData = false
         for (id, pty) in ptyByCard
-        where id != drilledInCardID && id != planningModeCardID && pty.masterFD >= 0 {
+        where id != drilledInCardID && pty.masterFD >= 0 {
             pty.setNonBlocking()          // idempotent
             if case .data = pty.pumpAvailable() { sawData = true }
         }
@@ -643,7 +620,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// back as a session-less card in its durable column — the task outlives its shell.
     private func adoptBoardRecord(_ record: TaskRecord, state: CardState) {
         taskMetaByCard[record.id] = CardTaskMeta(
-            details: record.details, mode: record.mode, createdAt: record.createdAt,
+            details: record.details, createdAt: record.createdAt,
             sessionRef: record.sessionRef, remote: record.remote?.spec,
             claudeProfileID: record.claudeProfileID,
             needsYouDeferredUntil: record.needsYouDeferredUntil
@@ -673,10 +650,8 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             title: record.title.isEmpty ? nil : record.title,
             projectDir: record.projectDir ?? NSHomeDirectory(),
             agent: record.agent.flatMap(CardAgent.init(rawValue:)) ?? .claude,
-            flow: record.mode == .saha ? .a : .b,
             state: state,
-            accumulatedWorkingTime: record.accumulatedWorkingTime ?? 0,
-            taskFolder: record.taskFolder
+            accumulatedWorkingTime: record.accumulatedWorkingTime ?? 0
         ))
     }
 
@@ -704,9 +679,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             details: meta.details,
             placement: .board(persistedRestartState(for: card)),
             agent: card.agent.rawValue,
-            mode: meta.mode ?? (card.flow == .a ? .saha : .interactive),
             projectDir: card.projectDir,
-            taskFolder: card.taskFolder,
             createdAt: meta.createdAt,
             sessionRef: sessionRef(for: card),
             accumulatedWorkingTime: card.totalWorkingTime(),
@@ -758,7 +731,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     /// The registry snapshot, enriched with each pane's app-level card metadata (identity,
-    /// human title, column, saha task folder) so a restart brings the *task* back, not just
+    /// human title, column) so a restart brings the *task* back, not just
     /// an unnamed shell at the same cwd. Core builds panes from sessions and has no notion
     /// of a card, so the join belongs here in the app layer.
     private func enrichedSnapshotWindows() -> [WindowSnapshot] {
@@ -771,7 +744,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         guard let card = card(forSessionID: pane.sessionID) else { return pane }
         return pane.with(
             cardID: card.id, cardState: persistedRestartState(for: card),
-            title: card.title, taskFolder: card.taskFolder,
+            title: card.title,
             claudeProfileID: taskMetaByCard[card.id]?.claudeProfileID
         )
     }
@@ -839,7 +812,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         // after exactly one restart, and its resume command would never be sent again.
         guard let session = try? registry.launch(
             command: command, projectDir: pane.cwd,
-            agentType: pane.snapshot.agentType, flowTag: pane.snapshot.flowTag,
+            agentType: pane.snapshot.agentType,
             rows: TerminalGeometry.preferred.rows, cols: TerminalGeometry.preferred.cols
         ) else { return }
         ShellSignalBridge.attachCwdReporting(to: session)   // US-004: live OSC-7 cwd
@@ -868,9 +841,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             sessionID: Self.restoredSessionID(for: pane.snapshot),
             title: pane.snapshot.title, projectDir: pane.cwd,
             agent: Self.cardAgent(for: pane.snapshot.agentType),
-            flow: Self.cardFlow(for: pane.snapshot.flowTag),
-            state: pane.snapshot.cardState ?? .idle,
-            taskFolder: pane.snapshot.taskFolder
+            state: pane.snapshot.cardState ?? .idle
         )
         cards.append(card)
         if card.state == .done {
@@ -1046,10 +1017,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         CardAgent(rawValue: type.rawValue) ?? .claude
     }
 
-    private static func cardFlow(for tag: FlowTag) -> CardFlow {
-        tag == .backlog ? .a : .b
-    }
-
     /// Where the bundled shell-integration files live (Application Support), resolved
     /// once. Falls back to the temp dir if Application Support is unavailable.
     private static func shellIntegrationRoot() -> URL {
@@ -1098,17 +1065,11 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         return root
     }
 
-    /// Test seam (US-004 AC2): is this PTY session held by the pool-firewalled
-    /// registry? Lets a test prove the planning terminal is registered exactly once
-    /// through the normal path — no bypass, no second spawn.
+    /// Test seam: is this PTY session held by the pool-firewalled registry?
+    // periphery:ignore - test-only seam (scan runs with exclude_tests)
     func isRegistered(_ pty: PTYSession) -> Bool {
         registry.all.contains { $0.pty === pty }
     }
-
-    /// Test seam: open Planning Mode on a card through the exact production entry
-    /// (attaches the registered pty, hides the board) — the real gesture handlers call
-    /// this same method.
-    func enterPlanningModeForTesting(_ card: BoardCard) { enterPlanningMode(card) }
 
     // periphery:ignore - test-only seam (scan runs with exclude_tests)
     func taskMetaForTesting(_ cardID: UUID) -> CardTaskMeta? { taskMetaByCard[cardID] }
@@ -1141,22 +1102,13 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     private func seedSessions() {
         for seed in seeds {
             guard let session = launch(seed) else { continue }
-            let inferredTaskFolder: String?
-            if seed.flow == .a, seed.taskFolder == nil {
-                inferredTaskFolder = TaskFolderIndex().inferredFolder(
-                    in: URL(fileURLWithPath: seed.projectDir, isDirectory: true)
-                )?.path
-            } else {
-                inferredTaskFolder = seed.taskFolder
-            }
             let card = BoardCard(
                 id: seed.cardID.flatMap(UUID.init(uuidString:)) ?? UUID(),
                 sessionID: seed.sessionID, title: seed.title, projectDir: seed.projectDir,
-                agent: seed.agent, flow: seed.flow, state: seed.state,
+                agent: seed.agent, state: seed.state,
                 workingSince: seed.state.isWorking
                     ? Date().addingTimeInterval(-seed.currentWorkingTime) : nil,
-                accumulatedWorkingTime: seed.accumulatedWorkingTime,
-                taskFolder: inferredTaskFolder
+                accumulatedWorkingTime: seed.accumulatedWorkingTime
             )
             cards.append(card)
             ptyByCard[card.id] = session.pty
@@ -1177,7 +1129,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             command: seed.command,
             projectDir: seed.projectDir,
             agentType: AgentType(rawValue: seed.agent.rawValue) ?? .shell,
-            flowTag: seed.flow == .a ? .backlog : .interactive,
             // Item 8 (18.08): spawn at the drill-in's remembered grid so the first
             // entry is a no-op resize — no reflow gap, the screen paints instantly.
             rows: TerminalGeometry.preferred.rows,
@@ -1235,9 +1186,9 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     @objc private func decreaseFontMenuAction() { zoomFont(direction: -1) }
 
     /// Route ⌘+/⌘− to whatever the operator is looking at: the terminal font while a
-    /// terminal takeover (drill-in or planning) is up, board typography otherwise.
+    /// terminal takeover (drill-in) is up, board typography otherwise.
     func zoomFont(direction: CGFloat) {
-        if drilledInCardID != nil || planningModeCardID != nil {
+        if drilledInCardID != nil {
             changeTerminalFont(by: direction)
         } else {
             changeBoardFont(by: direction * 0.1)
@@ -1274,7 +1225,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// the key — unlike ⌘-combos, a Control-modified key isn't reliably routed through
     /// `performKeyEquivalent`, and plain Tab belongs to the child. `.flagsChanged` is
     /// watched too: the ⌃ release is what commits the highlighted task. Works
-    /// identically from the board, drill-in, and planning mode.
+    /// identically from the board and drill-in.
     private func installTaskSwitchMonitor() {
         taskSwitchMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.keyDown, .flagsChanged]
@@ -1435,8 +1386,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         dockQuota(QuotaLayout.dock(forContentSize: size))
         drillIn.isHidden = true
         layoutDrillIn(in: root)
-        planningMode.isHidden = true
-        layoutFullWindow(planningMode, in: root)
         backlogPage.isHidden = true
         layoutFullWindow(backlogPage, in: root)
         archivePage.isHidden = true
@@ -1539,11 +1488,8 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         backlogPage.onAdd = { [weak self] in self?.promptAddBacklogTask() }
         backlogPage.onPromote = { [weak self] record in
             guard let self else { return }
-            // A successful promote puts a card on the board — follow it there. A
-            // saha promote instead lands in planning mode, which has already taken
-            // the whole window (and hidden this page); restoring board chrome on
-            // top of it would clobber the takeover, so only follow when it didn't.
-            if self.promptPromoteBacklogTask(record) != nil, self.planningMode.isHidden {
+            // A successful promote puts a card on the board — follow it there.
+            if self.promptPromoteBacklogTask(record) != nil {
                 self.hideBacklogPage()
             }
         }
@@ -1554,7 +1500,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             self?.reviveArchivedTask(id: record.id)
         }
         drillIn.onClose = { [weak self] in self?.returnToBoard() }
-        planningMode.onReturn = { [weak self] in self?.returnToBoard() }
     }
 
     private func changeBoardFont(by delta: CGFloat) {
@@ -1603,7 +1548,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     private func changeTerminalFont(by delta: CGFloat) {
         terminalFontSize = min(28, max(12, terminalFontSize + delta))
         drillIn.updateTerminalFontSize(terminalFontSize)
-        planningMode.updateTerminalFontSize(terminalFontSize)
     }
 
     /// The add-task affordance (⌘N): open the keyboard-first create palette —
@@ -1613,15 +1557,12 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     func promptAndCreateSession() { openCreatePalette() }
 
     /// Mount ``CreateCardPalette`` full-window and wire its confirm closures to the
-    /// card-creation logic (which owns the pool firewall + saha binding invariants).
+    /// card-creation logic (which owns the pool firewall + binding invariants).
     /// The palette is a dumb view; every side effect flows back through here.
     func openCreatePalette() {
         let palette = CreateCardPalette(
             recents: paletteRecents(), agentAccounts: agentAccountStore.accounts)
         palette.browse = { [weak self] in Self.chooseFolder(relativeTo: self?.window) }
-        palette.discoverFolders = { dir in
-            TaskFolderIndex().discover(in: URL(fileURLWithPath: dir, isDirectory: true))
-        }
         palette.onCancel = { [weak self] in self?.dismissCreatePalette() }
         palette.addAgentAccount = { [weak self] agent in
             self?.promptAddAgentAccount(agent: agent, from: palette)
@@ -1639,12 +1580,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             self.rememberProjectDir(dir)
             self.dismissCreatePalette()
         }
-        palette.confirmSahaNew = { [weak self] title, dir in
-            self?.completeSahaNew(title: title, dir: dir)
-        }
-        palette.confirmSahaExisting = { [weak self] folder, dir in
-            self?.completeSahaExisting(folder: folder, dir: dir)
-        }
         palette.windowsHosts = windowsRemoteHosts
         palette.confirmRemote = { [weak self] title, destination, dir, windows in
             self?.completeRemoteCard(
@@ -1655,37 +1590,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         guard let root = boardView.superview else { return }
         layoutFullWindow(palette, in: root)
         palette.focusStage()
-    }
-
-    /// saha "Create new" from the palette: scaffold + bind + enter planning. Returns an
-    /// error string for the palette to show, or nil on success (planning is now up).
-    private func completeSahaNew(title: String, dir: String) -> String? {
-        let projectDirectory = URL(fileURLWithPath: dir, isDirectory: true)
-        do {
-            guard let card = try createSahaSession(
-                title: title,
-                projectDirectory: projectDirectory,
-                script: Self.sahaInitScript(in: projectDirectory),
-                scaffolder: TaskScaffolder(runner: FoundationTaskScaffoldRunner())
-            ) else { return "Could not launch the planning terminal." }
-            rememberProjectDir(dir)
-            dismissCreatePalette()
-            _ = card
-            return nil
-        } catch {
-            return error.localizedDescription
-        }
-    }
-
-    /// saha "bind existing folder" from the palette: bind + enter planning.
-    private func completeSahaExisting(folder: URL, dir: String) -> String? {
-        guard let card = createSahaExisting(
-            folder: folder, projectDirectory: URL(fileURLWithPath: dir, isDirectory: true)
-        ) else { return "Could not launch the planning terminal." }
-        rememberProjectDir(dir)
-        dismissCreatePalette()
-        _ = card
-        return nil
     }
 
     /// The palette's remote path (US-009 AC-3). It parses the SAME spec and calls the
@@ -1809,10 +1713,10 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
                   let session = launch(seed) else { return }
             let card = BoardCard(
                 id: cardID, sessionID: seed.sessionID, title: seed.title,
-                projectDir: seed.projectDir, agent: account.agent, flow: .b, state: .idle)
+                projectDir: seed.projectDir, agent: account.agent, state: .idle)
             cards.append(card)
             ptyByCard[card.id] = session.pty
-            taskMetaByCard[card.id] = CardTaskMeta(mode: .interactive, remote: spec, claudeProfileID: account.id)
+            taskMetaByCard[card.id] = CardTaskMeta(remote: spec, claudeProfileID: account.id)
             TmuxControlBridge.attachIfNeeded(to: session)
             session.pty.sendWhenReady(Array(AgentAccountBackend.loginCommand(for: account, localShim: false).utf8))
             RemoteHookStatus.shared.register(spec)
@@ -1912,25 +1816,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         return local + recentFolders.load().filter { $0.host != nil }
     }
 
-    /// Fixture folders so a capture of the task stage shows the full bind-list (progress
-    /// bars + "Create new") even in a repo with no `docs/tasks`. Capture-seam only.
-    private static func demoTaskFolders(_ dir: String) -> [TaskFolderSummary] {
-        let base = URL(fileURLWithPath: dir, isDirectory: true).appendingPathComponent("docs/tasks")
-        return [
-            TaskFolderSummary(url: base.appendingPathComponent("task-08-native-saha-planning"),
-                              title: "task-08-native-saha-planning", progress: .known(completed: 6, total: 8)),
-            TaskFolderSummary(url: base.appendingPathComponent("task-05-turn-diffs"),
-                              title: "task-05-turn-diffs", progress: .known(completed: 4, total: 4)),
-        ]
-    }
-
-    /// The project's task-folder scaffolder (`.claude/scripts/init_task.sh`). Resolve it
-    /// from the directory selected for this task, not the app's launch directory: Finder
-    /// launches GUI apps with cwd `/`, which otherwise produces `/.claude/scripts/...`.
-    nonisolated static func sahaInitScript(in projectDirectory: URL) -> URL {
-        projectDirectory.appendingPathComponent(".claude/scripts/init_task.sh")
-    }
-
     /// The native macOS folder chooser, run as a nested modal over the palette.
     /// ponytail: nested modal is fine for a one-shot picker; AppKit stacks them.
     private static func chooseFolder(relativeTo window: NSWindow?) -> String? {
@@ -1980,8 +1865,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         projectDir: String? = nil,
         startClaude: Bool = false,
         autoStartAgent: CardAgent? = nil,
-        flow: CardFlow = .b,
-        taskFolder: String? = nil,
         inWorktree: Bool = false,
         claudeProfileID: UUID? = nil
     ) -> BoardCard? {
@@ -2013,8 +1896,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         let card = BoardCard(
             id: cardID,
             sessionID: seed.sessionID, title: seed.title, projectDir: seed.projectDir,
-            agent: seed.agent, flow: flow, state: seed.state,
-            taskFolder: taskFolder
+            agent: seed.agent, state: seed.state
         )
         cards.append(card)
         ptyByCard[card.id] = session.pty
@@ -2042,10 +1924,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             _ = session.pty.send(Array(Self.startAntigravityCommand().utf8))
         }
         if taskMetaByCard[card.id] == nil {
-            taskMetaByCard[card.id] = CardTaskMeta(
-                mode: flow == .a ? .saha : .interactive,
-                claudeProfileID: profileID
-            )
+            taskMetaByCard[card.id] = CardTaskMeta(claudeProfileID: profileID)
         } else if let profileID {
             taskMetaByCard[card.id]?.claudeProfileID = profileID
         }
@@ -2085,14 +1964,14 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         let card = BoardCard(
             id: cardID,
             sessionID: seed.sessionID, title: seed.title, projectDir: seed.projectDir,
-            agent: seed.agent, flow: seed.flow, state: seed.state
+            agent: seed.agent, state: seed.state
         )
         cards.append(card)
         ptyByCard[card.id] = session.pty
         // The spec, not the argv: this is what a quit persists and the next launch
         // rebuilds the same attach from (US-006). It lives on the card's meta too,
         // so the every-mutation task book carries it even if the session dies.
-        taskMetaByCard[card.id] = CardTaskMeta(mode: .interactive, remote: spec)
+        taskMetaByCard[card.id] = CardTaskMeta(remote: spec)
         // Same project, other machine: the remote dir's trailing name links this
         // card's hue to the local checkout of the same project.
         BoardTheme.linkProject(card: card.id, toDirectory: spec.remoteDir)
@@ -2138,111 +2017,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         let presence = RemoteSessionProbe.presence(
             of: key, cardID: cardID, spec: spec, runner: remoteSessionRunner)
         return presence == .foreign ? .foreignSession(key) : nil
-    }
-
-    @discardableResult
-    func createSahaSession(
-        title: String,
-        projectDirectory: URL,
-        script: URL,
-        scaffolder: any TaskFolderScaffolding
-    ) throws -> BoardCard? {
-        let taskFolder = try scaffolder.create(
-            title: title, projectDirectory: projectDirectory, script: script
-        )
-        guard let card = createSession(
-            title: title,
-            projectDir: projectDirectory.path,
-            startClaude: true,   // saha steps are Claude Code slash-commands — they need claude, not a bare shell
-            flow: .a,
-            taskFolder: taskFolder.path
-        ) else { return nil }
-        enterPlanningMode(card)
-        return card
-    }
-
-    /// Bind a saha card to an ALREADY-scaffolded task folder (the "existing folder"
-    /// path) and drop straight into planning. Shared by the create palette and the
-    /// legacy chooser so the flow-.a binding invariants live in one place.
-    @discardableResult
-    func createSahaExisting(folder: URL, projectDirectory: URL) -> BoardCard? {
-        guard let card = createSession(
-            title: folder.lastPathComponent,
-            projectDir: projectDirectory.path,
-            startClaude: true,   // saha steps are Claude Code slash-commands — they need claude, not a bare shell
-            flow: .a,
-            taskFolder: folder.path
-        ) else { return nil }
-        enterPlanningMode(card)
-        return card
-    }
-
-    /// Presents the real saha folder chooser and wires both choices to card
-    /// insertion. A failed scaffold or terminal launch leaves the board unchanged.
-    /// ponytail: retained as the invariant harness for the saha binding rules
-    /// (TC-E2E-001b et al.); the production create entry is ``CreateCardPalette``.
-    func beginSahaCreation(
-        projectDirectory: URL,
-        script: URL,
-        scaffolder: any TaskFolderScaffolding
-    ) {
-        let folders = TaskFolderIndex().discover(in: projectDirectory)
-        let chooser = SahaTaskChooserView(folders: folders)
-        chooser.bindFolderURLs(folders)
-        chooser.onChooseExisting = { [weak self, weak chooser] folder in
-            guard let self else { return }
-            guard let card = self.createSahaExisting(folder: folder, projectDirectory: projectDirectory) else {
-                chooser?.show(error: "Could not launch the planning terminal.")
-                return
-            }
-            chooser?.removeFromSuperview()
-            self.sahaTaskChooser = nil
-            _ = card
-        }
-        chooser.onCreateNew = { [weak self, weak chooser] title in
-            guard let self else { return }
-            do {
-                guard let card = try self.createSahaSession(
-                    title: title,
-                    projectDirectory: projectDirectory,
-                    script: script,
-                    scaffolder: scaffolder
-                ) else {
-                    chooser?.show(error: "Could not launch the planning terminal.")
-                    return
-                }
-                chooser?.removeFromSuperview()
-                self.sahaTaskChooser = nil
-                self.enterPlanningMode(card)
-            } catch {
-                chooser?.show(error: error.localizedDescription)
-            }
-        }
-        sahaTaskChooser?.removeFromSuperview()
-        sahaTaskChooser = chooser
-        guard let root = boardView.superview else { return }
-        layoutFullWindow(chooser, in: root)
-    }
-
-    private func enterPlanningMode(_ card: BoardCard) {
-        noteFocus(card.id)
-        planningModeCardID = card.id
-        boardView.isHidden = true
-        backlogPage.isHidden = true
-        archivePage.isHidden = true
-        quota.isHidden = true
-        drillIn.isHidden = true
-        planningMode.show(card: card)
-        // Mount the card's already-registered interactive session as the planning
-        // terminal (US-004 AC2) — reused, never a new spawn. Its surface now owns the
-        // fd, so the background pump must skip it (one reader per fd).
-        if let pty = ptyByCard[card.id] {
-            planningMode.attach(session: pty, terminalFontSize: terminalFontSize)
-        }
-        planningMode.isHidden = false
-        if let surface = planningMode.terminalSurface {
-            window?.makeFirstResponder(surface)
-        }
     }
 
     /// A stable, readable session id derived from the task title ("Fix login" →
@@ -2315,50 +2089,30 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         }
     }
 
-    /// Move a backlog task onto the board with an explicit launch choice — agent
-    /// (Claude/Codex) + mode (interactive terminal vs saha planning). On success the
+    /// Move a backlog task onto the board with an explicit launch choice — the agent
+    /// (Claude/Codex/Cursor/Antigravity). On success the
     /// task leaves the backlog and its description rides along on the new card's
     /// durable record; a failed launch leaves the backlog untouched, so a task is
     /// never lost to a spawn error.
     @discardableResult
     func promoteBacklogTask(
-        id: UUID, agent: CardAgent = .claude, mode: TaskMode = .interactive,
-        inWorktree: Bool = false
+        id: UUID, agent: CardAgent = .claude, inWorktree: Bool = false
     ) -> BoardCard? {
         guard let idx = backlogTasks.firstIndex(where: { $0.id == id }) else { return nil }
         let record = backlogTasks[idx]
-        guard let card = launchPromotedTask(record, agent: agent, mode: mode, inWorktree: inWorktree)
-        else { return nil }
+        guard let card = createSession(
+            title: record.title, projectDir: record.projectDir,
+            autoStartAgent: agent, inWorktree: inWorktree
+        ) else { return nil }
         backlogTasks.remove(at: idx)
         // The card id supersedes the backlog id, but the task's description and
         // original creation time survive the promotion on the card's record.
         taskMetaByCard[card.id] = CardTaskMeta(
-            details: record.details, mode: mode, createdAt: record.createdAt
+            details: record.details, createdAt: record.createdAt
         )
         persistTasks()
         refresh()
         return card
-    }
-
-    private func launchPromotedTask(
-        _ record: TaskRecord, agent: CardAgent, mode: TaskMode, inWorktree: Bool
-    ) -> BoardCard? {
-        switch mode {
-        case .interactive:
-            return createSession(
-                title: record.title, projectDir: record.projectDir,
-                autoStartAgent: agent, inWorktree: inWorktree
-            )
-        case .saha:
-            let dir = record.projectDir ?? RepoLocator.launchProjectDir(repoRoot: repoRoot)
-            let projectDirectory = URL(fileURLWithPath: dir, isDirectory: true)
-            return try? createSahaSession(
-                title: record.title,
-                projectDirectory: projectDirectory,
-                script: Self.sahaInitScript(in: projectDirectory),
-                scaffolder: TaskScaffolder(runner: FoundationTaskScaffoldRunner())
-            )
-        }
     }
 
     /// The "+ backlog task" prompt: title + free-form description. The model
@@ -2384,7 +2138,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         addBacklogTask(title: trimmed, details: details.stringValue)
     }
 
-    /// The "start task" chooser for a backlog card: pick the agent + flow, then
+    /// The "start task" chooser for a backlog card: pick the agent, then
     /// promote through the same model API tests use. Returns the new board card,
     /// or nil on cancel / failed launch — the page uses this to decide whether to
     /// follow the task back to the board.
@@ -2397,18 +2151,15 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         alert.addButton(withTitle: "Codex")
         alert.addButton(withTitle: "Cursor")
         alert.addButton(withTitle: "Antigravity")
-        alert.addButton(withTitle: "Plan with saha")
         alert.addButton(withTitle: "Cancel")
         // Buttons past the third answer with 1000 + index (AppKit's numbering).
         let cursorButton = NSApplication.ModalResponse(rawValue: 1003)
         let antigravityButton = NSApplication.ModalResponse(rawValue: 1004)
-        let sahaButton = NSApplication.ModalResponse(rawValue: 1005)
         switch alert.runModal() {
         case .alertFirstButtonReturn: return promoteBacklogTask(id: record.id, agent: .claude)
         case .alertSecondButtonReturn: return promoteBacklogTask(id: record.id, agent: .codex)
         case cursorButton: return promoteBacklogTask(id: record.id, agent: .cursor)
         case antigravityButton: return promoteBacklogTask(id: record.id, agent: .antigravity)
-        case sahaButton: return promoteBacklogTask(id: record.id, mode: .saha)
         default: return nil
         }
     }
@@ -2632,13 +2383,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         guard let pty = ptyByCard[card.id] ?? reviveSession(for: card) else { return }
         noteFocus(card.id)
         workLog?.noteUserEntered(card)
-        // A saha planning card re-opens the planning cockpit it was born in, not the
-        // bare terminal takeover — otherwise leaving planning mode strands the operator
-        // on the board with no way back into the pipeline/review (the "can't re-enter" bug).
-        if card.flow == .a, card.taskFolder != nil {
-            enterPlanningMode(card)
-            return
-        }
         selection.focus(card.id)
         drilledInCardID = card.id   // its surface owns the fd now; the pump skips it
         boardView.isHidden = true
@@ -2784,7 +2528,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// US-002 AC#2: return to the board, state preserved — un-hide the board so it
     /// looks exactly as it did before drilling in.
     func returnToBoard() {
-        if let inside = drilledInCardID ?? planningModeCardID,
+        if let inside = drilledInCardID,
            let card = cards.first(where: { $0.id == inside }) {
             workLog?.noteUserLeft(card)
         }
@@ -2798,11 +2542,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         archivePage.isHidden = true
         quota.isHidden = false
         drillIn.isHidden = true
-        // Release the planning terminal's view (the pump resumes draining its fd) but
-        // keep the session registered, same as drill-in (TC-E2E-014).
-        planningMode.detachSurface()
-        planningMode.isHidden = true
-        planningModeCardID = nil
         refresh()
         window?.makeFirstResponder(boardView)   // keyboard nav resumes on the board
     }
@@ -2825,7 +2564,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             // don't belong in a quick-switch rotation.
             let drillable = displayCards().filter { $0.state != .done && ptyByCard[$0.id] != nil }
             let ordered = TaskSwitcherOverlay.ordered(cards: drillable, mru: mruOrder)
-            let current = drilledInCardID ?? planningModeCardID
+            let current = drilledInCardID
             guard ordered.contains(where: { $0.id != current }) else { return }
             switcherSnapshot = ordered
             switcherIndex = TaskSwitcherOverlay.initialHighlight(
@@ -2838,17 +2577,16 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// ⌃ released: switch to the highlighted card WITHOUT bouncing off the board.
     /// Landing back on the current card — or on one that died while the overlay was
     /// up — just closes the preview. The switch hands the target a clean single-reader
-    /// slate: detach whichever focus surface is live now (drill-in OR planning) so a
-    /// cross-mode switch never strands a second off-screen reader on one fd or a stale
-    /// *ModeCardID; `drill(into:)` rebuilds the target's own surface and the pump
-    /// resumes draining the card we just left.
+    /// slate: detach the live drill-in surface so a switch never strands a second
+    /// off-screen reader on one fd or a stale `drilledInCardID`; `drill(into:)` rebuilds
+    /// the target's own surface and the pump resumes draining the card we just left.
     func commitSwitcher() {
         let chosen = switcherSnapshot.indices.contains(switcherIndex)
             ? switcherSnapshot[switcherIndex] : nil
         dismissSwitcher()
         guard let chosen,
               let live = cards.first(where: { $0.id == chosen.id }),
-              live.id != (drilledInCardID ?? planningModeCardID) else { return }
+              live.id != drilledInCardID else { return }
         teardownFocusForSwitch()
         drill(into: live)
     }
@@ -2868,14 +2606,11 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         mruOrder.insert(id, at: 0)
     }
 
-    /// Detach the live focus surface (drill-in and/or planning) without un-hiding the
-    /// board, so a Ctrl+Tab switch flows one task straight into the next. Idempotent.
+    /// Detach the live drill-in surface without un-hiding the board, so a Ctrl+Tab
+    /// switch flows one task straight into the next. Idempotent.
     private func teardownFocusForSwitch() {
         drillIn.detachSurface()
         drilledInCardID = nil
-        planningMode.detachSurface()
-        planningMode.isHidden = true
-        planningModeCardID = nil
     }
 
     /// Re-derive the view from the current model — the single render path, so a
@@ -2934,7 +2669,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
                         let block = CardQuotaAdvisor.block(
                             for: BoardCard(
                                 id: card.id, sessionID: card.sessionID, title: card.title,
-                                projectDir: card.projectDir, agent: card.agent, flow: card.flow,
+                                projectDir: card.projectDir, agent: card.agent,
                                 state: card.state),
                             profileID: account.id, claudeProfiles: profiles, gauges: gauges)
                         return CardSwitchMenu.AccountOption(
@@ -3093,7 +2828,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             title: card.title, projectDir: cwd,
             priorAgent: card.agent, priorAccountName: account?.name,
             priorTranscriptPath: transcriptPath,
-            workLogTail: logTail, taskFolder: card.taskFolder)
+            workLogTail: logTail)
     }
 
     /// The far-side working directory learned from hooks or the card's spec.
@@ -3343,7 +3078,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     func presentNeedsYouStandupIfNeeded() {
         guard ProcessInfo.processInfo.environment["SICH_E2E"] == nil else { return }
         guard !needsYouStandupOpen else { return }
-        guard drilledInCardID == nil, planningMode.isHidden, backlogPage.isHidden,
+        guard drilledInCardID == nil, backlogPage.isHidden,
               archivePage.isHidden, createPalette == nil else { return }
         let stale = NeedsYouStandup.staleCards(
             among: cards,
@@ -3592,7 +3327,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
 /// creation time (which predates the card when the task began in the backlog).
 struct CardTaskMeta {
     var details: String = ""
-    var mode: TaskMode?
     var createdAt = Date()
     /// Resume hints carried over from the loaded task book for a card whose shell
     /// didn't survive. Without this, the first save after adoption re-derives the

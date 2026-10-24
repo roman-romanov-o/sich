@@ -50,7 +50,7 @@ struct RemoteSessionLostTests {
                 MainActor.assumeIsolated { typed.text += String(decoding: bytes, as: UTF8.self) }
             }
             let session = Session(projectDir: seed.projectDir, agentType: .claude,
-                                  flowTag: .interactive, pty: pty, state: .running)
+                                  pty: pty, state: .running)
             MainActor.assumeIsolated {
                 typed.argv = seed.command
                 typed.session = session
@@ -64,7 +64,7 @@ struct RemoteSessionLostTests {
     private func remoteRecord(sessionRef: TaskSessionRef? = nil) -> TaskRecord {
         TaskRecord(
             title: "far work", placement: .board(.idle), agent: "claude",
-            mode: .interactive, projectDir: spec.target, sessionRef: sessionRef,
+            projectDir: spec.target, sessionRef: sessionRef,
             remote: RemoteSpecSnapshot(spec: spec))
     }
 
@@ -148,7 +148,7 @@ struct RemoteSessionLostTests {
         shell.applySessions([BoardCard(
             sessionID: conversation.uuidString,
             projectDir: "/home/roman/MyProjects/spectre",
-            agent: .claude, flow: .b, state: .running,
+            agent: .claude, state: .running,
             updatedAt: Date(), boundCardID: card.id.uuidString, host: "host.invalid")])
 
         // The link is already gone; the reconcile pass is where the card learns it —

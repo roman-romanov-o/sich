@@ -21,8 +21,7 @@ struct BoardBackgroundDrainTests {
     /// never `claude -p`).
     private func blockingSeed(sentinel: String) -> BoardSeed {
         BoardSeed(
-            sessionID: "long-job", projectDir: ".", agent: .claude, flow: .b,
-            state: .idle, scrollback: "",
+            sessionID: "long-job", projectDir: ".", agent: .claude, state: .idle, scrollback: "",
             commandOverride: ["/bin/sh", "-c", "head -c 500000 /dev/zero; : > \(sentinel)"]
         )
     }

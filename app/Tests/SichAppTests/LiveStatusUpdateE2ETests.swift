@@ -35,8 +35,7 @@ struct LiveStatusUpdateE2ETests {
         // join is suppressed, so only the SICH_CARD_ID binding can move them.
         let cardA = UUID(), cardB = UUID()
         func seed(_ n: String, _ id: UUID) -> BoardSeed {
-            BoardSeed(sessionID: n, projectDir: "/repo", agent: .claude, flow: .b,
-                      state: .idle, scrollback: "", cardID: id.uuidString)
+            BoardSeed(sessionID: n, projectDir: "/repo", agent: .claude, state: .idle, scrollback: "", cardID: id.uuidString)
         }
         let shell = BoardShell(seeds: [seed("task-a", cardA), seed("task-b", cardB)])
         shell.buildContentForTesting()

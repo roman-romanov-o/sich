@@ -50,7 +50,7 @@ struct BacklogPersistenceE2ETests {
             }
             return Session(
                 projectDir: seed.projectDir, agentType: .claude,
-                flowTag: .interactive, pty: pty, state: .running
+                pty: pty, state: .running
             )
         }
         return shell
@@ -183,7 +183,7 @@ struct BacklogPersistenceE2ETests {
         defer { cleanup(taskDir); cleanup(sessionDir) }
         let record = TaskRecord(
             title: "Timed task", placement: .board(.idle), agent: "codex",
-            mode: .interactive, projectDir: "/tmp/proj",
+            projectDir: "/tmp/proj",
             accumulatedWorkingTime: 2 * 3_600 + 7 * 60
         )
         _ = try BoardTaskStore(directory: taskDir).save(tasks: [record])
@@ -211,7 +211,7 @@ struct BacklogPersistenceE2ETests {
             title: "Build the feature", details: "The long spec.", projectDir: work.path)
 
         let card = try #require(shell.promoteBacklogTask(
-            id: record.id, agent: .claude, mode: .interactive))
+            id: record.id, agent: .claude))
 
         #expect(shell.backlogTasks.isEmpty, "a promoted task leaves the backlog")
         #expect(card.title == "Build the feature")
@@ -257,8 +257,8 @@ struct BacklogPersistenceE2ETests {
             title: "Fix login redirect", cardID: cardID.uuidString, agent: .claude)
         seed = BoardSeed(
             sessionID: seed.sessionID, title: seed.title, projectDir: seed.projectDir,
-            agent: seed.agent, flow: seed.flow, state: .running, scrollback: seed.scrollback,
-            commandOverride: seed.command, cardID: seed.cardID, taskFolder: seed.taskFolder)
+            agent: seed.agent, state: .running, scrollback: seed.scrollback,
+            commandOverride: seed.command, cardID: seed.cardID)
         let old = BoardShell(seeds: [seed])
         _ = old.buildContentForTesting()
         defer { old.e2eTeardown() }
@@ -364,7 +364,7 @@ struct BacklogPersistenceE2ETests {
         let resumeID = UUID()
         let record = TaskRecord(
             title: "Migrated task", placement: .board(.idle), agent: "claude",
-            mode: .interactive, projectDir: work.path,
+            projectDir: work.path,
             sessionRef: TaskSessionRef(claudeSessionID: resumeID, lastCwd: work.path))
         _ = try BoardTaskStore(directory: taskDir).save(tasks: [record])
 
@@ -393,7 +393,7 @@ struct BacklogPersistenceE2ETests {
         let resumeID = UUID()
         let record = TaskRecord(
             title: "Migrated task", placement: .board(.idle), agent: "claude",
-            mode: .interactive, projectDir: work.path,
+            projectDir: work.path,
             sessionRef: TaskSessionRef(claudeSessionID: resumeID, lastCwd: work.path))
         _ = try BoardTaskStore(directory: taskDir).save(tasks: [record])
 

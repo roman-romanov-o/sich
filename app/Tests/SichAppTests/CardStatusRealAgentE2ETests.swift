@@ -157,18 +157,6 @@ struct CardStatusRealAgentE2ETests {
         try #require(h.wait(240) { h.group() == .needsYou && h.eventCount("Stop") >= 1 },
                      "rule 3: codex turn end never flagged NEEDS YOU — \(h.debug())")
     }
-
-    // MARK: - Saha flow
-
-    /// Saha PLANNING mode is the interactive flow (its terminal is a claude session in
-    /// a card — covered by the claude journey above). Saha AGENTIC mode is not:
-    @Test(.disabled("""
-        saha agentic mode (`saha run …`) has NO detection source yet — the loop emits \
-        no hooks and writes no observable telemetry, so CARD-STATUS.md's saha rule 2 \
-        (loop running → WORKING, loop stopped → NEEDS YOU) cannot be verified end to \
-        end. This placeholder keeps the gap visible instead of faking a green.
-        """))
-    func sahaAgenticLoopDrivesWorkingAndNeedsYou() {}
 }
 
 /// Gate: these tests launch real agents and spend real quota — never on by default.

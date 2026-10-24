@@ -15,10 +15,6 @@ import PackageDescription
 let package = Package(
     name: "Sich",
     platforms: [.macOS(.v14)],  // NSView.displayLink (CADisplayLink) needs 14+
-    dependencies: [
-        // YAML parsing for saha/v2 task tracking (`progress.yaml`).
-        .package(url: "https://github.com/jpsim/Yams.git", from: "5.1.0"),
-    ],
     targets: [
         .binaryTarget(
             name: "GhosttyVt",
@@ -29,8 +25,7 @@ let package = Package(
         ),
         .target(
             name: "SichCore",
-            dependencies: ["GhosttyVt", "CPtySupport",
-                           .product(name: "Yams", package: "Yams")]
+            dependencies: ["GhosttyVt", "CPtySupport"]
         ),
         // AppKit window layer: `TerminalSurface` (renders one PTY) + `BoardShell`
         // (window/app lifecycle). Kept thin — the testable transforms live in

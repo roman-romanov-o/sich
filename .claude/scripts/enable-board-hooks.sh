@@ -6,9 +6,8 @@
 #
 # It edits .claude/settings.json — config Claude Code loads at startup — which is
 # why the agent can't write it for you (a self-modification guardrail). The merge
-# is idempotent (safe to re-run) and preserves every hook already there, including
-# the SessionStart welcome script. Undo by deleting the sich-forward.sh
-# entries it adds, or `git checkout .claude/settings.json`.
+# is idempotent (safe to re-run) and preserves every hook already there. Undo by
+# deleting the sich-forward.sh entries it adds.
 set -euo pipefail
 cd "$(dirname "$0")/../.."   # repo root
 

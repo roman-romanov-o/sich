@@ -11,7 +11,7 @@ struct WorktreeProvisionerTests {
     private func makeRepo(in base: URL) throws -> URL {
         let repo = base.appendingPathComponent("repo", isDirectory: true)
         try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
-        let runner = FoundationTaskScaffoldRunner()
+        let runner = FoundationProcessRunner()
         let git = URL(fileURLWithPath: "/usr/bin/git")
         for args in [
             ["init", "-q"],

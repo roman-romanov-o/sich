@@ -96,7 +96,7 @@ struct HostChipRenderTests {
     @Test func aSessionSichDidNotStartSaysSoInsteadOfLookingBroken() throws {
         let card = BoardCard(
             sessionID: "local-abc", title: "someone else's shell",
-            projectDir: "/tmp/proj", agent: .claude, flow: .b, state: .unknown)
+            projectDir: "/tmp/proj", agent: .claude, state: .unknown)
         let chip = try #require(hostChip(in: SessionCard(card: card, hostState: { _ in .unknown })))
 
         #expect(chip.stringValue == "not started by Sich")
@@ -110,7 +110,7 @@ struct HostChipRenderTests {
     @Test func anObservedLocalCardCarriesNoHostChip() throws {
         let card = BoardCard(
             sessionID: "local-abc", title: "local work", projectDir: "/tmp/proj",
-            agent: .claude, flow: .b, state: .running)
+            agent: .claude, state: .running)
         #expect(hostChip(in: SessionCard(card: card, hostState: { _ in .installed })) == nil)
     }
 
@@ -187,7 +187,7 @@ struct HostChipRenderTests {
     private func remoteCard(destination: String) -> BoardCard {
         BoardCard(
             sessionID: "remote/\(destination)/sich", title: "remote work",
-            projectDir: destination, agent: .claude, flow: .b, state: .running)
+            projectDir: destination, agent: .claude, state: .running)
     }
 
     private func chip(

@@ -14,7 +14,7 @@ struct BoardCardWorkingDurationTests {
         let secondTick = secondStart.addingTimeInterval(240)
         let queued = BoardCard(
             sessionID: "timer", title: "Timer", projectDir: "/tmp/p",
-            agent: .codex, flow: .b, state: .idle
+            agent: .codex, state: .idle
         )
 
         let running = queued.with(state: .running, at: firstStart)
@@ -45,7 +45,7 @@ struct BoardCardWorkingDurationTests {
     func nonWorkingStateHasNoTimer() {
         let card = BoardCard(
             sessionID: "idle", projectDir: "/tmp/p", agent: .claude,
-            flow: .b, state: .idle, workingSince: Date()
+            state: .idle, workingSince: Date()
         )
         #expect(card.workingSince == nil)
         #expect(CardState.running.isWorking)
@@ -57,7 +57,7 @@ struct BoardCardWorkingDurationTests {
     func durableTotalOverlay() {
         let card = BoardCard(
             sessionID: "idle", projectDir: "/tmp/p", agent: .claude,
-            flow: .b, state: .idle
+            state: .idle
         )
         let restored = card.with(accumulatedWorkingTime: 3_600)
         #expect(restored.id == card.id)

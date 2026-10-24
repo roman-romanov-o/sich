@@ -183,14 +183,14 @@ struct RemoteRelayE2ETests {
 
     // MARK: - TC-INT-006 / AC-4: structurally still observe-only
 
-    @Test("TC-INT-006 / AC-4: the only NWListener in the app is the LikeC4 file server")
-    func theOnlyListenerRemainsTheLikeC4FileServer() {
+    @Test("TC-INT-006 / AC-4: the app opens no NWListener anywhere")
+    func theAppOpensNoListener() {
         let sources = Self.repoRoot.appendingPathComponent("app/Sources")
         let files = Set(grep("NWListener", under: sources).compactMap {
             $0.split(separator: ":").first.map { URL(fileURLWithPath: String($0)).lastPathComponent }
         })
 
-        #expect(files == ["StaticFileServer.swift"],
+        #expect(files.isEmpty,
                 "US-003 adds no inbound listener; found NWListener in \(files.sorted())")
     }
 

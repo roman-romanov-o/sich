@@ -44,15 +44,12 @@ public final class SessionRegistry {
         command argv: [String],
         projectDir: String,
         agentType: AgentType,
-        flowTag: FlowTag = .interactive,
         rows: UInt16 = 24,
         cols: UInt16 = 80
     ) throws -> Session {
         let pty = try PTYSession(command: argv, rows: rows, cols: cols)
         try pty.start()
-        let session = Session(
-            projectDir: projectDir, agentType: agentType, flowTag: flowTag, pty: pty
-        )
+        let session = Session(projectDir: projectDir, agentType: agentType, pty: pty)
         return register(session)
     }
 
@@ -92,7 +89,6 @@ public final class SessionRegistry {
                 sessionID: session.id,
                 cwd: session.projectDir,
                 agentType: session.agentType,
-                flowTag: session.flowTag,
                 childPID: pid,
                 claudeSessionID: session.claudeSessionID,
                 // No PID to probe → assume alive, matching the restore side's long-standing

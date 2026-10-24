@@ -41,8 +41,7 @@ struct LogoutDispositionEndToEndTests {
         let session = try registry.launch(
             command: ["/bin/sh", "-c", "exit \(code)"],
             projectDir: "/tmp/proj",
-            agentType: .shell,
-            flowTag: .interactive
+            agentType: .shell
         )
         defer { session.pty.finish() }   // child already dead → returns at once
 

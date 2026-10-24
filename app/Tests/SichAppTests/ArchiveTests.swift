@@ -36,7 +36,7 @@ struct ArchiveTests {
             let pty = try! PTYSession(command: ["/bin/cat"])
             try! pty.start()
             return Session(projectDir: seed.projectDir, agentType: .claude,
-                           flowTag: .interactive, pty: pty, state: .running)
+                           pty: pty, state: .running)
         }
     }
 
@@ -182,7 +182,6 @@ struct ArchiveTests {
             title: "Look at the importer",
             placement: .board(.done),
             agent: CardAgent.claude.rawValue,
-            mode: .interactive,
             projectDir: work.path,
             sessionRef: TaskSessionRef(claudeSessionID: resumeID, lastCwd: work.path),
             archivedAt: Date()
@@ -235,7 +234,6 @@ struct ArchiveTests {
             title: "Far-side look",
             placement: .board(.done),
             agent: CardAgent.claude.rawValue,
-            mode: .interactive,
             projectDir: spec.target,
             sessionRef: TaskSessionRef(claudeSessionID: UUID(), lastCwd: "/home/roman/work"),
             remote: RemoteSpecSnapshot(spec: spec),
@@ -283,7 +281,7 @@ struct ArchiveTests {
             typed.argv = seed.command
             let session = Session(
                 projectDir: seed.projectDir, agentType: .claude,
-                flowTag: .interactive, pty: pty, state: .running)
+                pty: pty, state: .running)
             typed.session = session
             return session
         }

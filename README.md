@@ -6,6 +6,14 @@
 
 <p align="center"><strong>Mission control for parallel agentic coding sessions</strong></p>
 
+<p align="center">
+  <a href="https://github.com/roman-romanov-o/sich/actions/workflows/ci.yml"><img src="https://github.com/roman-romanov-o/sich/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/roman-romanov-o/sich/actions/workflows/codeql.yml"><img src="https://github.com/roman-romanov-o/sich/actions/workflows/codeql.yml/badge.svg" alt="CodeQL"></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/roman-romanov-o/sich"><img src="https://api.scorecard.dev/projects/github.com/roman-romanov-o/sich/badge" alt="OpenSSF Scorecard"></a>
+  <a href="https://github.com/roman-romanov-o/sich/releases/latest"><img src="https://img.shields.io/github/v/release/roman-romanov-o/sich" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license"></a>
+</p>
+
 Sich is a native macOS app for running many coding agents (Claude Code, Codex,
 Cursor, Antigravity, Gemini CLI) at once without losing track of them. It is a kanban board where
 every card **is** a live terminal session — Sich embeds
@@ -32,9 +40,6 @@ state first-hand instead of scraping someone else's window.
 - **Pool firewall** — managed sessions are interactive-only by construction;
   Sich structurally refuses to spawn headless `claude -p` and spend API credits
   on your behalf.
-- **Planning Mode** — drive Sahaidachny (the plan-then-execute agent pipeline
-  bundled as slash-commands in [`.claude/`](.claude)) from inside the app:
-  stepper, terminal, and rendered planning documents side by side.
 - **Remote sessions** — attach tmux sessions on remote boxes over SSH as
   first-class cards.
 
@@ -57,11 +62,12 @@ both Apple silicon and Intel Macs.
 ## Build from source
 
 The one non-obvious prerequisite is the vendored **libghostty-vt** static
-archives, which are too large to track in git. Rebuild them once (pinned
-ghostty rev, Zig **0.15.2** — not Homebrew's 0.16.0) following
-[`app/Frameworks/README.md`](app/Frameworks/README.md), then:
+archives, which are too large to track in git. Rebuild them once with Zig
+**0.15.2** on PATH (pins and details in
+[`app/Frameworks/README.md`](app/Frameworks/README.md)), then build the app:
 
 ```bash
+app/scripts/build-ghostty-vt.sh   # once per clone
 cd app
 ./make-app.sh            # → build/Sich.app
 ./make-app.sh --install  # …and copy to /Applications
@@ -86,7 +92,7 @@ uv run pytest`.
 - [`docs/OPERATING-RULES.md`](docs/OPERATING-RULES.md) — pace & attention rules (Rule 1 enforced in-app)
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — how the pieces fit
 - [`app/README.md`](app/README.md) — Swift package layout and dev workflow
-- [`docs/tasks/`](docs/tasks) — the Sahaidachny task plans this app was built from
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to build, test, and send changes
 
 ## License
 

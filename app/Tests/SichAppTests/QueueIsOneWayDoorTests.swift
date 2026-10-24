@@ -156,14 +156,14 @@ struct QueueIsOneWayDoorTests {
     @Test func boardMergeDoesNotRewindStartedCardToQueue() throws {
         let seed = BoardSeed(
             sessionID: "live-terminal", projectDir: "/work",
-            agent: .claude, flow: .b, state: .idle, scrollback: "ready"
+            agent: .claude, state: .idle, scrollback: "ready"
         )
         let shell = BoardShell(seeds: [seed])
         _ = shell.buildContentForTesting()
 
         func observe(_ state: CardState, at: Date) {
             shell.applySessions([BoardCard(sessionID: "claude-1", projectDir: "/work",
-                                           agent: .claude, flow: .b, state: state, updatedAt: at)])
+                                           agent: .claude, state: state, updatedAt: at)])
         }
 
         // The agent worked, then an explicit notification parked it in NEEDS YOU.
@@ -184,7 +184,7 @@ struct QueueIsOneWayDoorTests {
     @Test func manualMoveToQueueStillWorks() throws {
         let seed = BoardSeed(
             sessionID: "live-terminal", projectDir: "/work",
-            agent: .claude, flow: .b, state: .running, scrollback: "ready"
+            agent: .claude, state: .running, scrollback: "ready"
         )
         let shell = BoardShell(seeds: [seed])
         _ = shell.buildContentForTesting()
@@ -199,7 +199,7 @@ struct QueueIsOneWayDoorTests {
     @Test func doneCanOnlyBeEnteredAndExitedManually() throws {
         let seed = BoardSeed(
             sessionID: "live-terminal", projectDir: "/work",
-            agent: .claude, flow: .b, state: .done, scrollback: "finished"
+            agent: .claude, state: .done, scrollback: "finished"
         )
         let shell = BoardShell(seeds: [seed])
         _ = shell.buildContentForTesting()
@@ -210,7 +210,7 @@ struct QueueIsOneWayDoorTests {
 
         let oldDone = BoardCard(
             sessionID: "claude-old", projectDir: "/work",
-            agent: .claude, flow: .b, state: .done,
+            agent: .claude, state: .done,
             updatedAt: base
         )
         shell.applySessions([oldDone])
@@ -219,7 +219,7 @@ struct QueueIsOneWayDoorTests {
 
         let freshWork = BoardCard(
             sessionID: "claude-new", projectDir: "/work",
-            agent: .claude, flow: .b, state: .running,
+            agent: .claude, state: .running,
             updatedAt: base.addingTimeInterval(1)
         )
         shell.applySessions([freshWork])
@@ -227,7 +227,7 @@ struct QueueIsOneWayDoorTests {
 
         let freshDone = BoardCard(
             sessionID: "claude-new", projectDir: "/work",
-            agent: .claude, flow: .b, state: .done,
+            agent: .claude, state: .done,
             updatedAt: base.addingTimeInterval(2)
         )
         shell.applySessions([freshDone])
@@ -239,7 +239,7 @@ struct QueueIsOneWayDoorTests {
 
         let laterWork = BoardCard(
             sessionID: "claude-later", projectDir: "/work",
-            agent: .claude, flow: .b, state: .running,
+            agent: .claude, state: .running,
             updatedAt: base.addingTimeInterval(3)
         )
         shell.applySessions([laterWork])

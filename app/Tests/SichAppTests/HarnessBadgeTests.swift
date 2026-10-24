@@ -58,24 +58,14 @@ struct HarnessBadgeTests {
     func sessionCardHeaderCarriesBadge() throws {
         let card = BoardCard(
             sessionID: "s-1", title: "Fix login", projectDir: "/tmp/p",
-            agent: .codex, flow: .b, state: .running
+            agent: .codex, state: .running
         )
         let view = SessionCard(card: card)
         let badge = try #require(allSubviews(of: view).compactMap { $0 as? HarnessBadge }.first)
         #expect(badge.agent == .codex)
         let labels = allSubviews(of: view).compactMap { ($0 as? NSTextField)?.stringValue }
         #expect(!labels.contains { $0.contains("Codex") }, "the name moved into the badge tooltip")
-        #expect(!labels.contains("terminal"), "the default flow carries no text label")
-    }
-
-    @Test("only an autonomous card is flow-labelled — a small 'auto' marker")
-    func autonomousCardCarriesAutoMarker() {
-        let auto = SessionCard(card: BoardCard(
-            sessionID: "s-2", title: "Saha run", projectDir: "/tmp/p",
-            agent: .claude, flow: .a, state: .running
-        ))
-        let labels = allSubviews(of: auto).compactMap { ($0 as? NSTextField)?.stringValue }
-        #expect(labels.contains("auto"), "the exception flow is the one that gets labelled")
+        #expect(!labels.contains("terminal"), "a card carries no text label for its kind")
     }
 
     @Test("working shows the current interval with a pulsing live-activity mark")
@@ -83,7 +73,7 @@ struct HarnessBadgeTests {
         let now = Date(timeIntervalSince1970: 10_000)
         let working = SessionCard(card: BoardCard(
             sessionID: "timer", title: "Timed task", projectDir: "/tmp/p",
-            agent: .codex, flow: .b, state: .running,
+            agent: .codex, state: .running,
             workingSince: now.addingTimeInterval(-(7 * 60)),
             accumulatedWorkingTime: 2 * 3_600
         ), now: { now })
@@ -107,7 +97,7 @@ struct HarnessBadgeTests {
         for state in [CardState.idle, .waitingForInput, .done] {
             let unstarted = SessionCard(card: BoardCard(
                 sessionID: "unstarted-\(state)", title: "Fresh task", projectDir: "/tmp/p",
-                agent: .codex, flow: .b, state: state
+                agent: .codex, state: state
             ))
             #expect(!allSubviews(of: unstarted).contains {
                 $0.identifier?.rawValue == "task-duration"
@@ -120,7 +110,7 @@ struct HarnessBadgeTests {
         let now = Date(timeIntervalSince1970: 10_000)
         let started = SessionCard(card: BoardCard(
             sessionID: "just-started", title: "Fresh task", projectDir: "/tmp/p",
-            agent: .codex, flow: .b, state: .running, workingSince: now
+            agent: .codex, state: .running, workingSince: now
         ), now: { now })
         let timer = try #require(allSubviews(of: started).compactMap { $0 as? NSTextField }
             .first { $0.identifier?.rawValue == "task-duration" })
@@ -136,7 +126,7 @@ struct HarnessBadgeTests {
         for state in [CardState.idle, .waitingForInput, .done] {
             let resting = SessionCard(card: BoardCard(
                 sessionID: "resting-\(state)", title: "Resting task", projectDir: "/tmp/p",
-                agent: .codex, flow: .b, state: state,
+                agent: .codex, state: state,
                 accumulatedWorkingTime: 2 * 3_600 + 7 * 60
             ), now: { now })
             // On a resting card a bare `2h 07m` read as "waiting for two hours".
@@ -194,7 +184,7 @@ struct HarnessBadgeTests {
     private func sessionCard(state: CardState) -> SessionCard {
         SessionCard(card: BoardCard(
             sessionID: UUID().uuidString, title: "Task", projectDir: "/tmp/p",
-            agent: .claude, flow: .b, state: state
+            agent: .claude, state: state
         ))
     }
 

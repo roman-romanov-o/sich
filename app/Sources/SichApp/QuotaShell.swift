@@ -5,7 +5,7 @@ import SichCore
 /// seeded with a representative four-pool fixture so the pixel AC ("the four
 /// gauges render distinctly on screen") can be captured + human-signed-off.
 ///
-/// It only renders display data — no recommender, no `saha run …` (that is the
+/// It only renders display data — no recommender, no dispatch (that is the
 /// deferred allocator, US-007/US-009). The sources are injected stubs; the window
 /// spends no quota to draw.
 @MainActor

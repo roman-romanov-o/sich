@@ -22,7 +22,7 @@ struct ShellIntegrationTests {
         // the app's real OSC-7 → cwd wiring attached exactly as BoardShell does.
         let pty = try PTYSession(command: ["/bin/zsh"])
         let session = Session(
-            projectDir: "/launch/dir", agentType: .shell, flowTag: .interactive, pty: pty)
+            projectDir: "/launch/dir", agentType: .shell, pty: pty)
         ShellSignalBridge.attachCwdReporting(to: session)
         #expect(session.reportedCwd == nil)   // nothing reported before any output
 

@@ -11,7 +11,7 @@ struct AgentTaskTallyTests {
 
     private func card(_ agent: CardAgent, _ state: CardState) -> BoardCard {
         BoardCard(sessionID: UUID().uuidString, projectDir: "/tmp/p",
-                  agent: agent, flow: .b, state: state)
+                  agent: agent, state: state)
     }
 
     @Test("cards split per agent into working vs waiting; at-rest states don't count")
