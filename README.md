@@ -86,6 +86,18 @@ swift run sich    # run the board from source
 A small residue of repo-level Python tests runs with `uv sync --extra dev &&
 uv run pytest`.
 
+## Security and trust
+
+Every change lands through a protected `main` that requires the CI, CodeQL and
+forwarder checks; the workflows run on GitHub-hosted runners with SHA-pinned,
+read-only-token actions; CodeQL scans the Swift code and the workflows
+themselves, and the OpenSSF Scorecard badge above tracks the rest. The Swift
+package has no third-party dependencies; the one vendored library,
+libghostty-vt, is built in CI from a pinned revision. Releases carry signed
+build provenance you can check with `gh attestation verify` — see
+[`SECURITY.md`](SECURITY.md) for the exact commands and for what the app
+touches on your machine.
+
 ## Learn more
 
 - [`docs/PRODUCT.md`](docs/PRODUCT.md) — product thesis and constraints
