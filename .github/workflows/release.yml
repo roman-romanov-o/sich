@@ -21,7 +21,9 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 120
     permissions:
-      contents: write   # creates the GitHub Release and uploads the zip
+      contents: write       # creates the GitHub Release and uploads the zip
+      id-token: write       # signs the build provenance (Sigstore, keyless)
+      attestations: write   # stores it on the repository
     defaults:
       run:
         working-directory: app
@@ -78,6 +80,24 @@ jobs:
           shasum -a 256 "build/Sich-${suffix}-universal.zip" | tee "build/Sich-${suffix}-universal.zip.sha256"
           lipo -archs build/Sich.app/Contents/MacOS/sich
 
+      # SLSA build provenance: a signed statement that THIS workflow, on THIS
+      # commit, produced the zip. Anyone can check it before installing with
+      #   gh attestation verify Sich-<tag>-universal.zip --repo roman-romanov-o/sich
+      - name: Attest build provenance
+        id: attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: app/build/Sich-*.zip
+
+      # The Sigstore bundle also ships as a release asset, so the provenance can be
+      # verified offline (`gh attestation verify --bundle <file>`) and release
+      # scanners see the release is attested.
+      - name: Stage provenance bundle
+        env:
+          TAG: ${{ github.ref_name }}
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: cp "$BUNDLE" "build/Sich-${TAG:-dev}-universal.zip.sigstore.json"
+
       # Creates the release if the tag has none yet, otherwise attaches to the
       # existing one (so a release drafted by hand keeps its notes).
       - name: Publish release
@@ -87,9 +107,9 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" build/Sich-*.zip build/Sich-*.zip.sha256 --clobber
+            gh release upload "$TAG" build/Sich-*.zip build/Sich-*.zip.sha256 build/Sich-*.sigstore.json --clobber
           else
-            gh release create "$TAG" build/Sich-*.zip build/Sich-*.zip.sha256 \
+            gh release create "$TAG" build/Sich-*.zip build/Sich-*.zip.sha256 build/Sich-*.sigstore.json \
               --verify-tag --generate-notes
           fi
 
@@ -102,3 +122,4 @@ jobs:
           path: |
             app/build/Sich-*.zip
             app/build/Sich-*.zip.sha256
+            app/build/Sich-*.sigstore.json

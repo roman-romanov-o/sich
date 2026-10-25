@@ -27,5 +27,21 @@ Knowing the surface helps you judge a report:
   endpoint.
 - Remote cards run `ssh` and `tmux` with the destination you typed; the app
   never installs binaries on the remote host.
-- The release bundle is ad-hoc signed and not notarized. Verify the SHA-256
-  printed in the release workflow log before installing.
+- The release bundle is ad-hoc signed and not notarized by Apple. Every release
+  does carry signed build provenance (SLSA, via GitHub artifact attestations) and
+  a `.sha256` file; see below.
+
+## Verifying a release
+
+Each release zip is built by the public
+[release workflow](.github/workflows/release.yml) on a GitHub-hosted runner from
+the tagged commit, and the build is attested with Sigstore. Before installing:
+
+```bash
+gh attestation verify Sich-vX.Y.Z-universal.zip --repo roman-romanov-o/sich
+shasum -a 256 -c Sich-vX.Y.Z-universal.zip.sha256
+```
+
+The first command fails if the zip was not produced by this repository's
+workflow from the commit it claims; the `.sigstore.json` asset next to the zip
+lets you run the same check offline with `--bundle`.
