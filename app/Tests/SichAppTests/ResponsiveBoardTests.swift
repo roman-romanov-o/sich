@@ -115,7 +115,7 @@ struct ResponsiveBoardTests {
     private func card(_ n: Int) -> BoardCard {
         BoardCard(
             sessionID: "s\(n)", title: "task-\(n)", projectDir: "/Users/x/p",
-            agent: .claude, flow: .b, state: .running)
+            agent: .claude, state: .running)
     }
 
     @Test("every board column cell lives inside a scroll view")

@@ -1,0 +1,37 @@
+name: Bug report
+description: Something in Sich misbehaves
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Sich version
+      description: From the Releases page, or the commit if built from source.
+      placeholder: v0.2.0
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and chip
+      placeholder: macOS 15.5, Apple M2
+    validations:
+      required: true
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Agent CLI involved
+      multiple: true
+      options: [Claude Code, Codex, Cursor, Antigravity, Gemini CLI, Remote tmux session, None / board or quota only]
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Anything from Console.app, the terminal, or the board. Strip anything private first.

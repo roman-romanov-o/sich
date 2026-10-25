@@ -17,7 +17,7 @@ struct BoardSessionMergeTests {
     private func ownedShell(dir: String = "/work") -> BoardShell {
         let seed = BoardSeed(
             sessionID: "live-terminal", projectDir: dir,
-            agent: .claude, flow: .b, state: .idle, scrollback: "ready"
+            agent: .claude, state: .idle, scrollback: "ready"
         )
         let shell = BoardShell(seeds: [seed])
         shell.buildContentForTesting()
@@ -25,7 +25,7 @@ struct BoardSessionMergeTests {
     }
 
     private func observed(_ id: String, _ state: CardState) -> BoardCard {
-        BoardCard(sessionID: id, projectDir: "/other", agent: .claude, flow: .b, state: state)
+        BoardCard(sessionID: id, projectDir: "/other", agent: .claude, state: state)
     }
 
     @Test func liveTerminalSurvivesTheSessionsPollAndStaysDrillable() {
@@ -65,7 +65,7 @@ struct BoardSessionMergeTests {
         let shell = ownedShell()   // owned card: id "live-terminal", dir "/work", state .idle
 
         let claudeHook = BoardCard(sessionID: "claude-abc123", projectDir: "/work",
-                                   agent: .claude, flow: .b, state: .running)
+                                   agent: .claude, state: .running)
         shell.applySessions([claudeHook])
 
         // Still ONE card, the owned one — not a second "claude-abc123" card.
@@ -88,7 +88,7 @@ struct BoardSessionMergeTests {
         let shell = ownedShell(dir: work.path)
         func claude(_ state: CardState) -> BoardCard {
             BoardCard(sessionID: "claude-xyz", projectDir: work.path,
-                      agent: .claude, flow: .b, state: state)
+                      agent: .claude, state: state)
         }
 
         shell.applySessions([claude(.running)])
@@ -121,7 +121,7 @@ struct BoardSessionMergeTests {
         let shell = ownedShell()      // owned card's dir is "/work"
         let repo = "/elsewhere"       // a dir no owned card matches
         func run(_ id: String, _ state: CardState) -> BoardCard {
-            BoardCard(sessionID: id, projectDir: repo, agent: .claude, flow: .b, state: state)
+            BoardCard(sessionID: id, projectDir: repo, agent: .claude, state: state)
         }
         shell.applySessions([run("run-1", .done), run("run-2", .running), run("run-3", .idle)])
 
@@ -135,9 +135,9 @@ struct BoardSessionMergeTests {
     @Test func ownedTerminalTracksTheLiveRunNotAStaleFinishedOne() {
         let shell = ownedShell()
         let oldRun = BoardCard(sessionID: "claude-old", projectDir: "/work",
-                               agent: .claude, flow: .b, state: .done)
+                               agent: .claude, state: .done)
         let freshRun = BoardCard(sessionID: "claude-new", projectDir: "/work",
-                                 agent: .claude, flow: .b, state: .running)
+                                 agent: .claude, state: .running)
         shell.applySessions([oldRun, freshRun])
 
         #expect(shell.cards.map(\.sessionID) == ["live-terminal"])  // no duplicates

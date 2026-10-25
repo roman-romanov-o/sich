@@ -13,9 +13,9 @@ struct DoneRailTests {
         let view = BoardView(frame: NSRect(x: 0, y: 0, width: 1280, height: 720), defaults: defaults)
         view.render(cards: [
             BoardCard(sessionID: "w", title: "working", projectDir: "/p", agent: .claude,
-                      flow: .b, state: .running),
+                      state: .running),
             BoardCard(sessionID: "d", title: "finished", projectDir: "/p", agent: .claude,
-                      flow: .b, state: .done)
+                      state: .done)
         ])
         view.layoutSubtreeIfNeeded()
         return view

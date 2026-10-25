@@ -26,13 +26,6 @@ public enum AgentType: String, Codable, Sendable, Equatable, CaseIterable {
     }
 }
 
-/// Which scheduling flow launched the session — the two-pool distinction the
-/// product is built around (see project memory: two-flow thesis).
-public enum FlowTag: String, Codable, Sendable, Equatable, CaseIterable {
-    case interactive
-    case backlog
-}
-
 /// The lifecycle state of a managed session. `SessionRegistry` is the single
 /// source of truth Phase 02/03 read from; a session must never be left
 /// ``running`` after its process has died (TC-E2E-104).
@@ -54,7 +47,6 @@ public final class Session: Identifiable {
     public let id: UUID
     public let projectDir: String
     public let agentType: AgentType
-    public let flowTag: FlowTag
     public let pty: PTYSession
     public private(set) var state: SessionState
     /// The cwd the running shell has REPORTED via OSC-7 shell-integration (US-004), or
@@ -78,14 +70,12 @@ public final class Session: Identifiable {
         id: UUID = UUID(),
         projectDir: String,
         agentType: AgentType,
-        flowTag: FlowTag,
         pty: PTYSession,
         state: SessionState = .starting
     ) {
         self.id = id
         self.projectDir = projectDir
         self.agentType = agentType
-        self.flowTag = flowTag
         self.pty = pty
         self.state = state
     }

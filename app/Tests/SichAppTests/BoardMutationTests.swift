@@ -17,7 +17,6 @@ final class BoardMutationTests: XCTestCase {
 
         XCTAssertEqual(shell.cards.count, before + 1)
         let new = try! XCTUnwrap(shell.cards.last)
-        XCTAssertEqual(new.flow, .b, "live terminal is flow B (human-launched)")
         XCTAssertEqual(new.state, .idle, "a fresh terminal starts idle")
     }
 
@@ -44,45 +43,6 @@ final class BoardMutationTests: XCTestCase {
 
         let new = try! XCTUnwrap(shell.cards.last)
         XCTAssertEqual(new.projectDir, "/tmp/some-project", "card opens in the chosen folder")
-    }
-
-    func testSahaCreationPreservesFlowAndTaskFolder() {
-        let shell = BoardShell(seeds: [])
-        shell.buildContentForTesting()
-
-        shell.createSession(
-            title: "Plan native surface",
-            projectDir: "/tmp/project",
-            flow: .a,
-            taskFolder: "/tmp/project/docs/tasks/task-08-native-saha-planning"
-        )
-
-        let card = try! XCTUnwrap(shell.cards.last)
-        XCTAssertEqual(card.flow, .a)
-        XCTAssertEqual(
-            card.taskFolder,
-            "/tmp/project/docs/tasks/task-08-native-saha-planning"
-        )
-    }
-
-    func testBoardSeedPreservesFlowAndTaskFolderThroughShell() {
-        let taskFolder = "/tmp/project/docs/tasks/task-08-native-saha-planning"
-        let seed = BoardSeed(
-            sessionID: "saha-task-08",
-            projectDir: "/tmp/project",
-            agent: .claude,
-            flow: .a,
-            state: .idle,
-            scrollback: "",
-            taskFolder: taskFolder
-        )
-        let shell = BoardShell(seeds: [seed])
-
-        shell.buildContentForTesting()
-
-        let card = try! XCTUnwrap(shell.cards.first)
-        XCTAssertEqual(card.flow, .a)
-        XCTAssertEqual(card.taskFolder, taskFolder)
     }
 
     /// Dropping a card on a column sets its state to that column's state, keeping its
@@ -157,7 +117,7 @@ final class BoardMutationTests: XCTestCase {
     /// real NSMenu action path (not a direct handler call) fires `onRename`.
     func testCardContextMenuRenameItemFiresCallback() {
         let card = BoardCard(sessionID: "t", projectDir: "~/x", agent: .claude,
-                             flow: .b, state: .idle)
+                             state: .idle)
         let view = SessionCard(card: card)
         var renamed: BoardCard?
         view.onRename = { renamed = $0 }
@@ -204,7 +164,7 @@ final class BoardMutationTests: XCTestCase {
     /// real NSMenu action path fires `onDelete` (interaction bound to a menu event).
     func testCardContextMenuDeleteItemFiresCallback() {
         let card = BoardCard(sessionID: "t", projectDir: "~/x", agent: .claude,
-                             flow: .b, state: .idle)
+                             state: .idle)
         let view = SessionCard(card: card)
         var deleted: BoardCard?
         view.onDelete = { deleted = $0 }
@@ -231,7 +191,7 @@ final class BoardMutationTests: XCTestCase {
     /// A stub seed (idles on `cat`, never an agentic CLI) — light enough for a unit test.
     static func oneSeed() -> [BoardSeed] {
         [BoardSeed(sessionID: "t", projectDir: "~/x", agent: .claude,
-                   flow: .a, state: .running, scrollback: "")]
+                   state: .running, scrollback: "")]
     }
 }
 

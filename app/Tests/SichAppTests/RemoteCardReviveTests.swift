@@ -38,7 +38,7 @@ struct RemoteCardReviveTests {
             let pty = try! PTYSession(command: ["/bin/cat"])
             try! pty.start()
             let session = Session(projectDir: seed.projectDir, agentType: .claude,
-                                  flowTag: .interactive, pty: pty, state: .running)
+                                  pty: pty, state: .running)
             box.record(argv: seed.command, session: session)
             return session
         }

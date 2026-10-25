@@ -1,8 +1,7 @@
-# Sich — macOS app (Phase 01: Terminal Foundation)
+# Sich — macOS app
 
 The Swift/AppKit app that **embeds libghostty and becomes the terminal** for
-managed agentic-coding sessions (see `design-decisions/DD-001`). This package is
-the first slice of **Phase 01 / US-001**, built directly on the Phase 00 spike
+managed agentic-coding sessions (DD-001). It grew out of the Phase 00 spike
 (`../spike/phase00-pty-smoke/`, verdict GO).
 
 ## What's here
@@ -14,8 +13,8 @@ the first slice of **Phase 01 / US-001**, built directly on the Phase 00 spike
 | `SichCore` | Swift lib | `Terminal` (safe libghostty-vt wrapper + `lines()`), `PTYSession` (in-app PTY read + `send()`/`pollExit()`), `PoolFirewall`, `KeyEncoder`, `Session`/`SessionRegistry` |
 | `SichApp` | Swift lib (AppKit) | `TerminalSurface` (renders one PTY, routes keys), the board surface (`BoardView`, `SessionCard`, `AttentionIndicator`, `DrillInPanel`, `BoardShell` — window/app lifecycle) |
 | `sich-probe` | executable | runnable demo: open a session, read its pty in-process, print the screen |
-| `sich` | executable (AppKit) | the launchable app: mission-control board (state columns × two-flow swimlanes + "who needs me" count + drill-in) hosting the live embedded terminal |
-| `SichCoreTests` | tests | PTY-read + pool-firewall + key encoding + grid lines + registry lifecycle + **board view-model** (placement, attention, drill-in selection) |
+| `sich` | executable (AppKit) | the launchable app: mission-control board (state columns + "who needs me" count + drill-in) hosting the live embedded terminal |
+| `SichCoreTests` / `SichAppTests` | tests | headless Core logic; real-AppKit interaction tests that dispatch `NSEvent`s at the mounted views |
 
 ## The two load-bearing pieces
 
@@ -33,14 +32,11 @@ the first slice of **Phase 01 / US-001**, built directly on the Phase 00 spike
 ```bash
 cd app
 swift build
-swift test          # 40 tests: PTY read + pool firewall + key encoding + grid lines + registry lifecycle + board view-model
+swift test                                 # the full suite (~700 tests)
+swift run sich                             # the app
 swift run sich-probe                       # default echo demo
 swift run sich-probe /bin/sh -c 'echo hi'  # arbitrary command
 swift run sich-probe claude -p x           # refused by the firewall (exit 2)
-swift run sich-app                          # windowed shell pane ($SHELL)
-swift run sich-app /bin/sh -c 'echo hi'     # window hosting an arbitrary command
-swift run sich-app claude -p x              # refused by the firewall before any window
-swift run sich-board                        # the mission-control board, seeded with fake-agent sessions (firewall-clean)
 ```
 
 ## Ship a shareable build
@@ -97,22 +93,21 @@ Hot reload is intentionally narrow: changes to method/function bodies can swap
 in; adding stored properties, changing type layout, adding/removing files, or
 editing C targets still needs a rebuild and relaunch.
 
-## The Phase 03 board (US-002/003/005)
+## The board
 
-`sich-board` renders the **mission-control board**: every session as a card
-placed by detected state, in **state columns × two-flow swimlanes** (Flow-A saha /
-Flow-B interactive), per the HELM POC (`docs/tasks/task-01-initial/research/UI_POC.html`).
-A header **"N waiting on you"** count (`AttentionIndicator`) reads quiet/zero with
-no false alarm; clicking it filters the board to the waiting/blocked cards. Clicking
-a card **drills into that session's embedded `TerminalSurface`** in-app (DD-001), not
-an OS window jump; a back affordance returns to the board with state preserved.
+`sich` renders the **mission-control board**: every session as a card placed by
+detected state, in state columns. A header **"N waiting on you"** count reads
+quiet/zero with no false alarm; clicking it filters the board to the waiting/blocked
+cards. Clicking a card **drills into that session's embedded `TerminalSurface`**
+in-app (DD-001), not an OS window jump; a back affordance returns to the board with
+state preserved.
 
-The board is seeded with a spread of **fake-agent sessions** (`BoardSeed.demo`) so it
-can be populated and screenshotted — each launches a harmless shell fixture through
-the pool firewall (**never `claude -p`**). The pure board derivations (placement,
-attention, drill-in selection) live in `SichCore` and are unit-tested; the
-rendered surface and the <500 ms drill-in feel go to a human screenshot/visual
-sign-off (they need a real Aqua session to paint, same as `sich-app`).
+Under `SICH_E2E=1` the board is seeded with a spread of **fake-agent sessions**
+(`BoardSeed.demo`) so it can be populated and screenshotted — each launches a
+harmless shell fixture through the pool firewall (**never `claude -p`**). The pure
+board derivations (placement, attention, drill-in selection) live in `SichCore` and
+are unit-tested; the rendered surface goes to a human screenshot/visual sign-off (it
+needs a real Aqua session to paint).
 
 Requires the vendored xcframework's static archives — see
 `Frameworks/README.md` (git-ignored; one-command rebuild).
@@ -125,7 +120,8 @@ Requires the vendored xcframework's static archives — see
 session — a CLI binary launched headlessly creates the window object and stays
 on its run loop, but the window server only paints it under a logged-in
 desktop). Everything that does **not** need a window is unit-tested in
-`SichCore`:
+`SichCore`, and the AppKit interactions are tested in `SichAppTests` by
+dispatching real events at mounted views:
 
 - **Key event → PTY bytes** (`KeyEncoder`): ⏎, printable chars, ⌃C, arrows.
 - **Grid → renderable lines** (`Terminal.lines()`): feed known output, assert lines.

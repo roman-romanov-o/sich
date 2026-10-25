@@ -18,7 +18,7 @@ struct TaskSwitchTests {
     private func seeds(_ states: [CardState]) -> [BoardSeed] {
         states.enumerated().map { index, state in
             BoardSeed(sessionID: "demo/\(index)", projectDir: "~/p\(index)",
-                      agent: .claude, flow: .a, state: state, scrollback: "s\(index)")
+                      agent: .claude, state: state, scrollback: "s\(index)")
         }
     }
 
@@ -44,7 +44,7 @@ struct TaskSwitchTests {
     /// A pure `BoardCard` for the ordering tests (no PTY needed).
     private func card(_ name: String, _ state: CardState) -> BoardCard {
         BoardCard(sessionID: name, projectDir: "~/\(name)",
-                  agent: .claude, flow: .b, state: state)
+                  agent: .claude, state: state)
     }
 
     // MARK: - Decodes (real NSEvents through the monitor's own predicates)

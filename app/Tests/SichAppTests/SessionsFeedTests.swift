@@ -9,7 +9,7 @@ import Testing
 /// `HookSessionStore.Entry` values (not a `/sessions` JSON body); these drive the
 /// REAL mapping (`SessionsFeed.cards(from:)`) so an entry/board drift is caught
 /// before it reaches an NSView. Each hook-observed session is a human-launched
-/// Claude Code run we only watch (flow B), labelled by repo (falling back to id).
+/// Claude Code run we only watch, labelled by repo (falling back to id).
 struct SessionsFeedTests {
     private let now = Date(timeIntervalSince1970: 1_750_000_000)
 
@@ -29,7 +29,6 @@ struct SessionsFeedTests {
         #expect(normal.projectDir == "/repo")
         #expect(normal.state == .running)
         #expect(normal.agent == .claude)
-        #expect(normal.flow == .b)
     }
 
     @Test func preservesCodexAgentIdentity() {

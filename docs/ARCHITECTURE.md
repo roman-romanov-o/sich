@@ -2,10 +2,8 @@
 
 Sich is a native macOS/AppKit app (Swift 6, `app/`) that embeds
 libghostty to become the terminal for managed agentic-coding sessions, with
-a kanban board and quota panel wrapped around it. There is no separate
-Python service in the running product — the earlier Python core was
-retired; a tiny Python "sidecar" process is spawned locally only to serve
-`/quota` and `/sessions` JSON to the app (see below).
+a kanban board and quota panel wrapped around it. It is a single binary:
+there is no helper service, no sidecar process, and no HTTP wire.
 
 ## Package layout (`app/Package.swift`)
 
@@ -26,11 +24,10 @@ retired; a tiny Python "sidecar" process is spawned locally only to serve
 
 ## Core concepts
 
-### Two-flow / two-pool board
-The board tracks agentic-coding work at "board altitude" across two
-Anthropic usage pools (interactive `claude` sessions vs. API-credit `saha
-run`). It is a cockpit for the `saha` planning/execution loop, not a
-generic kanban.
+### Board altitude, two Anthropic pools
+The board tracks agentic-coding work at "board altitude": one card per
+session, placed by the agent's detected state. Quota is read per pool
+(interactive subscription vs. API credits) and the two are never summed.
 
 ### Watcher, not spawner
 `PoolFirewall` (`SichCore/PoolFirewall.swift`) enforces in code that
@@ -55,15 +52,18 @@ session lifecycle. Sessions owned by the app's own embedded terminal and
 sessions observed via hooks are merged into one `SessionRegistry`.
 
 ### Quota panel
-`QuotaSidecar` spawns a lightweight local process that reads Claude's real
-`/api/oauth/usage` endpoint (via the keychain OAuth token) and exposes it
-as `/quota` and `/sessions` JSON, which `QuotaGauge`/`QuotaUsageReader`
-poll. This replaced an earlier token-count estimate that read ~2x high.
+`NativeQuotaPoller` (`SichApp/QuotaSidecar.swift`) reads each Claude
+profile's usage in-process — `ClaudeUsageProbe` hits the real
+`/api/oauth/usage` endpoint with the keychain OAuth token, and
+`QuotaUsageReader` walks the transcript directories — then hands
+`[QuotaSourceInput]` to `QuotaPanel`. Codex, Cursor and Antigravity have
+their own readers next to it.
 
-### Diffs / drill-in
-Per-turn diffs shown in the drill-in panel (`DiffModel`, `DiffTextView`,
-`ChangesView`, `DrillInSidebar`) are git-sourced and rendered with a native
-`NSTextView` + stdlib word-diff — no webview, no remote/tmux dependency.
+### Remote sessions
+A remote card attaches a tmux session over ssh (`RemoteTmuxCommand`,
+`RemoteEventRelay`). The relay tails the far side's hook event log so a
+remote agent moves its card exactly like a local one; `RemoteHookInstallState`
+tracks whether the forwarder is installed there.
 
 ## Data flow (running app)
 
@@ -74,16 +74,14 @@ Per-turn diffs shown in the drill-in panel (`DiffModel`, `DiffTextView`,
    deadlocks).
 2. Hook events land via `HookEventTail`, get normalized, and update
    `SessionRegistry` / `BoardColumn` state, moving cards across the board.
-3. `QuotaSidecar` polls quota/session data in the background and feeds
+3. `NativeQuotaPoller` polls quota data in the background and feeds
    `QuotaPanel`/`QuotaGaugeRow`.
-4. Selecting a card drills into `TerminalSurface` (if it's the owned
-   embedded terminal) or `DrillInPanel`/`DrillInSidebar` for diffs and
-   history.
+4. Selecting a card drills into its `TerminalSurface` inside `DrillInPanel`,
+   a full-window takeover of the same PTY the board was draining.
 
 ## Docs map
 
 - `docs/PRODUCT.md` — product thesis and constraints.
-- `docs/DESIGN-SPEC.md` — UI/interaction spec.
-- `docs/further-ideas.md` — backlog of ideas not yet scoped into a task.
-- `docs/tasks/task-XX-*/` — Sahaidachny task planning artifacts (user
-  stories, plans, decisions) per feature.
+- `docs/OPERATING-RULES.md` — pace and attention rules (rule 1 is enforced in-app).
+- `docs/CARD-STATUS.md` — the exact rules that move a card between columns.
+- `docs/further-ideas.md` — backlog of ideas not yet scoped.

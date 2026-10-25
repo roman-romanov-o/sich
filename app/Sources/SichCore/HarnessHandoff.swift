@@ -12,8 +12,7 @@ public enum HarnessHandoff {
         priorAgent: CardAgent,
         priorAccountName: String?,
         priorTranscriptPath: String?,
-        workLogTail: String?,
-        taskFolder: String?
+        workLogTail: String?
     ) -> String {
         var parts: [String] = []
         let prior = priorAccountName.map { "\(priorAgent.displayName) (\($0))" }
@@ -21,9 +20,6 @@ public enum HarnessHandoff {
         parts.append("Continuing a task that was running on \(prior).")
         if let title, !title.isEmpty { parts.append("Task: \(title)") }
         parts.append("Project: \(projectDir)")
-        if let taskFolder, !taskFolder.isEmpty {
-            parts.append("Saha task folder: \(taskFolder)")
-        }
         if let priorTranscriptPath, !priorTranscriptPath.isEmpty {
             parts.append("""
                 Prior session transcript (read/search this file for context — do not assume \

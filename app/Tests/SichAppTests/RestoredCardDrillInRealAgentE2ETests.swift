@@ -81,8 +81,7 @@ struct RestoredCardDrillInRealAgentE2ETests {
         let cardID = UUID()
         let store = SessionSnapshotStore(directory: storeDir)
         _ = try store.save(windows: [WindowSnapshot(panes: [PaneSnapshot(
-            sessionID: UUID(), cwd: work.path, agentType: .claude, flowTag: .interactive,
-            childPID: nil, claudeSessionID: conversation, title: "Resume me",
+            sessionID: UUID(), cwd: work.path, agentType: .claude, childPID: nil, claudeSessionID: conversation, title: "Resume me",
             cardID: cardID, cardState: .waitingForInput, wasAlive: true)])])
 
         let shell = BoardShell()

@@ -19,21 +19,20 @@ repo `.gitignore`). Regenerate them with the rebuild below after a fresh clone.
 
 | Pin | Value |
 |-----|-------|
-| Source | `ghostty-org/ghostling` (CMake superbuild) which fetches `ghostty` |
+| Source | `ghostty-org/ghostty`, `zig build -Demit-lib-vt` |
 | ghostty rev | `ae52f97dcac558735cfa916ea3965f247e5c6e9e` |
-| Zig | **0.15.2** — Homebrew ships 0.16.0, which will **not** build this rev. Get it from ziglang.org (`zig-aarch64-macos-0.15.2`). |
-| Also needs | CMake ≥ 3.19, Ninja, Xcode CLT |
+| Zig | **0.15.2** — Homebrew ships a newer Zig, which will **not** build this rev. Get it from ziglang.org. |
+| Also needs | Xcode command line tools (`xcodebuild` produces the xcframework) |
+
+Both pins live in one place, `app/scripts/build-ghostty-vt.sh`; CI keys its
+cache of the archives on that file.
 
 ## Rebuild
 
 ```bash
-git clone https://github.com/ghostty-org/ghostling /tmp/ghostling
-cd /tmp/ghostling
-# ensure the pinned Zig 0.15.2 is on PATH (not Homebrew's 0.16.0)
-cmake -B build -G Ninja
-cmake --build build
-# the xcframework lands at:
-#   build/_deps/ghostty-src/zig-out/lib/ghostty-vt.xcframework
-cp -R build/_deps/ghostty-src/zig-out/lib/ghostty-vt.xcframework \
-      "$REPO/app/Frameworks/ghostty-vt.xcframework"
+# with Zig 0.15.2 on PATH
+app/scripts/build-ghostty-vt.sh
 ```
+
+The script fetches the pinned revision, builds `lib-vt`, and copies only the
+`*.a` slices into this directory next to the tracked headers.

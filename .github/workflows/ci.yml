@@ -1,12 +1,10 @@
 name: CI
 
-# Runs on a self-hosted runner on the developer's Mac. Two reasons this repo
-# can't use a GitHub-hosted macOS runner without extra work:
-#   1. The vendored libghostty-vt static archives are git-ignored (~30M), so a
-#      fresh clone can't link. This Mac already has them built.
-#   2. Private repo => hosted macOS minutes bill at 10x.
-# See app/Frameworks/README.md for the rebuild recipe if this ever moves to a
-# hosted runner (pinned ghostty rev + Zig 0.15.2, cacheable on the rev).
+# Every job runs on GitHub-hosted runners. The one non-obvious prerequisite is
+# the vendored libghostty-vt static archives, which are git-ignored (~30 MB) and
+# rebuilt here from the pinned ghostty revision with Zig 0.15.2; the result is
+# cached on the pins (see app/scripts/build-ghostty-vt.sh), so only the first
+# run after a pin change pays for the Zig build.
 
 on:
   push:
@@ -14,50 +12,64 @@ on:
   pull_request:
   workflow_dispatch:
 
-# A newer push makes an in-flight run obsolete; don't tie up the one Mac.
+permissions:
+  contents: read
+
+# A newer push makes an in-flight run obsolete.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   swift:
-    name: build · test · dead-code
-    runs-on: [self-hosted, macOS]
+    name: Build and test
+    runs-on: macos-15
+    timeout-minutes: 120
     defaults:
       run:
         working-directory: app
     env:
-      # The runner runs as a LaunchAgent and does not inherit an interactive
-      # shell's PATH. periphery is pinned at 3.5.1 in ~/.local/bin (Homebrew's
-      # 3.7.4 refuses this toolchain's Swift 6.0.3 — it wants >= 6.1.2).
-      PATH: /Users/romanromanov/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin
+      # Pin the toolchain the suite is developed and verified against (Swift 6.2).
+      # The image's default Xcode 16.4 (Swift 6.1) never lets the async relay
+      # tests' main-actor hops land, and macos-26 already moved on to Swift 6.3.
+      # If the image drops this Xcode the first step fails loudly; bump it then.
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       - name: Toolchain versions
         run: |
           swift --version
-          periphery version
+          xcodebuild -version
 
-      # The libghostty-vt static archives are git-ignored (~30M), so checkout
-      # never brings them and a fresh workspace would fail at link time, a mile
-      # from the cause. Restore them from a local cache keyed on the ghostty rev
-      # pinned in app/Frameworks/README.md. Populate the cache by copying the
-      # *.a files out of a working checkout, preserving the slice layout:
-      #   ~/Library/Caches/sich/ghostty-vt/<rev>/<slice>/lib*.a
       - name: Restore vendored libghostty-vt
-        run: |
-          rev=ae52f97dcac558735cfa916ea3965f247e5c6e9e
-          cache="$HOME/Library/Caches/sich/ghostty-vt/$rev"
-          if [ ! -d "$cache" ]; then
-            echo "::error::No cached libghostty-vt for rev $rev at $cache. Rebuild it (pinned rev + Zig 0.15.2) per app/Frameworks/README.md, then copy the *.a files into that path."
-            exit 1
-          fi
-          # Trailing slash on the source: copy the slice dirs' contents in,
-          # merging alongside the tracked headers rather than nesting under them.
-          rsync -a "$cache"/ Frameworks/ghostty-vt.xcframework/
-          find Frameworks/ghostty-vt.xcframework -name '*.a' -exec ls -lh {} \;
+        id: ghostty
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: app/Frameworks/ghostty-vt.xcframework/**/*.a
+          key: ghostty-vt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('app/scripts/build-ghostty-vt.sh') }}
+
+      - name: Set up Zig
+        if: steps.ghostty.outputs.cache-hit != 'true'
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.15.2
+
+      - name: Build libghostty-vt (cache miss)
+        if: steps.ghostty.outputs.cache-hit != 'true'
+        run: scripts/build-ghostty-vt.sh
+
+      # Saved right after the build, not at job end, so a later test failure
+      # never throws the expensive archives away.
+      - name: Cache vendored libghostty-vt
+        if: steps.ghostty.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: app/Frameworks/ghostty-vt.xcframework/**/*.a
+          key: ${{ steps.ghostty.outputs.cache-primary-key }}
 
       - name: Build (warnings are errors)
         run: swift build -Xswiftc -warnings-as-errors
@@ -76,5 +88,32 @@ jobs:
       # Dead-code ratchet: fails only on findings absent from
       # .periphery-baseline.json. Shrink the baseline as things get cleaned up;
       # never widen it to silence a new finding.
+      # A pinned release binary, checksum-verified: the Homebrew cask lags years
+      # behind and does not understand this repo's config.
       - name: Dead code (Periphery, vs. baseline)
-        run: periphery scan --baseline .periphery-baseline.json --strict --format github-actions
+        env:
+          PERIPHERY_VERSION: "3.8.0"
+          PERIPHERY_SHA256: 07d4e286e31dd79164df39097e0b59f533c94badbe18158464a455ea88a166d7
+        run: |
+          curl -sSfL -o periphery.zip \
+            "https://github.com/peripheryapp/periphery/releases/download/${PERIPHERY_VERSION}/periphery-${PERIPHERY_VERSION}.zip"
+          echo "${PERIPHERY_SHA256}  periphery.zip" | shasum -a 256 -c
+          mkdir -p "$RUNNER_TEMP/periphery" && unzip -qo periphery.zip -d "$RUNNER_TEMP/periphery"
+          "$RUNNER_TEMP/periphery/periphery" version
+          "$RUNNER_TEMP/periphery/periphery" scan --baseline .periphery-baseline.json --strict --format github-actions
+
+  forwarder:
+    name: Hook forwarder test and lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - name: Lint
+        run: |
+          uvx ruff check tests
+          uvx ruff format --check tests
+      - name: Test
+        run: uv run --with pytest pytest -q tests

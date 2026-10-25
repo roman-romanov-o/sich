@@ -21,7 +21,7 @@ struct DrillInInteractionTests {
     private func singleSeed() -> [BoardSeed] {
         [BoardSeed(
             sessionID: "demo/one", projectDir: "~/demo",
-            agent: .claude, flow: .a, state: .waitingForInput,
+            agent: .claude, state: .waitingForInput,
             scrollback: "waiting on you"
         )]
     }
@@ -210,9 +210,9 @@ struct DrillInInteractionTests {
         let checkout = try makeWorktreeCheckout(branch: "task/fix-login")
         let seeds = [
             BoardSeed(sessionID: "wt/one", projectDir: checkout,
-                      agent: .claude, flow: .b, state: .running, scrollback: "on a worktree"),
+                      agent: .claude, state: .running, scrollback: "on a worktree"),
             BoardSeed(sessionID: "plain/one", projectDir: "/tmp",
-                      agent: .claude, flow: .b, state: .running, scrollback: "shared checkout"),
+                      agent: .claude, state: .running, scrollback: "shared checkout"),
         ]
         let shell = BoardShell(seeds: seeds)
         shell.buildContentForTesting()

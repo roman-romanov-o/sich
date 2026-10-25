@@ -19,8 +19,7 @@ struct RemotePaneRestoreTests {
         spec: RemoteTmuxSpec, cardID: UUID = RemotePaneRestoreTests.cardID
     ) -> PaneSnapshot {
         PaneSnapshot(
-            sessionID: UUID(), cwd: spec.target, agentType: .claude, flowTag: .interactive,
-            childPID: 4242, cardID: cardID, wasAlive: true,
+            sessionID: UUID(), cwd: spec.target, agentType: .claude, childPID: 4242, cardID: cardID, wasAlive: true,
             remote: RemoteSpecSnapshot(spec: spec)
         )
     }
@@ -171,8 +170,7 @@ struct RemotePaneRestoreTests {
     func paneWithoutRemoteFieldRestoresLocal() throws {
         var spawned: [[String]] = []
         let local = PaneSnapshot(
-            sessionID: UUID(), cwd: "/tmp", agentType: .claude, flowTag: .interactive,
-            childPID: 4242, wasAlive: true)
+            sessionID: UUID(), cwd: "/tmp", agentType: .claude, childPID: 4242, wasAlive: true)
         let restored = spyRestorer { spawned.append($0) }.restore(
             SessionSnapshot(createdAt: Date(), windows: [WindowSnapshot(panes: [local])]))
 

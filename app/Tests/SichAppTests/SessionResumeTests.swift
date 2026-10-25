@@ -44,7 +44,7 @@ struct SessionResumeTests {
         cwd: String, agent: AgentType = .shell, pid: Int32? = 100
     ) -> PaneSnapshot {
         PaneSnapshot(
-            sessionID: UUID(), cwd: cwd, agentType: agent, flowTag: .interactive, childPID: pid
+            sessionID: UUID(), cwd: cwd, agentType: agent, childPID: pid
         )
     }
 
@@ -64,11 +64,8 @@ struct SessionResumeTests {
 
     /// A demo-stub seed (prints a banner then idles on `cat`, so the PTY stays live for
     /// the snapshot) rooted in a real temp working dir — never `claude -p`.
-    private func demoSeed(id: String, dir: URL, agent: CardAgent, flow: CardFlow) -> BoardSeed {
-        BoardSeed(
-            sessionID: id, projectDir: dir.path, agent: agent,
-            flow: flow, state: .idle, scrollback: ""
-        )
+    private func demoSeed(id: String, dir: URL, agent: CardAgent) -> BoardSeed {
+        BoardSeed(sessionID: id, projectDir: dir.path, agent: agent, state: .idle, scrollback: "")
     }
 
     // MARK: - TC-INT-020: quit writes a snapshot, launch restores it
@@ -79,10 +76,10 @@ struct SessionResumeTests {
         let workB = makeSnapshotDir()
         defer { cleanup(storeDir); cleanup(workA); cleanup(workB) }
 
-        // A running board with two live panes in distinct dirs (varied agent + flow).
+        // A running board with two live panes in distinct dirs (varied agent).
         let shell = BoardShell(seeds: [
-            demoSeed(id: "resume-a", dir: workA, agent: .claude, flow: .b),
-            demoSeed(id: "resume-b", dir: workB, agent: .codex, flow: .a),
+            demoSeed(id: "resume-a", dir: workA, agent: .claude),
+            demoSeed(id: "resume-b", dir: workB, agent: .codex),
         ])
         _ = shell.buildContentForTesting()
         defer { shell.e2eTeardown() }  // SIGTERM the forked demo shells — no leak
@@ -114,38 +111,35 @@ struct SessionResumeTests {
         #expect(reopened.count == 2)  // both panes re-opened as live shells
     }
 
-    // MARK: - Named-task persistence: a card's title + task folder survive a restart
+    // MARK: - Named-task persistence: a card's title survives a restart
 
-    /// The "tasks do not save after restart" bug: a card carried a human title and a
-    /// saha task folder, but only the bare session (cwd + identity) was persisted, so a
-    /// restart brought back an *unnamed shell* at the same dir. This drives the real
-    /// quit→restart seams end to end and proves the card comes back *by name*, still
-    /// bound to its task folder — enriched at quit, rebuilt at launch.
-    @Test("a named card's title + task folder survive quit → restart")
-    func namedCardTitleAndTaskFolderSurviveRestart() throws {
+    /// The "tasks do not save after restart" bug: a card carried a human title, but
+    /// only the bare session (cwd + identity) was persisted, so a restart brought back
+    /// an *unnamed shell* at the same dir. This drives the real quit→restart seams end
+    /// to end and proves the card comes back *by name* — enriched at quit, rebuilt at
+    /// launch.
+    @Test("a named card's title survives quit → restart")
+    func namedCardTitleSurvivesRestart() throws {
         let storeDir = makeSnapshotDir()
         let work = makeSnapshotDir()
         defer { cleanup(storeDir); cleanup(work) }
 
-        // A running board with one NAMED, saha-bound card (title + explicit task folder).
-        // Flow B so the task folder is the one we set, not an inferred current-task.
+        // A running board with one NAMED card.
         let titled = BoardSeed(
             sessionID: "resume-titled", title: "Fix login redirect", projectDir: work.path,
-            agent: .claude, flow: .b, state: .idle, scrollback: "",
-            taskFolder: "/tasks/task-42-login"
+            agent: .claude, state: .idle, scrollback: ""
         )
         let shell = BoardShell(seeds: [titled])
         _ = shell.buildContentForTesting()
         defer { shell.e2eTeardown() }
 
-        // Quit: the persisted pane carries the card's title + task folder — NOT a bare shell.
+        // Quit: the persisted pane carries the card's title — NOT a bare shell.
         let store = SessionSnapshotStore(directory: storeDir, now: { self.fixedDate })
         let saved = try #require(shell.persistOnTerminate(store: store))
         let pane = try #require(saved.windows.flatMap(\.panes).first)
         #expect(pane.title == "Fix login redirect")
-        #expect(pane.taskFolder == "/tasks/task-42-login")
 
-        // Launch: the REAL restorer rebuilds the card by name, still pointing at its task.
+        // Launch: the REAL restorer rebuilds the card by name.
         let relaunched = BoardShell()
         defer { relaunched.e2eTeardown() }
         let restoredCards = relaunched.restoreCardsForTesting(
@@ -153,7 +147,6 @@ struct SessionResumeTests {
         )
         let card = try #require(restoredCards.first)
         #expect(card.title == "Fix login redirect")
-        #expect(card.taskFolder == "/tasks/task-42-login")
     }
 
     // MARK: - TC-UNIT-021: corrupt current → -previous fallback (via the launch seam)
@@ -318,7 +311,7 @@ struct SessionResumeTests {
         #expect(!resume.contains("--print") && !resume.contains(" -p"))
         let cursor = PaneSnapshot(
             sessionID: UUID(), cwd: "/w", agentType: .cursor,
-            flowTag: .interactive, childPID: 1
+            childPID: 1
         )
         #expect(BoardShell.restoredAgentCommand(for: cursor) == resume)
     }
@@ -332,7 +325,7 @@ struct SessionResumeTests {
         #expect(!resume.contains("--print") && !resume.contains(" -p"))
         let pane = PaneSnapshot(
             sessionID: UUID(), cwd: "/w", agentType: .antigravity,
-            flowTag: .interactive, childPID: 1
+            childPID: 1
         )
         #expect(BoardShell.restoredAgentCommand(for: pane) == resume)
     }
@@ -342,15 +335,15 @@ struct SessionResumeTests {
         let claudeID = UUID(uuidString: "AABBCCDD-1122-3344-5566-778899AABBCC")!
         let claude = PaneSnapshot(
             sessionID: UUID(), cwd: "/w", agentType: .claude,
-            flowTag: .interactive, childPID: 1, claudeSessionID: claudeID
+            childPID: 1, claudeSessionID: claudeID
         )
         let codex = PaneSnapshot(
             sessionID: UUID(), cwd: "/w", agentType: .codex,
-            flowTag: .interactive, childPID: 1
+            childPID: 1
         )
         let shell = PaneSnapshot(
             sessionID: UUID(), cwd: "/w", agentType: .shell,
-            flowTag: .interactive, childPID: 1
+            childPID: 1
         )
 
         #expect(BoardShell.restoredAgentCommand(for: claude) == BoardShell.resumeClaudeCommand(sessionID: claudeID, via: .localShim))
@@ -365,19 +358,19 @@ struct SessionResumeTests {
 
         let explicit = PaneSnapshot(
             sessionID: paneID, cwd: "/w", agentType: .claude,
-            flowTag: .interactive, childPID: 1, claudeSessionID: claudeID
+            childPID: 1, claudeSessionID: claudeID
         )
         #expect(BoardShell.claudeResumeID(for: explicit) == claudeID)
 
         let legacyClaude = PaneSnapshot(
             sessionID: paneID, cwd: "/w", agentType: .claude,
-            flowTag: .interactive, childPID: 1
+            childPID: 1
         )
         #expect(BoardShell.claudeResumeID(for: legacyClaude) == paneID)
 
         let shell = PaneSnapshot(
             sessionID: paneID, cwd: "/w", agentType: .shell,
-            flowTag: .interactive, childPID: 1
+            childPID: 1
         )
         #expect(BoardShell.claudeResumeID(for: shell) == nil)
     }
@@ -392,7 +385,7 @@ struct SessionResumeTests {
         let store = SessionSnapshotStore(directory: dir, now: { self.fixedDate })
         _ = try store.save(windows: [WindowSnapshot(panes: [
             PaneSnapshot(sessionID: UUID(), cwd: "/w", agentType: .claude,
-                         flowTag: .interactive, childPID: 1, claudeSessionID: claudeID),
+                         childPID: 1, claudeSessionID: claudeID),
             pane(cwd: "/bare", agent: .shell, pid: 2), // no claudeSessionID → nil
         ])])
         let back = try #require(store.load())

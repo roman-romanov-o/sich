@@ -11,14 +11,14 @@ struct WorktreeProvisionerTests {
     private func makeRepo(in base: URL) throws -> URL {
         let repo = base.appendingPathComponent("repo", isDirectory: true)
         try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
-        let runner = FoundationTaskScaffoldRunner()
+        let runner = FoundationProcessRunner()
         let git = URL(fileURLWithPath: "/usr/bin/git")
         for args in [
             ["init", "-q"],
             ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "seed"],
         ] {
             let r = try runner.run(executable: git, arguments: args, directory: repo)
-            try #require(r.exitCode == 0, Comment(rawValue: r.standardError))
+            try #require(r.exitCode == 0, Comment(rawValue: r.standardOutput))
         }
         return repo
     }

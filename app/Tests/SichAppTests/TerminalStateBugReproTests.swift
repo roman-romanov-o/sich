@@ -28,7 +28,7 @@ struct TerminalStateBugReproTests {
     private func twoTasksInOneRepo() -> BoardShell {
         func task(_ id: String) -> BoardSeed {
             BoardSeed(sessionID: id, projectDir: "/repo", agent: .claude,
-                      flow: .b, state: .idle, scrollback: "ready")
+                      state: .idle, scrollback: "ready")
         }
         let shell = BoardShell(seeds: [task("task-a-untouched"), task("task-b-active")])
         _ = shell.buildContentForTesting()
@@ -39,7 +39,7 @@ struct TerminalStateBugReproTests {
     /// `session_id`, cwd = the shared repo dir.
     private func claudeRun(_ state: CardState) -> BoardCard {
         BoardCard(sessionID: "claude-uuid", projectDir: "/repo", agent: .claude,
-                  flow: .b, state: state, updatedAt: base.addingTimeInterval(100))
+                  state: state, updatedAt: base.addingTimeInterval(100))
     }
 
     // MARK: - Bug 1: the task you never opened must not move
@@ -78,7 +78,7 @@ struct TerminalStateBugReproTests {
         shell.applySessions([
             BoardCard(
                 sessionID: "stale-notification", projectDir: "/repo", agent: .claude,
-                flow: .b, state: .waitingForInput,
+                state: .waitingForInput,
                 updatedAt: base.addingTimeInterval(200),
                 boundCardID: completed.id.uuidString
             )
@@ -103,7 +103,7 @@ struct TerminalStateBugReproTests {
         shell.applySessions([
             BoardCard(
                 sessionID: "claude-uuid", projectDir: "/repo", agent: .claude,
-                flow: .b, state: .waitingForInput,
+                state: .waitingForInput,
                 updatedAt: base.addingTimeInterval(200),
                 boundCardID: held.id.uuidString
             )
@@ -131,7 +131,7 @@ struct TerminalStateBugReproTests {
         shell.applySessions([
             BoardCard(
                 sessionID: "claude-uuid", projectDir: "/repo", agent: .claude,
-                flow: .b, state: .waitingForInput,
+                state: .waitingForInput,
                 updatedAt: base.addingTimeInterval(200),
                 boundCardID: card.id.uuidString
             )

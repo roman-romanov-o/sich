@@ -15,8 +15,7 @@ struct DeadSessionReconcileTests {
     /// A seed whose child exits immediately (`/bin/sh -c true`).
     private func shortLivedSeed(id: String = "dies/now") -> BoardSeed {
         BoardSeed(
-            sessionID: id, projectDir: "~/demo", agent: .claude, flow: .a,
-            state: .running, scrollback: "", commandOverride: ["/bin/sh", "-c", "true"]
+            sessionID: id, projectDir: "~/demo", agent: .claude, state: .running, scrollback: "", commandOverride: ["/bin/sh", "-c", "true"]
         )
     }
 
