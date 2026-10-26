@@ -96,7 +96,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     // fresh observations in the current app session.
     private var manuallyDoneCardIDs: Set<UUID> = []
     // The other two columns that are operator intent rather than detector output:
-    // BLOCKED (you are waiting on someone else) and PARKED (you shelved it). The
+    // BLOCKED (you are waiting on someone else) and BACKLOG (you shelved it). The
     // session under such a card is usually alive and sitting at a prompt, so its
     // next `Stop` reports `waiting-for-input` — which dragged the card straight back
     // to NEEDS YOU seconds after the drop (docs/OPERATING-RULES.md rule 1).
@@ -750,7 +750,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     }
 
     /// Only operator intent is durable: DONE, and the two held columns (BLOCKED /
-    /// PARKED). A live state restarts from queue and must earn WORKING again from
+    /// BACKLOG). A live state restarts from queue and must earn WORKING again from
     /// fresh observations. The held state is read off the card but clamped to the two
     /// legal values, so no detector state can leak into a file an older build reads.
     private func persistedRestartState(for card: BoardCard) -> CardState {
@@ -2248,7 +2248,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         workLog?.noteEvent(
             "parked until \(Self.standupStamp.string(from: until)) (NEEDS YOU standup)",
             card: card, at: now)
-        // The snooze is stamped AFTER the move: landing in PARKED clears any existing
+        // The snooze is stamped AFTER the move: landing in BACKLOG clears any existing
         // deferral, which would otherwise wipe the one this call exists to record.
         move(cardID: cardID, to: .parked)
         taskMetaByCard[cardID, default: CardTaskMeta()].needsYouDeferredUntil = until
@@ -2998,7 +2998,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     ///
     /// A DONE card is exempt: completion is settled, nothing on the far side can
     /// change it, so a dead link (e.g. the host lives on a tailnet you are not on
-    /// right now) must not drag finished work back into PARKED.
+    /// right now) must not drag finished work back into BACKLOG.
     func displayCards() -> [BoardCard] {
         guard let sessionsPoller else { return cards }
         return cards.map { card in
@@ -3251,7 +3251,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// Reconcile detector output without surrendering manual task placement. DONE is
     /// a manual-only column in both directions: a manually completed task stays there
     /// until the operator moves it, and an observed session completion cannot put an
-    /// active task there. BLOCKED and PARKED are manual in the same sense — they say
+    /// active task there. BLOCKED and BACKLOG are manual in the same sense — they say
     /// something the agent cannot know (you are waiting on a PR, you shelved this) —
     /// so a live session's next turn end must not pull them back to NEEDS YOU. Other
     /// live states continue to move non-held cards.

@@ -24,7 +24,7 @@ enum BoardTheme {
     /// A NEEDS YOU card's warm fill; stroke is `attention` (fresh) or `needsYouStroke` (aging).
     static let needsYouCard = dynamic(dark: hex(0x3A2A1C), light: hex(0xFFF1D9))
     static let needsYouStroke = hex(0xB35C1F)   // orange700 — shared accent
-    /// PARKED — shelved / deferred; quieter than QUEUE.
+    /// BACKLOG — shelved / deferred (the `parked` state); quieter than QUEUE.
     static let parkedColumn = dynamic(dark: hex(0x1A1D22), light: hex(0xECEFF2))
     static let parkedCard = dynamic(dark: hex(0x252930), light: hex(0xF4F6F8))
     /// BLOCKED — waiting on someone/something outside the session (PR review, upstream).

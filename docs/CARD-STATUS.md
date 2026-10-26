@@ -8,8 +8,8 @@ The board renders six column groups (`BoardView.ColumnGroup`), left to right:
 
 | Column | Meaning | Underlying `CardState`s |
 |---|---|---|
+| **BACKLOG** | shelved on purpose (defer, unknown host) | `parked`, `unknown`, `unreachable` |
 | **QUEUE** | ready to pull / at rest | `idle` |
-| **PARKED** | shelved on purpose (defer, unknown host) | `parked`, `unknown`, `unreachable` |
 | **WORKING** | an agent is actively producing | `running`, `running-tests` |
 | **NEEDS YOU** | the agent waits on **you** | `waiting-for-input` |
 | **BLOCKED** | waiting on **external** factors (PR review, upstream) | `blocked` |

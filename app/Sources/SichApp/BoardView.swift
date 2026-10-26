@@ -2,7 +2,7 @@ import AppKit
 import SichCore
 
 /// The mission-control board surface (US-003), in the Mission Control v5 layout:
-/// six live columns — QUEUE / PARKED / WORKING / NEEDS YOU / BLOCKED / DONE —
+/// six live columns — BACKLOG / QUEUE / WORKING / NEEDS YOU / BLOCKED / DONE —
 /// instead of raw state columns × flow swimlanes. DONE can be folded into a
 /// narrow rail (``DoneRail``) so a laptop-width board spends its width on the
 /// three live columns; the fold persists across launches. Flow is card
@@ -38,7 +38,7 @@ final class BoardView: NSView {
 
     /// The v5 column groups, left→right.
     enum ColumnGroup: CaseIterable {
-        case queue, parked, working, needsYou, blocked, done
+        case parked, queue, working, needsYou, blocked, done
 
         /// Every `CardState` lands in exactly one group — total, so no card can
         /// silently vanish from the board (the `.unknown` regression).
@@ -59,7 +59,7 @@ final class BoardView: NSView {
         var title: String {
             switch self {
             case .queue: return "QUEUE"
-            case .parked: return "PARKED"
+            case .parked: return "BACKLOG"
             case .working: return "WORKING"
             case .needsYou: return "NEEDS YOU"
             case .blocked: return "BLOCKED"
@@ -162,8 +162,8 @@ final class BoardView: NSView {
         laneWidthConstraints = []
         columnFaces = [:]
         var previous: NSView?
-        // QUEUE → PARKED → WORKING → NEEDS YOU → BLOCKED → DONE. The unfinished
-        // backlog UI stays out of this live-work surface.
+        // BACKLOG → QUEUE → WORKING → NEEDS YOU → BLOCKED → DONE. The unfinished
+        // durable-backlog UI stays out of this live-work surface.
         for group in groups {
             let collapsed = group == .done && isDoneCollapsed
             let column = collapsed ? makeDoneRail() : makeColumn(group)
@@ -219,7 +219,7 @@ final class BoardView: NSView {
         let column = NSView()
         column.wantsLayer = true
         // NEEDS YOU / BLOCKED take their tint from ``applyLaneTone`` once their
-        // count is known; PARKED is always the quiet sunken shelf.
+        // count is known; BACKLOG is always the quiet sunken shelf.
         if group == .parked { column.themedBackground = BoardTheme.parkedColumn }
         if group != .done { addRightHairline(to: column) }
 

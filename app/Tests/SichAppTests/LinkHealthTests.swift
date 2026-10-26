@@ -58,7 +58,7 @@ struct LinkHealthTests {
     }
 
     /// Two tailnets: a host on the one you are not on right now reads as a dead link.
-    /// Finished work there must stay in DONE, not be dragged back into PARKED as
+    /// Finished work there must stay in DONE, not be dragged back into BACKLOG as
     /// `unreachable` — completion is settled and nothing remote can change it.
     @Test("a DONE card on a dead host stays done")
     func aDoneCardOnADeadHostStaysDone() async throws {
