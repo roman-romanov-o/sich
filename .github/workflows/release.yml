@@ -122,7 +122,9 @@ jobs:
           # release runs on Intel too. Keep the name honest — it is the only thing
           # a downloader can check before installing.
           ditto -c -k --keepParent build/Sich.app "build/Sich-${suffix}-universal.zip"
-          shasum -a 256 "build/Sich-${suffix}-universal.zip" | tee "build/Sich-${suffix}-universal.zip.sha256"
+          # Hash from inside build/ so the .sha256 names the bare file and
+          # `shasum -c` works in the download folder.
+          (cd build && shasum -a 256 "Sich-${suffix}-universal.zip" | tee "Sich-${suffix}-universal.zip.sha256")
           lipo -archs build/Sich.app/Contents/MacOS/sich
 
       # SLSA build provenance: a signed statement that THIS workflow, on THIS
