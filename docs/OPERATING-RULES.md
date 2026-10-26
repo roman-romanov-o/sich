@@ -10,7 +10,7 @@ See also: `scripts/worklog_analytics.py` for offline stats on your machine.
 **Habit:** Once or twice per day (~15 minutes), touch every card in NEEDS YOU:
 
 - **Respond now** — drill in, decide, send the next instruction.
-- **Park until tomorrow** — move to **PARKED** until tomorrow (explicit snooze; not silent abandonment).
+- **Park until tomorrow** — move to **BACKLOG** until tomorrow (explicit snooze; not silent abandonment).
 - **Blocked externally** — move to **BLOCKED** when you are waiting on others (PR review, upstream), not the agent.
 - **Done / archive** — finish or kill work that will not ship.
 

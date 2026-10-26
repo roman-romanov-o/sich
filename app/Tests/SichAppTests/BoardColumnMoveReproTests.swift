@@ -45,10 +45,10 @@ struct BoardColumnMoveReproTests {
         #expect(groupHoldingCard(view) == .working)
     }
 
-    @Test("columns left→right: QUEUE → PARKED → WORKING → NEEDS YOU → BLOCKED → DONE")
+    @Test("columns left→right: BACKLOG → QUEUE → WORKING → NEEDS YOU → BLOCKED → DONE")
     func boardColumnOrder() {
         #expect(BoardView.ColumnGroup.allCases == [
-            .queue, .parked, .working, .needsYou, .blocked, .done,
+            .parked, .queue, .working, .needsYou, .blocked, .done,
         ])
     }
 
