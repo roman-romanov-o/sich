@@ -294,9 +294,7 @@ struct RemoteRelayStallTests {
         transport.emit(["{\"hook_event_name\":\"Stop\"}"])
         #expect(relay.health == .streaming)
 
-        try await Task.sleep(nanoseconds: 600_000_000)
-        #expect(transport.cancelCount >= 1)
-        #expect(transport.startCount >= 2)
+        #expect(await waitUntil { transport.cancelCount >= 1 && transport.startCount >= 2 })
         #expect(relay.health == .unreachable)
 
         transport.emit(["{\"hook_event_name\":\"PreToolUse\"}"])
