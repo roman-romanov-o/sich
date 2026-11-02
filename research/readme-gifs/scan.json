@@ -1,0 +1,2362 @@
+[
+ {
+  "repo": "jesseduffield/lazygit",
+  "stars": 83601,
+  "lines": 663,
+  "gif": 0,
+  "video": 16,
+  "img": 106,
+  "first_kind": "img",
+  "first_at": "6/663",
+  "media": [
+   [
+    6,
+    "img",
+    "https://github.com/warpdotdev/brand-assets/blob/main/Github/Sponsor/Warp-Github-LG-02.png?raw=true"
+   ],
+   [
+    20,
+    "img",
+    "../assets/tuple.png"
+   ],
+   [
+    29,
+    "img",
+    "../assets/subble.webp"
+   ],
+   [
+    39,
+    "img",
+    "https://user-images.githubusercontent.com/8456633/174470852-339b5011-5800-4bb9-a628-ff230aa8cd4e.png"
+   ],
+   [
+    50,
+    "video",
+    "https://github.com/user-attachments/assets/031799d1-740d-4cda-90cf-689513fa9860"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;intabulas.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;peppy.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;piot.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;oliverguenther.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;pawanjay176.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;naoey.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;carstengehling.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;Xetera.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;nartc.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;matejcik.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;lucatume.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;escrafford.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;IvanZuy.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;ava1ar.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;pedropombeiro.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;bburgy.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;JoeKlemmer.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;tobi.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;benbfortis.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;jakewarren.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;tgpholly.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;Tommylans.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;socketbox.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;bitprophet.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;Novakov.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;jhillyerd.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;nekhaevskiy.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;reivilibre.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;BSteffaniak.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;smangels.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;amslezak.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;mkock.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;danielkokott.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;heijmans.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;knowald.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;ethanjli.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;phubaba.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;neunkasulle.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;RVxLab.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;FrederickGeek8.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;ezdac.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;amalavet.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;lppassos.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;neilcode.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;dhh.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;ethanfischer.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;poshboytl.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;roesnera.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;seven1m.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;sgoridotla1.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;ADIX7.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;serranomorante.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;kiriDevs.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;StevenMasini.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;bjornevik.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;moberst.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;adam-e-trepanier.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;arkalon76.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;Djuuu.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;ellord.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;EdgarPost.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;caillou.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;mebezac.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;Tom94.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;carlassmann.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;moodyhunter.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;LasseBloch.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;slavshik.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;aidalgol.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;mbienkowsk.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;joshuawootonn.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;I4nJ.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;sandviklee.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;glagnar.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;skrzepto.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;unnawut.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;wortmanb.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;simoncdna.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;andre-lameirinhas.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;SVappsLAB.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;ooojustin.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;mayfieldiv.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;somaholiday.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;drew-council.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;dessalines.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;asukaminato0721.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;felipeospina21.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;riccardoNovaglia.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;rbuchberger.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;tyamori.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;ShGKme.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;jccint.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;odysseyalive.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;CarlosElizalde98.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;darrenspurgeon.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;nestor-custodio.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;cb341.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;zakrywilson.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;JusteNav.png"
+   ],
+   [
+    61,
+    "img",
+    "https:&#x2F;&#x2F;github.com&#x2F;ivanfed0t0v.png"
+   ],
+   [
+    141,
+    "video",
+    "https://github.com/user-attachments/assets/f02dfaca-c64b-4836-953a-9c856c00f7c2"
+   ],
+   [
+    152,
+    "video",
+    "https://github.com/user-attachments/assets/fc546a17-7bde-41d4-b58d-2ec95134d8ae"
+   ],
+   [
+    159,
+    "video",
+    "https://github.com/user-attachments/assets/740d3af2-e548-47ad-8480-6b117dca939e"
+   ],
+   [
+    166,
+    "video",
+    "https://github.com/user-attachments/assets/b05f3d63-7c78-43ef-b4ed-dc335065cdef"
+   ],
+   [
+    173,
+    "video",
+    "https://github.com/user-attachments/assets/81f3d396-54f7-4b92-92d7-4711f56b9c17"
+   ],
+   [
+    180,
+    "video",
+    "https://github.com/user-attachments/assets/41e34cac-1698-446e-bae8-9eb794b33b3d"
+   ],
+   [
+    187,
+    "video",
+    "https://github.com/user-attachments/assets/94bf28e8-2309-45b6-9e3d-de7f43200d22"
+   ],
+   [
+    194,
+    "video",
+    "https://github.com/user-attachments/assets/f7c68622-2c58-43b9-bd47-a1117ff11fd3"
+   ],
+   [
+    201,
+    "video",
+    "https://github.com/user-attachments/assets/a8cafbb6-9fc0-45bb-860e-cbd88f8b65bb"
+   ],
+   [
+    212,
+    "video",
+    "https://github.com/user-attachments/assets/9d36b387-56e6-4c72-9c44-83fcf5ad6228"
+   ],
+   [
+    217,
+    "video",
+    "https://github.com/user-attachments/assets/86d0b3ec-126d-4c80-a9f2-d2419ab1e578"
+   ],
+   [
+    224,
+    "video",
+    "https://github.com/user-attachments/assets/7cd0c1d2-d737-4ef9-934e-54a01bd7d270"
+   ],
+   [
+    234,
+    "video",
+    "https://github.com/user-attachments/assets/8a870289-2ab7-4a7e-8152-a04fa52310c1"
+   ],
+   [
+    241,
+    "video",
+    "https://github.com/user-attachments/assets/83b8103c-dafc-4540-acd2-0fd9f8227aff"
+   ],
+   [
+    248,
+    "video",
+    "https://github.com/user-attachments/assets/7094d9dd-d167-4caf-b79d-6da35a3f0279"
+   ],
+   [
+    256,
+    "img",
+    "https://i.imgur.com/sVEktDn.png"
+   ],
+   [
+    631,
+    "img",
+    "../assets/discord.png"
+   ]
+  ]
+ },
+ {
+  "repo": "charmbracelet/gum",
+  "stars": 24557,
+  "lines": 487,
+  "gif": 13,
+  "video": 0,
+  "img": 2,
+  "first_kind": "img",
+  "first_at": "3/487",
+  "media": [
+   [
+    3,
+    "img",
+    "https://stuff.charm.sh/gum/gum.png"
+   ],
+   [
+    6,
+    "img",
+    "https://godoc.org/github.com/golang/gddo?status.svg"
+   ],
+   [
+    15,
+    "gif",
+    "https://vhs.charm.sh/vhs-1qY57RrQlXCuydsEgDp68G.gif"
+   ],
+   [
+    57,
+    "gif",
+    "https://vhs.charm.sh/vhs-7rRq3LsEuJVwhwr0xf6Er7.gif"
+   ],
+   [
+    190,
+    "gif",
+    "https://vhs.charm.sh/vhs-5zb9DlQYA70aL9ZpYLTwKv.gif"
+   ],
+   [
+    201,
+    "gif",
+    "https://vhs.charm.sh/vhs-1nScrStFI3BMlCp5yrLtyg.gif"
+   ],
+   [
+    211,
+    "gif",
+    "https://vhs.charm.sh/vhs-7abdKKrUEukgx9aJj8O5GX.gif"
+   ],
+   [
+    224,
+    "gif",
+    "https://vhs.charm.sh/vhs-61euOQtKPtQVD7nDpHQhzr.gif"
+   ],
+   [
+    251,
+    "gif",
+    "https://vhs.charm.sh/vhs-3zV1LvofA6Cbn5vBu1NHHl.gif"
+   ],
+   [
+    262,
+    "gif",
+    "https://vhs.charm.sh/vhs-3xRFvbeQ4lqGerbHY7y3q2.gif"
+   ],
+   [
+    272,
+    "gif",
+    "https://vhs.charm.sh/vhs-2RMRqmnOPneneIgVJJ3mI1.gif"
+   ],
+   [
+    282,
+    "gif",
+    "https://vhs.charm.sh/vhs-3iMDpgOLmbYr0jrYEGbk7p.gif"
+   ],
+   [
+    295,
+    "gif",
+    "https://vhs.charm.sh/vhs-3YFswCmoY4o3Q7MyzWl6sS.gif"
+   ],
+   [
+    307,
+    "gif",
+    "https://stuff.charm.sh/gum/table.gif"
+   ],
+   [
+    392,
+    "gif",
+    "https://vhs.charm.sh/vhs-6jupuFM0s2fXiUrBE0I1vU.gif"
+   ]
+  ]
+ },
+ {
+  "repo": "charmbracelet/vhs",
+  "stars": 21245,
+  "lines": 894,
+  "gif": 25,
+  "video": 0,
+  "img": 3,
+  "first_kind": "img",
+  "first_at": "3/894",
+  "media": [
+   [
+    3,
+    "img",
+    "https://user-images.githubusercontent.com/42545625/198402537-12ca2f6c-0779-4eb8-a67c-8db9cb3df13c.png#gh-dark-mode-only"
+   ],
+   [
+    4,
+    "img",
+    "https://user-images.githubusercontent.com/42545625/198402542-a305f669-a05a-4d91-b18b-ca76e72b655a.png#gh-light-mode-only"
+   ],
+   [
+    7,
+    "img",
+    "https://godoc.org/github.com/golang/gddo?status.svg"
+   ],
+   [
+    13,
+    "gif",
+    "https://stuff.charm.sh/vhs/examples/neofetch_3.gif"
+   ],
+   [
+    69,
+    "gif",
+    "https://stuff.charm.sh/vhs/examples/demo.gif"
+   ],
+   [
+    298,
+    "gif",
+    "https://stuff.charm.sh/vhs/examples/font-size-10.gif"
+   ],
+   [
+    304,
+    "gif",
+    "https://stuff.charm.sh/vhs/examples/font-size-20.gif"
+   ],
+   [
+    310,
+    "gif",
+    "https://stuff.charm.sh/vhs/examples/font-size-40.gif"
+   ],
+   [
+    324,
+    "gif",
+    "https://stuff.charm.sh/vhs/examples/font-family.gif"
+   ],
+   [
+    338,
+    "gif",
+    "https://stuff.charm.sh/vhs/examples/width.gif"
+   ],
+   [
+    352,
+    "gif",
+    "https://stuff.charm.sh/vhs/examples/height.gif"
+   ],
+   [
+    395,
+    "gif",
+    "https://stuff.charm.sh/vhs/examples/letter-spacing.gif"
+   ],
+   [
+    409,
+    "gif",
+    "https://stuff.charm.sh/vhs/examples/line-height.gif"
+   ],
+   [
+    433,
+    "gif",
+    "https://stuff.charm.sh/vhs/examples/typing-speed.gif"
+   ],
+   [
+    445,
+    "gif",
+    "https://stuff.charm.sh/vhs/examples/theme.gif"
+   ],
+   [
+    467,
+    "gif",
+    "https://stuff.charm.sh/vhs/examples/padding.gif"
+   ],
+   [
+    482,
+    "gif",
+    "https://vhs.charm.sh/vhs-1miKMtNHenh7O4sv76TMwG.gif"
+   ],
+   [
+    496,
+    "gif",
+    "https://vhs.charm.sh/vhs-4VgviCu38DbaGtbRzhtOUI.gif"
+   ],
+   [
+    513,
+    "gif",
+    "https://vhs.charm.sh/vhs-4nYoy6IsUKmleJANG7N1BH.gif"
+   ],
+   [
+    555,
+    "gif",
+    "https://vhs.charm.sh/vhs-3rMCb80VEkaDdTOJMCrxKy.gif"
+   ],
+   [
+    585,
+    "gif",
+    "https://stuff.charm.sh/vhs/examples/type.gif"
+   ],
+   [
+    608,
+    "gif",
+    "https://stuff.charm.sh/vhs/examples/backspace.gif"
+   ],
+   [
+    623,
+    "gif",
+    "https://stuff.charm.sh/vhs/examples/ctrl.gif"
+   ],
+   [
+    637,
+    "gif",
+    "https://stuff.charm.sh/vhs/examples/enter.gif"
+   ],
+   [
+    658,
+    "gif",
+    "https://stuff.charm.sh/vhs/examples/arrow.gif"
+   ],
+   [
+    672,
+    "gif",
+    "https://stuff.charm.sh/vhs/examples/tab.gif"
+   ],
+   [
+    686,
+    "gif",
+    "https://stuff.charm.sh/vhs/examples/space.gif"
+   ],
+   [
+    794,
+    "gif",
+    "https://stuff.charm.sh/vhs/examples/hide.gif"
+   ]
+  ]
+ },
+ {
+  "repo": "charmbracelet/glow",
+  "stars": 27883,
+  "lines": 242,
+  "gif": 1,
+  "video": 1,
+  "img": 1,
+  "first_kind": "gif",
+  "first_at": "5/242",
+  "media": [
+   [
+    5,
+    "gif",
+    "https://stuff.charm.sh/glow/glow-banner-github.gif"
+   ],
+   [
+    7,
+    "img",
+    "https://godoc.org/github.com/golang/gddo?status.svg"
+   ],
+   [
+    13,
+    "video",
+    "https://github.com/user-attachments/assets/c2246366-f84b-4847-b431-32a61ca07b74"
+   ]
+  ]
+ },
+ {
+  "repo": "charmbracelet/crush",
+  "stars": 28911,
+  "lines": 1062,
+  "gif": 0,
+  "video": 4,
+  "img": 1,
+  "first_kind": "video",
+  "first_at": "3/1062",
+  "media": [
+   [
+    3,
+    "video",
+    "https://github.com/user-attachments/assets/cf8ca3ce-8b02-43f0-9d0f-5a331488da4b"
+   ],
+   [
+    11,
+    "video",
+    "https://github.com/user-attachments/assets/58280caf-851b-470a-b6f7-d5c4ea8a1968"
+   ],
+   [
+    191,
+    "video",
+    "https://github.com/user-attachments/assets/50875289-7992-454d-9f14-9f790413fb5e"
+   ],
+   [
+    245,
+    "video",
+    "https://github.com/user-attachments/assets/95b49515-fe82-4409-b10d-5beb0873787d"
+   ],
+   [
+    1058,
+    "img",
+    "https://stuff.charm.sh/charm-banner-softy.jpg"
+   ]
+  ]
+ },
+ {
+  "repo": "atuinsh/atuin",
+  "stars": 32177,
+  "lines": 126,
+  "gif": 1,
+  "video": 0,
+  "img": 0,
+  "first_kind": "gif",
+  "first_at": "29/126",
+  "media": [
+   [
+    29,
+    "gif",
+    "demo.gif"
+   ]
+  ]
+ },
+ {
+  "repo": "ajeetdsouza/zoxide",
+  "stars": 40414,
+  "lines": 553,
+  "gif": 0,
+  "video": 1,
+  "img": 2,
+  "first_kind": "img",
+  "first_at": "17/553",
+  "media": [
+   [
+    17,
+    "img",
+    "https://raw.githubusercontent.com/warpdotdev/brand-assets/refs/heads/main/Github/Sponsor/Warp-Github-LG-03.png"
+   ],
+   [
+    28,
+    "video",
+    "https://github.com/user-attachments/assets/0c5cb177-561c-4637-bef6-cf584939c829"
+   ],
+   [
+    42,
+    "img",
+    "./contrib/logo-light.svg"
+   ]
+  ]
+ },
+ {
+  "repo": "junegunn/fzf",
+  "stars": 83935,
+  "lines": 1160,
+  "gif": 0,
+  "video": 0,
+  "img": 8,
+  "first_kind": "img",
+  "first_at": "1/1160",
+  "media": [
+   [
+    1,
+    "img",
+    "https://raw.githubusercontent.com/junegunn/i/master/fzf-color.png"
+   ],
+   [
+    14,
+    "img",
+    "https://junegunn.github.io/fzf/images/fzf-mugs.jpg"
+   ],
+   [
+    29,
+    "img",
+    "https://raw.githubusercontent.com/junegunn/i/master/fzf-preview.png"
+   ],
+   [
+    462,
+    "img",
+    "https://raw.githubusercontent.com/junegunn/i/master/fzf-style-default.png"
+   ],
+   [
+    463,
+    "img",
+    "https://raw.githubusercontent.com/junegunn/i/master/fzf-style-full.png"
+   ],
+   [
+    464,
+    "img",
+    "https://raw.githubusercontent.com/junegunn/i/master/fzf-style-minimal.png"
+   ],
+   [
+    468,
+    "img",
+    "https://raw.githubusercontent.com/junegunn/i/master/fzf-4-borders.png"
+   ],
+   [
+    504,
+    "img",
+    "https://i.imgur.com/vtG8olE.png"
+   ]
+  ]
+ },
+ {
+  "repo": "sharkdp/bat",
+  "stars": 61023,
+  "lines": 941,
+  "gif": 0,
+  "video": 0,
+  "img": 4,
+  "first_kind": "img",
+  "first_at": "1/941",
+  "media": [
+   [
+    1,
+    "img",
+    "doc/logo-header.svg"
+   ],
+   [
+    26,
+    "img",
+    "https://imgur.com/rGsdnDe.png"
+   ],
+   [
+    33,
+    "img",
+    "https://i.imgur.com/2lSW4RE.png"
+   ],
+   [
+    40,
+    "img",
+    "https://i.imgur.com/WndGp9H.png"
+   ]
+  ]
+ },
+ {
+  "repo": "starship/starship",
+  "stars": 60565,
+  "lines": 402,
+  "gif": 1,
+  "video": 0,
+  "img": 15,
+  "first_kind": "img",
+  "first_at": "3/402",
+  "media": [
+   [
+    3,
+    "img",
+    "https://raw.githubusercontent.com/starship/starship/main/media/logo.png"
+   ],
+   [
+    26,
+    "img",
+    "https://raw.githubusercontent.com/starship/starship/main/media/flag-us.png"
+   ],
+   [
+    30,
+    "img",
+    "https://raw.githubusercontent.com/starship/starship/main/media/flag-de.png"
+   ],
+   [
+    34,
+    "img",
+    "https://raw.githubusercontent.com/starship/starship/main/media/flag-es.png"
+   ],
+   [
+    38,
+    "img",
+    "https://raw.githubusercontent.com/starship/starship/main/media/flag-fr.png"
+   ],
+   [
+    42,
+    "img",
+    "https://raw.githubusercontent.com/starship/starship/main/media/flag-id.png"
+   ],
+   [
+    46,
+    "img",
+    "https://raw.githubusercontent.com/starship/starship/main/media/flag-it.png"
+   ],
+   [
+    50,
+    "img",
+    "https://raw.githubusercontent.com/starship/starship/main/media/flag-jp.png"
+   ],
+   [
+    54,
+    "img",
+    "https://raw.githubusercontent.com/starship/starship/main/media/flag-br.png"
+   ],
+   [
+    58,
+    "img",
+    "https://raw.githubusercontent.com/starship/starship/main/media/flag-ru.png"
+   ],
+   [
+    62,
+    "img",
+    "https://raw.githubusercontent.com/starship/starship/main/media/flag-ua.png"
+   ],
+   [
+    66,
+    "img",
+    "https://raw.githubusercontent.com/starship/starship/main/media/flag-vn.png"
+   ],
+   [
+    70,
+    "img",
+    "https://raw.githubusercontent.com/starship/starship/main/media/flag-cn.png"
+   ],
+   [
+    74,
+    "img",
+    "https://raw.githubusercontent.com/starship/starship/main/media/flag-tw.png"
+   ],
+   [
+    80,
+    "gif",
+    "https://raw.githubusercontent.com/starship/starship/main/media/demo.gif"
+   ],
+   [
+    370,
+    "img",
+    "https://raw.githubusercontent.com/starship/starship/main/media/icon.png"
+   ]
+  ]
+ },
+ {
+  "repo": "sxyazi/yazi",
+  "stars": 43178,
+  "lines": 94,
+  "gif": 0,
+  "video": 0,
+  "img": 2,
+  "first_kind": "img",
+  "first_at": "3/94",
+  "media": [
+   [
+    3,
+    "img",
+    "https://github.com/warpdotdev/brand-assets/blob/main/Github/Sponsor/Warp-Github-LG-02.png"
+   ],
+   [
+    85,
+    "img",
+    "https://resources.jetbrains.com/storage/products/company/brand/logos/RustRover.svg"
+   ]
+  ]
+ },
+ {
+  "repo": "aristocratos/btop",
+  "stars": 35214,
+  "lines": 1595,
+  "gif": 0,
+  "video": 0,
+  "img": 10,
+  "first_kind": "img",
+  "first_at": "0/1595",
+  "media": [
+   [
+    0,
+    "img",
+    "Img/logo.png"
+   ],
+   [
+    46,
+    "img",
+    "https://images.squarespace-cdn.com/content/v1/66fd17c779966209da4359da/9dcb67db-433e-41cb-94d7-cecba280dc0b/Picture+1.png"
+   ],
+   [
+    47,
+    "img",
+    "https://secure2.convio.net/stccad/images/content/pagebuilder/stc-logo2022.png"
+   ],
+   [
+    117,
+    "img",
+    "https://github.com/aristocratos/btop4win/raw/master/Img/logo.png"
+   ],
+   [
+    340,
+    "img",
+    "Img/normal.png"
+   ],
+   [
+    344,
+    "img",
+    "Img/tty.png"
+   ],
+   [
+    348,
+    "img",
+    "Img/alt.png"
+   ],
+   [
+    352,
+    "img",
+    "Img/main-menu.png"
+   ],
+   [
+    356,
+    "img",
+    "Img/options-menu.png"
+   ],
+   [
+    360,
+    "img",
+    "Img/help-menu.png"
+   ]
+  ]
+ },
+ {
+  "repo": "derailed/k9s",
+  "stars": 34911,
+  "lines": 1538,
+  "gif": 0,
+  "video": 1,
+  "img": 8,
+  "first_kind": "img",
+  "first_at": "0/1538",
+  "media": [
+   [
+    0,
+    "img",
+    "assets/k9s.png"
+   ],
+   [
+    34,
+    "img",
+    "assets/screen_po.png"
+   ],
+   [
+    36,
+    "img",
+    "assets/screen_logs.png"
+   ],
+   [
+    38,
+    "img",
+    "assets/screen_dp.png"
+   ],
+   [
+    53,
+    "video",
+    "https://asciinema.org/a/UbXKPal6IWpTaVAjBBFmizcGN"
+   ],
+   [
+    1300,
+    "img",
+    "assets/skins/dracula.png"
+   ],
+   [
+    1524,
+    "img",
+    "assets/mail.png"
+   ],
+   [
+    1525,
+    "img",
+    "assets/twitter.png"
+   ],
+   [
+    1537,
+    "img",
+    "assets/imhotep_logo.png"
+   ]
+  ]
+ },
+ {
+  "repo": "yorukot/superfile",
+  "stars": 23990,
+  "lines": 266,
+  "gif": 1,
+  "video": 0,
+  "img": 5,
+  "first_kind": "img",
+  "first_at": "5/266",
+  "media": [
+   [
+    5,
+    "img",
+    "https://ko-fi.com/img/githubbutton_sm.svg"
+   ],
+   [
+    17,
+    "img",
+    "website/src/assets/superfile-day.svg"
+   ],
+   [
+    23,
+    "img",
+    "website/src/assets/demo.png"
+   ],
+   [
+    31,
+    "gif",
+    "asset/readme/demo.gif"
+   ],
+   [
+    226,
+    "img",
+    "https://ko-fi.com/img/githubbutton_sm.svg"
+   ],
+   [
+    245,
+    "img",
+    "https://resources.jetbrains.com/storage/products/company/brand/logos/jetbrains.svg"
+   ]
+  ]
+ },
+ {
+  "repo": "darrenburns/posting",
+  "stars": 12586,
+  "lines": 95,
+  "gif": 4,
+  "video": 0,
+  "img": 2,
+  "first_kind": "gif",
+  "first_at": "6/95",
+  "media": [
+   [
+    6,
+    "gif",
+    "docs/assets/themes/themes.gif"
+   ],
+   [
+    33,
+    "gif",
+    "docs/assets/features/jump-mode.gif"
+   ],
+   [
+    39,
+    "gif",
+    "docs/assets/features/mouse.gif"
+   ],
+   [
+    45,
+    "gif",
+    "docs/assets/features/responses.gif"
+   ],
+   [
+    57,
+    "img",
+    "docs/assets/features/grpc.png"
+   ],
+   [
+    58,
+    "img",
+    "docs/assets/features/graphql.png"
+   ]
+  ]
+ },
+ {
+  "repo": "tconbeer/harlequin",
+  "stars": 6499,
+  "lines": 179,
+  "gif": 0,
+  "video": 0,
+  "img": 1,
+  "first_kind": "img",
+  "first_at": "9/179",
+  "media": [
+   [
+    9,
+    "img",
+    "./harlequin.svg"
+   ]
+  ]
+ },
+ {
+  "repo": "jordanbaird/Ice",
+  "stars": 29943,
+  "lines": 112,
+  "gif": 0,
+  "video": 6,
+  "img": 2,
+  "first_kind": "img",
+  "first_at": "1/112",
+  "media": [
+   [
+    1,
+    "img",
+    "Ice/Assets.xcassets/AppIcon.appiconset/icon_256x256.png"
+   ],
+   [
+    7,
+    "video",
+    "https://github.com/user-attachments/assets/4423085c-4e4b-4f3d-ad0f-90a217c03470"
+   ],
+   [
+    20,
+    "img",
+    "https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png"
+   ],
+   [
+    91,
+    "video",
+    "https://github.com/user-attachments/assets/f1429589-6186-4e1b-8aef-592219d49b9b"
+   ],
+   [
+    95,
+    "video",
+    "https://github.com/user-attachments/assets/095442ba-f2d0-4bb4-9632-91e26ef8d45b"
+   ],
+   [
+    99,
+    "video",
+    "https://github.com/user-attachments/assets/8c22c185-c3d2-49bb-971e-e1fc17df04b3"
+   ],
+   [
+    103,
+    "video",
+    "https://github.com/user-attachments/assets/d1a7df3a-4989-4077-a0b1-8e7d5a1ba5b8"
+   ],
+   [
+    107,
+    "video",
+    "https://github.com/user-attachments/assets/b196aa7e-184a-4d4c-b040-502f4aae40a6"
+   ]
+  ]
+ },
+ {
+  "repo": "rxhanson/Rectangle",
+  "stars": 30208,
+  "lines": 255,
+  "gif": 0,
+  "video": 1,
+  "img": 0,
+  "first_kind": "video",
+  "first_at": "6/255",
+  "media": [
+   [
+    6,
+    "video",
+    "https://github.com/user-attachments/assets/c088d1e2-3661-4041-ac30-95da89ac4a41"
+   ]
+  ]
+ },
+ {
+  "repo": "p0deje/Maccy",
+  "stars": 22180,
+  "lines": 170,
+  "gif": 0,
+  "video": 0,
+  "img": 2,
+  "first_kind": "img",
+  "first_at": "3/170",
+  "media": [
+   [
+    3,
+    "img",
+    "https://maccy.app/img/maccy/Logo.png"
+   ],
+   [
+    156,
+    "img",
+    "https://hosted.weblate.org/widget/maccy/multi-auto.svg"
+   ]
+  ]
+ },
+ {
+  "repo": "MrKai77/Loop",
+  "stars": 11921,
+  "lines": 613,
+  "gif": 1,
+  "video": 7,
+  "img": 1,
+  "first_kind": "img",
+  "first_at": "1/613",
+  "media": [
+   [
+    1,
+    "img",
+    "/assets/graphics/Classic.png"
+   ],
+   [
+    16,
+    "gif",
+    "assets/graphics/loop_demo.gif"
+   ],
+   [
+    42,
+    "video",
+    "https://github.com/user-attachments/assets/a1e28631-091d-4abe-8f6e-bbb3f1399e84"
+   ],
+   [
+    48,
+    "video",
+    "https://github.com/user-attachments/assets/2afdecea-39e8-4f25-8c12-9cfc8aacbe2e"
+   ],
+   [
+    54,
+    "video",
+    "https://github.com/user-attachments/assets/61c4a414-c5c4-4308-a533-4d5698578307"
+   ],
+   [
+    60,
+    "video",
+    "https://github.com/user-attachments/assets/b4aee6d4-5110-447e-8ece-0cbeec864a08"
+   ],
+   [
+    66,
+    "video",
+    "https://github.com/user-attachments/assets/080ba2fb-41b3-4b39-9000-a76f2fc794ed"
+   ],
+   [
+    74,
+    "video",
+    "https://github.com/user-attachments/assets/f95349fd-cbb3-4c83-a687-d7fea4345bc6"
+   ],
+   [
+    80,
+    "video",
+    "https://github.com/user-attachments/assets/0cf27809-1fa3-4230-88be-5c60636fd885"
+   ]
+  ]
+ },
+ {
+  "repo": "nikitabobko/AeroSpace",
+  "stars": 23717,
+  "lines": 179,
+  "gif": 0,
+  "video": 0,
+  "img": 1,
+  "first_kind": "img",
+  "first_at": "2/179",
+  "media": [
+   [
+    2,
+    "img",
+    "./resources/Assets.xcassets/AppIcon.appiconset/icon.png"
+   ]
+  ]
+ },
+ {
+  "repo": "manaflow-ai/cmux",
+  "stars": 28647,
+  "lines": 553,
+  "gif": 0,
+  "video": 0,
+  "img": 7,
+  "first_kind": "img",
+  "first_at": "20/553",
+  "media": [
+   [
+    20,
+    "img",
+    "./docs/assets/main-first-image.png"
+   ],
+   [
+    40,
+    "img",
+    "./docs/assets/notification-rings.png"
+   ],
+   [
+    58,
+    "img",
+    "./docs/assets/built-in-browser.png"
+   ],
+   [
+    67,
+    "img",
+    "./docs/assets/vertical-horizontal-tabs-and-splits.png"
+   ],
+   [
+    76,
+    "img",
+    "./docs/assets/ssh.png"
+   ],
+   [
+    85,
+    "img",
+    "./docs/assets/claude-code-teams.png"
+   ],
+   [
+    503,
+    "img",
+    "./docs/assets/wechat-community-qr.jpg"
+   ]
+  ]
+ },
+ {
+  "repo": "ghostty-org/ghostty",
+  "stars": 63256,
+  "lines": 226,
+  "gif": 0,
+  "video": 1,
+  "img": 0,
+  "first_kind": "video",
+  "first_at": "3/226",
+  "media": [
+   [
+    3,
+    "video",
+    "https://github.com/user-attachments/assets/fe853809-ba8b-400b-83ab-a9a0da25be8a"
+   ]
+  ]
+ },
+ {
+  "repo": "zed-industries/zed",
+  "stars": 92540,
+  "lines": 48,
+  "gif": 0,
+  "video": 0,
+  "img": 0,
+  "first_kind": "-",
+  "first_at": "-",
+  "media": []
+ },
+ {
+  "repo": "warpdotdev/Warp",
+  "stars": 65828,
+  "lines": 110,
+  "gif": 0,
+  "video": 1,
+  "img": 1,
+  "first_kind": "video",
+  "first_at": "1/110",
+  "media": [
+   [
+    1,
+    "video",
+    "https://github.com/user-attachments/assets/9976b2da-2edd-4604-a36c-8fd53719c6d4"
+   ],
+   [
+    5,
+    "img",
+    "https://raw.githubusercontent.com/warpdotdev/brand-assets/main/Github/Built-With-Warp-Export@2x.png"
+   ]
+  ]
+ },
+ {
+  "repo": "sst/opencode",
+  "stars": 223989,
+  "lines": 114,
+  "gif": 0,
+  "video": 0,
+  "img": 2,
+  "first_kind": "img",
+  "first_at": "5/114",
+  "media": [
+   [
+    5,
+    "img",
+    "packages/console/app/src/asset/logo-ornate-light.svg"
+   ],
+   [
+    41,
+    "img",
+    "packages/web/src/assets/lander/screenshot.png"
+   ]
+  ]
+ },
+ {
+  "repo": "openai/codex",
+  "stars": 132840,
+  "lines": 81,
+  "gif": 0,
+  "video": 0,
+  "img": 1,
+  "first_kind": "img",
+  "first_at": "2/81",
+  "media": [
+   [
+    2,
+    "img",
+    "https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png"
+   ]
+  ]
+ },
+ {
+  "repo": "anthropics/claude-code",
+  "stars": 154247,
+  "lines": 72,
+  "gif": 1,
+  "video": 0,
+  "img": 0,
+  "first_kind": "gif",
+  "first_at": "10/72",
+  "media": [
+   [
+    10,
+    "gif",
+    "./demo.gif"
+   ]
+  ]
+ },
+ {
+  "repo": "smtg-ai/claude-squad",
+  "stars": 8719,
+  "lines": 162,
+  "gif": 0,
+  "video": 1,
+  "img": 1,
+  "first_kind": "img",
+  "first_at": "5/162",
+  "media": [
+   [
+    5,
+    "img",
+    "assets/screenshot.png"
+   ],
+   [
+    15,
+    "video",
+    "https://github.com/user-attachments/assets/aef18253-e58f-4525-9032-f5a3d66c975a"
+   ]
+  ]
+ },
+ {
+  "repo": "stablyai/orca",
+  "stars": 113166,
+  "lines": 279,
+  "gif": 0,
+  "video": 0,
+  "img": 24,
+  "first_kind": "img",
+  "first_at": "1/279",
+  "media": [
+   [
+    1,
+    "img",
+    "resources/build/icon.png"
+   ],
+   [
+    6,
+    "img",
+    "docs/assets/readme-downloads.svg"
+   ],
+   [
+    25,
+    "img",
+    "docs/assets/readme-hero.jpg"
+   ],
+   [
+    42,
+    "img",
+    "docs/assets/feature-wall/mobile-companion-app-showcase.jpg"
+   ],
+   [
+    56,
+    "img",
+    "docs/site/public/docs/posters/tab-split.jpg"
+   ],
+   [
+    70,
+    "img",
+    "resources/onboarding/feature-wall/tile-02.poster.jpg"
+   ],
+   [
+    84,
+    "img",
+    "resources/onboarding/feature-wall/tile-05.poster.jpg"
+   ],
+   [
+    98,
+    "img",
+    "resources/onboarding/feature-wall/tile-03.poster.jpg"
+   ],
+   [
+    112,
+    "img",
+    "resources/onboarding/feature-wall/tile-06.poster.jpg"
+   ],
+   [
+    126,
+    "img",
+    "resources/onboarding/feature-wall/tile-08.poster.jpg"
+   ],
+   [
+    140,
+    "img",
+    "resources/onboarding/feature-wall/tile-07.poster.jpg"
+   ],
+   [
+    154,
+    "img",
+    "resources/onboarding/feature-wall/tile-09.poster.jpg"
+   ],
+   [
+    175,
+    "img",
+    "docs/assets/claude-logo.svg"
+   ],
+   [
+    180,
+    "img",
+    "src/shared/agent-icons/muse.png"
+   ],
+   [
+    181,
+    "img",
+    "src/shared/agent-icons/dsh.png"
+   ],
+   [
+    182,
+    "img",
+    "src/shared/agent-icons/zcode.png"
+   ],
+   [
+    186,
+    "img",
+    "resources/openclaude-logo.png"
+   ],
+   [
+    188,
+    "img",
+    "https://pi.dev/favicon.svg"
+   ],
+   [
+    189,
+    "img",
+    "https://omp.sh/favicon.svg"
+   ],
+   [
+    199,
+    "img",
+    "src/shared/agent-icons/freebuff.png"
+   ],
+   [
+    202,
+    "img",
+    "docs/assets/droid-logo.svg"
+   ],
+   [
+    203,
+    "img",
+    "https://raw.githubusercontent.com/Kilo-Org/kilocode/main/packages/kilo-vscode/assets/icons/kilo-light.svg"
+   ],
+   [
+    249,
+    "img",
+    "docs/assets/wechat-qr-group14.jpg"
+   ],
+   [
+    269,
+    "img",
+    "docs/assets/star-history.png"
+   ]
+  ]
+ },
+ {
+  "repo": "BloopAI/vibe-kanban",
+  "stars": 28561,
+  "lines": 163,
+  "gif": 0,
+  "video": 0,
+  "img": 3,
+  "first_kind": "img",
+  "first_at": "5/163",
+  "media": [
+   [
+    5,
+    "img",
+    "packages/public/vibe-kanban-logo.svg"
+   ],
+   [
+    22,
+    "img",
+    "packages/public/vibe-kanban-screenshot-overview.png"
+   ],
+   [
+    37,
+    "img",
+    "packages/public/vibe-kanban-screenshot-workspace.png"
+   ]
+  ]
+ },
+ {
+  "repo": "dlvhdr/gh-dash",
+  "stars": 12710,
+  "lines": 119,
+  "gif": 1,
+  "video": 0,
+  "img": 2,
+  "first_kind": "img",
+  "first_at": "5/119",
+  "media": [
+   [
+    5,
+    "img",
+    "./docs/public/logo-light.png"
+   ],
+   [
+    20,
+    "img",
+    "https://www.jetify.com/img/devbox/shield_moon.svg"
+   ],
+   [
+    25,
+    "gif",
+    "./docs/src/assets/overview.gif"
+   ]
+  ]
+ },
+ {
+  "repo": "jesseduffield/lazydocker",
+  "stars": 53239,
+  "lines": 326,
+  "gif": 1,
+  "video": 0,
+  "img": 86,
+  "first_kind": "img",
+  "first_at": "6/326",
+  "media": [
+   [
+    6,
+    "img",
+    "https://github.com/warpdotdev/brand-assets/blob/main/Github/Sponsor/Warp-Github-LG-02.png?raw=true"
+   ],
+   [
+    20,
+    "img",
+    "assets/tuple.png"
+   ],
+   [
+    29,
+    "img",
+    "assets/subble-job-ad.jpg"
+   ],
+   [
+    39,
+    "img",
+    "https://user-images.githubusercontent.com/8456633/59972109-8e9c8480-95cc-11e9-8350-38f7f86ba76d.png"
+   ],
+   [
+    47,
+    "img",
+    "https://godoc.org/github.com/jesseduffield/lazydocker?status.svg"
+   ],
+   [
+    53,
+    "gif",
+    "/docs/resources/demo3.gif"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/intabulas.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/peppy.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/piot.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/rgwood.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/oliverguenther.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/pawanjay176.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/bdach.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/davidklsn.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/carstengehling.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/ceuk.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/akospwc.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/Xetera.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/HoldenLucas.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/nartc.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/matejcik.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/lucatume.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/IvanZuy.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/nicholascloud.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/PhotonQuantum.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/GitSquared.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/ava1ar.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/minidfx.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/JoeKlemmer.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/tobi.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/benbfortis.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/jakewarren.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/tgpholly.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/jisantuc.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/bitprophet.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/tayleighr.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/Novakov.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/farzadmf.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/nekhaevskiy.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/reivilibre.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/andreaskurth.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/BSteffaniak.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/jordan-gillard.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/smangels.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/George-Spanos.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/frantisekstanko.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/amslezak.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/mkock.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/illarionvk.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/WhiteBlackGoose.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/jessealama.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/codacy.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/colbr.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/heijmans.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/Vesther.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/sempruijs.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/omarluq.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/ethanjli.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/phubaba.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/fomrat.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/canhazcodez.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/nikbrunner.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/neunkasulle.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/ahkohd.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/RVxLab.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/igor-ramazanov.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/glotchimo.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/n8nio.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/kaleballmon.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/joshuadavidthomas.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/josephjacks.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/FrederickGeek8.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/agrippanux.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/ezdac.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/sarzhann.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/dbuls.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/MGreek.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/sainu.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/mguellsegarra.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/lppassos.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/chrisolsen.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/vladimir-popov.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/neilcode.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/shaungarwood.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/dhh.png"
+   ],
+   [
+    64,
+    "img",
+    "https://github.com/wayanjimmy.png"
+   ],
+   [
+    287,
+    "img",
+    "/docs/resources/discord.png"
+   ]
+  ]
+ }
+]

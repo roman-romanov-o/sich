@@ -4,7 +4,7 @@
 
 <h1 align="center">Sich</h1>
 
-<p align="center"><strong>Mission control for parallel agentic coding sessions</strong></p>
+<p align="center"><strong>A calm board for your coding agents, so you can stay focused</strong></p>
 
 <p align="center">
   <a href="https://github.com/roman-romanov-o/sich/actions/workflows/ci.yml"><img src="https://github.com/roman-romanov-o/sich/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -14,34 +14,75 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license"></a>
 </p>
 
-Sich is a native macOS app for running many coding agents (Claude Code, Codex,
-Cursor, Antigravity, Gemini CLI) at once without losing track of them. It is a kanban board where
-every card **is** a live terminal session — Sich embeds
-[libghostty](https://ghostty.org) and becomes the terminal, so it reads agent
-state first-hand instead of scraping someone else's window.
+<p align="center">
+  <img src="assets/hero.gif" alt="Sich in action: you start a pomodoro on one task, other agents' questions are held instead of pinging you, a breathing break screen follows, and their questions come back as one list" width="900">
+</p>
+
+<p align="center"><b>Many agents. One focus. Their questions wait for your break.</b><br>
+<sub><a href="assets/promo.mp4">▶ Watch the full one-minute tour</a></sub></p>
+
+Sich is a native macOS app for working alongside many coding agents (Claude Code,
+Codex, Cursor, Antigravity, Gemini CLI) without burning out. It gives the work a
+shape: a kanban board where every card **is** a live terminal session, and a
+pomodoro that decides when the agents get your attention — so you stop
+tab-hopping between a dozen sessions and work on one thing at a time.
+
+## Why Sich
+
+Starting five agents is easy. Keeping your head while five agents interrupt you
+is not: every session pulls at you, every question feels urgent, and by the
+afternoon you have context-switched all day and finished nothing yourself. Sich
+puts structure between you and that noise.
+
+| | |
+|---|---|
+| 🍅 **Focus blocks, not firefighting** | Start a pomodoro on the card you are working. While it runs, agents that stop to ask something are held: no alert, no red lane pulling at you, just a quiet "2 will need you after this pomodoro". The minutes are logged against the task you were on. |
+| 🌿 **Real breaks** | When the timer ends the board dims behind a breathing break screen, and the agents keep working underneath. A reply you are halfway through typing holds the break until you press ↵. |
+| 📋 **Questions come back as one list** | When the break is over, the held questions appear together. Pick one and the next pomodoro starts on it, so you answer agents one at a time instead of all at once. |
+| 🗂️ **A board that keeps the shape of your day** | BACKLOG, QUEUE, WORKING, NEEDS YOU, DONE: the backlog keeps tomorrow's tasks off today's lanes. One glance tells you where everything is, so you don't have to keep it in your head. |
+| 🔴 **Never miss a question** | Cards move between QUEUE, WORKING, NEEDS YOU and DONE from the agents' own lifecycle hooks, not screen scraping. Outside a focus block, the moment an agent stops to ask, its card turns red and the NEEDS YOU count tells you how many are waiting. |
+| ⛽ **Know your capacity before you start** | Live quota gauges for your Claude subscription, API credits, Codex and more, each with its reset time. You decide whether to start agent number six before you run out mid-task, not after. |
+| 🧱 **No surprise API bills** | Sich only runs interactive sessions. It structurally refuses to spawn headless `claude -p`, so it never spends API credits on your behalf. |
+| 🌍 **Local and remote side by side** | Attach a tmux session on any SSH host as a card: the agent's hooks are relayed back, so a remote card moves through the columns like a local one. Windows hosts work too, through psmux. |
+| ♻️ **Sessions survive restarts** | Quit the app and reopen it: cards come back and resume their conversations. A DONE card closes its terminal to save resources and can be revived later. |
+| ⌨️ **Keyboard-first** | ⌘N opens a launcher (folder → agent → go), ⌃Tab switches tasks with NEEDS YOU first, ⌘[ returns to the board. |
+
+## A closer look
+
+### ⌃Tab to whoever needs you
+
+Hold ⌃ and tap Tab for a switcher of every live task, NEEDS YOU first. Release and you land in that agent's terminal with its question on screen: answer it, ⌃Tab to the next one.
+
+<p align="center"><img src="assets/feature-switch.gif" alt="Holding Control and tapping Tab opens a switcher with the two NEEDS YOU tasks on top; releasing lands in the agent's terminal, where its permission prompt is answered with one key, then Control-Tab again reaches the next question" width="800"></p>
+
+### Nobody waiting? Take the next task
+
+Once NEEDS YOU is empty, the board points you at the BACKLOG. Click a parked task and Sich launches its agent in that project, so the backlog drains one deliberate pick at a time.
+
+<p align="center"><img src="assets/feature-backlog.gif" alt="With NEEDS YOU empty the BACKLOG lane lights up; clicking a parked task opens a fresh Claude Code session in its project and the first prompt is typed" width="800"></p>
+
+### The card is the terminal
+
+Click a card and you are in the real session: libghostty rendering in-process, box-drawing and block art drawn edge to edge like Ghostty, pixel-smooth scrollback at your display's refresh rate, paste, themes, and ⌘↑ / ⌘↓ to jump between your own prompts. No second terminal app, and no window juggling.
+
+<p align="center"><img src="assets/feature-terminal.gif" alt="Clicking a card opens its live Claude Code session: the diff, test run and input box rendered in place, and a follow-up prompt typed straight into it" width="800"></p>
+
+Sich is native Swift and AppKit with no Electron and no third-party Swift
+dependencies. It is MIT licensed, needs no account, and sends nothing anywhere
+except your own usage queries to the providers.
+
+<details>
+<summary>Screenshots</summary>
 
 ![The board: cards grouped by agent state, with quota gauges on the right](assets/screenshots/board.png)
 
 ![Drilled into a card: the session's live terminal](assets/screenshots/drill-in.png)
 
-<sub>Screenshots use synthetic demo data — regenerate with
-`app/scripts/readme-screenshots.sh`.</sub>
+</details>
 
-## What it does
-
-- **Board of live sessions** — cards move between columns (working / waiting on
-  you / done) driven by real agent lifecycle hooks, not heuristics. A "who
-  needs me" count surfaces the sessions blocked on your input.
-- **Embedded terminal** — click a card to drill into its session: a real PTY
-  rendered by libghostty-vt in-process. Scrollback, paste, themes, resize.
-- **Quota-aware capacity** — live gauges for the two Anthropic pools
-  (interactive subscription vs. API credits), plus Codex/Gemini, so you know
-  how much agent capacity you actually have before starting more work.
-- **Pool firewall** — managed sessions are interactive-only by construction;
-  Sich structurally refuses to spawn headless `claude -p` and spend API credits
-  on your behalf.
-- **Remote sessions** — attach tmux sessions on remote boxes over SSH as
-  first-class cards.
+<sub>The video and screenshots use synthetic demo data. Regenerate them with
+`app/scripts/promo-footage.sh` plus the Remotion project in [`promo/`](promo/README.md),
+and `app/scripts/readme-screenshots.sh`.</sub>
 
 ## Install
 
