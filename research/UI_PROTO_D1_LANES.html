@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sich — lanes board</title>
+<style>
+/* ============================================================================
+   Sich "lanes" board — a design artifact, not shipping code.
+
+   Not a kanban. Each session is a ROW spanning the window, like a strip on a
+   flight-progress board. Time runs left → right along a track that ends at the
+   NOW line; the track is drawn from the session's recent history, so one glance
+   tells you which sessions have been stalling, which just flipped to waiting,
+   and how long each state lasted. Columns of the kanban become bands of rows:
+   sessions that need you rise to the top band, with the agent's question and
+   its answers inline. Quota pools are a compact strip in the toolbar.
+
+   Colour rule: a calm board is monochrome. One accent, and only for a session
+   waiting on you or a quota pool about to run dry. Everything else is told
+   apart by weight, size, leading and fill — never hue.
+   ========================================================================== */
+:root {
+  --canvas:    #F5F5F4;
+  --surface:   #FFFFFF;
+  --hairline:  rgba(0,0,0,0.08);
+  --ink:       #1C1C1E;
+  --ink-2:     rgba(28,28,30,0.62);
+  --ink-3:     rgba(28,28,30,0.40);
+  --ink-4:     rgba(28,28,30,0.14);
+  --ink-5:     rgba(28,28,30,0.06);
+  --shadow:    0 0.5px 0 rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  --chrome:    rgba(245,245,244,0.72);
+  /* The only hue in the system. */
+  --signal:      #D4500B;
+  --signal-ink:  #FFFFFF;
+  --signal-wash: rgba(212,80,11,0.08);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --canvas: #161617; --surface: #1F1F21; --hairline: rgba(255,255,255,0.08);
+    --ink: #F2F2F3; --ink-2: rgba(242,242,243,0.62); --ink-3: rgba(242,242,243,0.38);
+    --ink-4: rgba(242,242,243,0.16); --ink-5: rgba(242,242,243,0.07);
+    --shadow: 0 0 0 0.5px rgba(255,255,255,0.06);
+    --chrome: rgba(22,22,23,0.72);
+    --signal: #FF8A3D; --signal-ink: #1A0D04; --signal-wash: rgba(255,138,61,0.10);
+  }
+}
+:root[data-theme="dark"] {
+  --canvas: #161617; --surface: #1F1F21; --hairline: rgba(255,255,255,0.08);
+  --ink: #F2F2F3; --ink-2: rgba(242,242,243,0.62); --ink-3: rgba(242,242,243,0.38);
+  --ink-4: rgba(242,242,243,0.16); --ink-5: rgba(242,242,243,0.07);
+  --shadow: 0 0 0 0.5px rgba(255,255,255,0.06);
+  --chrome: rgba(22,22,23,0.72);
+  --signal: #FF8A3D; --signal-ink: #1A0D04; --signal-wash: rgba(255,138,61,0.10);
+}
+
+* { box-sizing: border-box; margin: 0; }
+html { -webkit-font-smoothing: antialiased; }
+body {
+  background: var(--canvas); color: var(--ink);
+  font: 13px/1.38 -apple-system, system-ui, "SF Pro Text", sans-serif;
+  letter-spacing: -0.003em;
+  min-height: 100vh; display: flex; flex-direction: column;
+}
+.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px; letter-spacing: 0; }
+.num { font-variant-numeric: tabular-nums; }
+
+/* ---------- Toolbar: translucent material, lanes scroll beneath ---------- */
+.toolbar {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: center; gap: 18px;
+  height: 52px; padding: 0 20px;
+  background: var(--chrome);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-bottom: 0.5px solid var(--hairline);
+}
+.wordmark { font-weight: 600; font-size: 14px; letter-spacing: -0.01em; }
+.summary { color: var(--ink-3); white-space: nowrap; }
+.summary b { color: var(--ink-2); font-weight: 500; }
+.toolbar .spacer { flex: 1; }
+
+/* Quota strip: four pools as compact dials in the toolbar. */
+.pools { display: flex; gap: 14px; }
+.pool { display: flex; flex-direction: column; gap: 3px; min-width: 92px; }
+.pool-head { display: flex; justify-content: space-between; gap: 8px; color: var(--ink-3); }
+.pool-head b { font-weight: 500; color: var(--ink-2); }
+.pool .bar { height: 3px; border-radius: 1.5px; background: var(--ink-4); overflow: hidden; }
+.pool .bar i { display: block; height: 100%; border-radius: 1.5px; background: var(--ink-2); }
+.pool.low .pool-head b, .pool.low .pool-head span { color: var(--signal); font-weight: 600; }
+.pool.low .bar i { background: var(--signal); }
+
+.attention {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 26px; padding: 0 11px; border-radius: 13px;
+  font-weight: 600; font-size: 12px; white-space: nowrap;
+  border: none; cursor: pointer; font-family: inherit;
+  background: var(--signal); color: var(--signal-ink);
+  transition: transform 100ms ease-out, opacity 200ms ease;
+}
+.attention:active { transform: scale(0.97); }
+.attention.calm { background: transparent; color: var(--ink-3); font-weight: 500; cursor: default; }
+.attention kbd { font: inherit; opacity: 0.7; font-weight: 500; }
+
+/* ---------- Lanes ---------- */
+.lanes { flex: 1; padding: 12px 20px 40px; overflow-x: auto; }
+.lanes-inner { min-width: 880px; }
+
+/* Time axis header, aligned to the track column. */
+.axis {
+  display: grid; grid-template-columns: 300px 1fr 230px; align-items: end;
+  padding: 10px 0 6px; position: relative;
+}
+.axis .label { font-size: 11px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--ink-3); }
+.axis .ticks { position: relative; height: 16px; }
+.axis .tick { position: absolute; bottom: 0; transform: translateX(-50%); color: var(--ink-3); white-space: nowrap; }
+.axis .tick::after { content: ""; display: block; width: 0.5px; height: 4px; background: var(--ink-4); margin: 2px auto 0; }
+.axis .tick.now { color: var(--ink); font-weight: 600; transform: translateX(-100%); padding-right: 2px; }
+.axis .label:last-child { padding-left: 14px; }
+.axis .tick.now::after { background: var(--ink); width: 1px; }
+
+.band { margin-top: 14px; }
+.band-head {
+  display: flex; align-items: baseline; gap: 6px;
+  padding: 0 0 6px 2px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--ink-3);
+}
+.band-head .n { font-weight: 500; }
+.band[data-band="needs"].lit .band-head { color: var(--signal); }
+.band-list { display: flex; flex-direction: column; gap: 6px; }
+.band .quiet { padding: 8px 2px 2px; color: var(--ink-4); }
+
+.lane {
+  display: grid; grid-template-columns: 300px 1fr 230px; align-items: center;
+  min-height: 52px;
+  background: var(--surface); border-radius: 10px; box-shadow: var(--shadow);
+  cursor: default; user-select: none;
+  transition: transform 100ms ease-out;
+  will-change: transform;
+}
+.lane:active { transform: scale(0.99); }
+
+/* Leading cell: who. */
+.lead { padding: 9px 14px 9px 14px; min-width: 0; border-right: 0.5px solid var(--hairline); align-self: stretch; display: flex; flex-direction: column; justify-content: center; }
+.lead .repo { color: var(--ink-3); display: flex; gap: 8px; }
+.lead .repo .agent { color: var(--ink-3); }
+.lead .title { font-size: 13px; font-weight: 500; line-height: 1.3; margin-top: 2px; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Track: history drawn as segments, ending at NOW. */
+.track-cell { position: relative; align-self: stretch; padding: 0 12px; }
+.track {
+  position: absolute; left: 12px; right: 12px; top: 50%; height: 8px; transform: translateY(-50%);
+  border-radius: 4px; background: var(--ink-5); overflow: hidden;
+  display: flex;
+}
+.seg { height: 100%; flex: none; }
+.seg[data-s="working"] { background: var(--ink-2); }
+.seg[data-s="tests"]   { background: repeating-linear-gradient(90deg, var(--ink-2) 0 4px, var(--ink-3) 4px 6px); }
+.seg[data-s="blocked"] { background: repeating-linear-gradient(135deg, var(--ink-4) 0 3px, transparent 3px 6px); }
+.seg[data-s="idle"]    { background: transparent; }
+.seg[data-s="parked"]  { background: var(--ink-4); }
+.seg[data-s="done"]    { background: var(--ink-3); }
+/* Past waits are history, so they stay monochrome: a dotted gap in the track. */
+.seg[data-s="needs"]   { background: repeating-linear-gradient(90deg, var(--ink-3) 0 2px, transparent 2px 5px); }
+/* Only the wait that is happening right now earns the accent. */
+.lane[data-state="needs"] .seg[data-s="needs"]:last-child { background: var(--signal); }
+.seg + .seg { box-shadow: inset 1px 0 0 var(--canvas); }
+/* Stall: a long working segment with no output — fade its tail. */
+.seg.stall { background: linear-gradient(90deg, var(--ink-2), var(--ink-4)); }
+
+/* Trailing cell: what, right now. */
+.trail { padding: 8px 14px 8px 12px; min-width: 0; border-left: 0.5px solid var(--hairline); align-self: stretch; display: flex; flex-direction: column; justify-content: center; }
+.trail .state { font-weight: 600; font-size: 12px; display: flex; justify-content: space-between; gap: 8px; }
+.trail .state .t { font-weight: 500; color: var(--ink-3); }
+.trail .live { color: var(--ink-3); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Done / parked: receded. */
+.lane[data-state="done"] { background: transparent; box-shadow: inset 0 0 0 0.5px var(--hairline); }
+.lane[data-state="done"] .title, .lane[data-state="done"] .state { color: var(--ink-3); font-weight: 400; }
+.lane[data-state="parked"] .title { color: var(--ink-2); font-weight: 400; }
+.lane[data-state="queue"] .track { background: transparent; box-shadow: inset 0 0 0 0.5px var(--ink-4); }
+
+/* Needs you: the one place colour lives. */
+.lane[data-state="needs"] { box-shadow: 0 0 0 1.5px var(--signal), 0 4px 14px var(--signal-wash); grid-template-columns: 300px 1fr 230px; }
+.lane[data-state="needs"] .state { color: var(--signal); }
+.lane[data-state="needs"] .state .t { color: var(--signal); }
+.lane .ask { display: none; }
+.lane[data-state="needs"] .ask {
+  display: flex; align-items: center; gap: 10px;
+  position: absolute; left: 12px; right: 12px; top: 50%; transform: translateY(-50%);
+}
+.lane[data-state="needs"] .track { opacity: 0.5; }
+.ask .q { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: var(--surface); padding: 2px 8px 2px 0; }
+.ask .q code { font: 11px ui-monospace, "SF Mono", Menlo, monospace; color: var(--signal); }
+.ask .actions { display: flex; gap: 6px; margin-left: auto; background: var(--surface); padding-left: 8px; }
+.ask button {
+  font: 500 12px -apple-system, system-ui, sans-serif;
+  height: 24px; padding: 0 10px; border-radius: 6px; cursor: pointer;
+  border: 0.5px solid var(--ink-4); background: var(--surface); color: var(--ink);
+  transition: transform 100ms ease-out;
+}
+.ask button:active { transform: scale(0.97); }
+.ask button.primary { background: var(--ink); color: var(--surface); border-color: transparent; }
+.ask kbd { font: inherit; color: inherit; opacity: 0.5; margin-left: 4px; }
+
+/* ---------- Demo controls (not part of the design) ---------- */
+.sim {
+  position: fixed; right: 16px; bottom: 16px; display: flex; gap: 6px; z-index: 6;
+  padding: 6px; border-radius: 10px;
+  background: var(--chrome); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 0 0 0.5px var(--hairline), 0 8px 24px rgba(0,0,0,0.08);
+}
+.sim button {
+  font: 500 11px -apple-system, system-ui, sans-serif; color: var(--ink-2);
+  border: none; background: transparent; height: 24px; padding: 0 9px; border-radius: 6px; cursor: pointer;
+}
+.sim button:hover { background: var(--ink-4); color: var(--ink); }
+.sim .label { align-self: center; padding: 0 6px; color: var(--ink-3); font-size: 11px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .lane, .attention, .ask button { transition: opacity 200ms ease; }
+  .lane:active, .attention:active, .ask button:active { transform: none; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .toolbar, .sim { background: var(--canvas); backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
+@media (max-width: 720px) {
+  .toolbar { padding: 0 16px; gap: 12px; }
+  .summary, .pools { display: none; }
+  .lanes { padding: 12px 16px 40px; }
+}
+</style>
+</head>
+<body>
+
+<header class="toolbar">
+  <span class="wordmark">Sich</span>
+  <span class="summary"><b id="sum-sessions">8</b> sessions · <b id="sum-working">3</b> working</span>
+  <span class="spacer"></span>
+  <div class="pools mono">
+    <div class="pool"><div class="pool-head"><b>Claude 5h</b><span class="num">64%</span></div><div class="bar"><i style="width:64%"></i></div></div>
+    <div class="pool"><div class="pool-head"><b>Claude wk</b><span class="num">41%</span></div><div class="bar"><i style="width:41%"></i></div></div>
+    <div class="pool" id="pool-codex"><div class="pool-head"><b>Codex wk</b><span class="num">86%</span></div><div class="bar"><i style="width:86%"></i></div></div>
+    <div class="pool"><div class="pool-head"><b>API</b><span>firewalled</span></div><div class="bar"><i style="width:0"></i></div></div>
+  </div>
+  <button class="attention" id="attention"></button>
+</header>
+
+<main class="lanes">
+  <div class="lanes-inner" id="board">
+    <div class="axis">
+      <div class="label">Session</div>
+      <div class="ticks mono" id="ticks"></div>
+      <div class="label">Right now</div>
+    </div>
+    <section class="band" data-band="needs"><div class="band-head">Needs you <span class="n"></span></div><div class="band-list"></div></section>
+    <section class="band" data-band="working"><div class="band-head">Working <span class="n"></span></div><div class="band-list"></div></section>
+    <section class="band" data-band="blocked"><div class="band-head">Blocked <span class="n"></span></div><div class="band-list"></div></section>
+    <section class="band" data-band="queue"><div class="band-head">Queue <span class="n"></span></div><div class="band-list"></div></section>
+    <section class="band" data-band="parked"><div class="band-head">Parked <span class="n"></span></div><div class="band-list"></div></section>
+    <section class="band" data-band="done"><div class="band-head">Done <span class="n"></span></div><div class="band-list"></div></section>
+  </div>
+</main>
+
+<div class="sim" aria-label="Demo controls">
+  <span class="label">Simulate</span>
+  <button id="sim-turn">Agent asks</button>
+  <button id="sim-answer">Answer</button>
+  <button id="sim-quota">Quota low</button>
+  <button id="sim-theme">Theme</button>
+</div>
+
+<script>
+// Synthetic demo data. `history` is the last WINDOW minutes, oldest first;
+// the final segment is the current state and its `minutes` is how long so far.
+const WINDOW = 180; // minutes of track shown, ending at NOW
+const cards = [
+  { id: 'a', col: 'queue',   repo: 'sich',          agent: 'claude', title: 'Homebrew cask for the signed DMG',
+    history: [{ state: 'idle', minutes: 180 }] },
+  { id: 'b', col: 'parked',  repo: 'infra@hetzner', agent: 'claude', title: 'Rotate the deploy key on the build box', live: 'host unreachable',
+    history: [{ state: 'working', minutes: 20 }, { state: 'parked', minutes: 160 }] },
+  { id: 'c', col: 'working', repo: 'sich',          agent: 'claude', title: 'Stall guard for silent sessions', live: 'editing StallGuard.swift', t: 12,
+    history: [{ state: 'working', minutes: 40 }, { state: 'needs', minutes: 15 }, { state: 'working', minutes: 70 }, { state: 'tests', minutes: 25 }, { state: 'needs', minutes: 18 }, { state: 'working', minutes: 12 }] },
+  { id: 'd', col: 'working', repo: 'sahaidachny',   agent: 'codex',  title: 'Write progress.yaml back after each iteration', live: 'pytest · 34/40', t: 4,
+    history: [{ state: 'idle', minutes: 60 }, { state: 'working', minutes: 55 }, { state: 'needs', minutes: 6 }, { state: 'working', minutes: 55 }, { state: 'tests', minutes: 4 }] },
+  { id: 'e', col: 'working', repo: 'payments-api',  agent: 'claude', title: 'Idempotency keys on the refund endpoint', live: 'reading refunds.py', t: 2,
+    ask: { q: 'Run <code>alembic upgrade head</code>?', yes: 'Allow', no: 'Deny' },
+    history: [{ state: 'idle', minutes: 110 }, { state: 'working', minutes: 30 }, { state: 'needs', minutes: 38 }, { state: 'working', minutes: 2 }] },
+  { id: 'f', col: 'needs',   repo: 'sahaidachny',   agent: 'claude', title: 'LikeC4 story pane',
+    ask: { q: 'Allow write to <code>schema.sql</code>?', yes: 'Allow', no: 'Deny' }, t: 4,
+    history: [{ state: 'working', minutes: 90 }, { state: 'needs', minutes: 10 }, { state: 'working', minutes: 76 }, { state: 'needs', minutes: 4 }] },
+  { id: 'g', col: 'blocked', repo: 'sich',          agent: 'claude', title: 'Sign release provenance', live: 'PR #4 · awaiting review', t: 95,
+    history: [{ state: 'working', minutes: 85 }, { state: 'blocked', minutes: 95 }] },
+  { id: 'h', col: 'done',    repo: 'sich',          agent: 'claude', title: 'Pin Periphery 3.8.0 in CI', live: 'merged', t: 180,
+    history: [{ state: 'done', minutes: 180 }] },
+];
+
+const STATE_LABEL = { queue: 'Queued', parked: 'Parked', working: 'Working', needs: 'Needs you', blocked: 'Blocked', done: 'Done' };
+
+function trackEl(c) {
+  const total = c.history.reduce((s, h) => s + h.minutes, 0);
+  const segs = c.history.map((h, i) => {
+    const stall = h.state === 'working' && h.minutes >= 60 && i === c.history.length - 1;
+    return `<i class="seg${stall ? ' stall' : ''}" data-s="${h.state}" style="width:${(h.minutes / Math.max(total, WINDOW)) * 100}%"></i>`;
+  }).join('');
+  return `<div class="track">${segs}</div>`;
+}
+
+function laneEl(c) {
+  const el = document.createElement('article');
+  el.className = 'lane'; el.dataset.id = c.id; el.dataset.state = c.col;
+  const ask = c.ask ? `
+    <div class="ask">
+      <div class="q">${c.ask.q}</div>
+      <div class="actions">
+        <button class="primary" data-act="yes">${c.ask.yes}<kbd>Y</kbd></button>
+        <button data-act="no">${c.ask.no}<kbd>N</kbd></button>
+      </div>
+    </div>` : '';
+  const dur = c.t != null && c.col !== 'done' && c.col !== 'queue' ? `<span class="t num mono">${c.t}m</span>` : '';
+  const live = c.col === 'needs' ? '↵ open session' : (c.live || (c.col === 'queue' ? 'not started' : ''));
+  el.innerHTML = `
+    <div class="lead">
+      <div class="repo mono"><span>${c.repo}</span><span class="agent">${c.agent}</span></div>
+      <h3 class="title">${c.title}</h3>
+    </div>
+    <div class="track-cell">${trackEl(c)}${ask}</div>
+    <div class="trail">
+      <div class="state"><span>${STATE_LABEL[c.col]}</span>${dur}</div>
+      <div class="live mono">${live}</div>
+    </div>`;
+  return el;
+}
+
+const board = document.getElementById('board');
+const lists = Object.fromEntries([...board.querySelectorAll('.band')].map(s => [s.dataset.band, s.querySelector('.band-list')]));
+
+function renderTicks() {
+  const t = document.getElementById('ticks'); t.replaceChildren();
+  for (const m of [180, 120, 60]) {
+    const d = document.createElement('span'); d.className = 'tick';
+    d.style.left = `${((WINDOW - m) / WINDOW) * 100}%`; d.textContent = `−${m / 60}h`;
+    t.appendChild(d);
+  }
+  const now = document.createElement('span'); now.className = 'tick now'; now.style.left = '100%'; now.textContent = 'now';
+  t.appendChild(now);
+}
+
+function render() {
+  for (const l of Object.values(lists)) l.replaceChildren();
+  for (const c of cards) lists[c.col].appendChild(laneEl(c));
+  for (const [band, l] of Object.entries(lists)) {
+    const n = l.children.length;
+    l.parentElement.querySelector('.n').textContent = n || '';
+    l.parentElement.style.display = n || band === 'needs' ? '' : 'none';
+    if (!n) l.innerHTML = '<div class="quiet mono">— nobody is waiting on you</div>';
+    l.parentElement.classList.toggle('lit', band === 'needs' && n > 0);
+  }
+  const needs = cards.filter(c => c.col === 'needs').length;
+  const btn = document.getElementById('attention');
+  btn.classList.toggle('calm', needs === 0);
+  btn.innerHTML = needs ? `${needs} need${needs === 1 ? 's' : ''} you <kbd>⌘J</kbd>` : 'Nobody needs you';
+  document.getElementById('sum-sessions').textContent = cards.length;
+  document.getElementById('sum-working').textContent = cards.filter(c => c.col === 'working').length;
+}
+
+// ---------- FLIP with a critically damped spring (damping 1.0, response 0.4s) ----------
+// Starts from the live on-screen position, so a move interrupted mid-flight never jumps.
+const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+function springFrames(dx, dy, response = 0.4) {
+  const w = 2 * Math.PI / response, frames = [], steps = 40, dur = response * 1.6;
+  for (let i = 0; i <= steps; i++) {
+    const t = (i / steps) * dur, k = (1 + w * t) * Math.exp(-w * t);
+    frames.push({ transform: `translate(${dx * k}px, ${dy * k}px)` });
+  }
+  frames[steps] = { transform: 'none' };
+  return { frames, duration: dur * 1000 };
+}
+function move(mutate) {
+  const before = new Map([...board.querySelectorAll('.lane')].map(el => [el.dataset.id, el.getBoundingClientRect()]));
+  mutate(); render();
+  for (const el of board.querySelectorAll('.lane')) {
+    const a = before.get(el.dataset.id); if (!a) continue;
+    const b = el.getBoundingClientRect(), dx = a.left - b.left, dy = a.top - b.top;
+    if (!dx && !dy) continue;
+    if (reduce.matches) { el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200 }); continue; }
+    const { frames, duration } = springFrames(dx, dy);
+    el.animate(frames, { duration, easing: 'linear' });
+  }
+}
+
+// ---------- Simulation ----------
+function pushState(c, state) {
+  const last = c.history[c.history.length - 1];
+  if (last && last.state === state) return;
+  c.history.push({ state, minutes: 1 });
+}
+document.getElementById('sim-turn').onclick = () => {
+  const c = cards.find(c => c.col === 'working' && c.ask);
+  if (c) move(() => { c.col = 'needs'; c.t = 0; pushState(c, 'needs'); });
+};
+function answer(id) {
+  const c = cards.find(c => c.id === id) || cards.find(c => c.col === 'needs');
+  if (c) move(() => { c.col = 'working'; c.t = 0; c.live = 'resuming…'; pushState(c, 'working'); });
+}
+document.getElementById('sim-answer').onclick = () => answer();
+board.addEventListener('click', e => {
+  const b = e.target.closest('button[data-act]'); if (!b) return;
+  answer(b.closest('.lane').dataset.id);
+});
+document.getElementById('sim-quota').onclick = () => {
+  const p = document.getElementById('pool-codex'), low = !p.classList.contains('low');
+  p.classList.toggle('low', low);
+  p.querySelector('.pool-head span').textContent = low ? '6%' : '86%';
+  p.querySelector('.bar i').style.width = low ? '6%' : '86%';
+};
+document.getElementById('sim-theme').onclick = () => {
+  const r = document.documentElement, dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const cur = r.dataset.theme || (dark ? 'dark' : 'light');
+  r.dataset.theme = cur === 'dark' ? 'light' : 'dark';
+};
+// Live clocks tick once a minute; the current segment grows with them.
+setInterval(() => {
+  for (const c of cards) if (c.t != null && c.col !== 'done') { c.t++; c.history[c.history.length - 1].minutes++; }
+  render();
+}, 60000);
+
+const p = new URLSearchParams(location.search);
+if (p.get('calm') === '1') { const f = cards.find(c => c.id === 'f'); f.col = 'working'; f.t = 1; f.live = 'editing StoryPane.swift'; pushState(f, 'working'); }
+if (p.get('theme')) document.documentElement.dataset.theme = p.get('theme');
+renderTicks();
+render();
+</script>
+</body>
+</html>

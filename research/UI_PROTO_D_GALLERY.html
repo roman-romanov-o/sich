@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sich — five directions</title>
+<style>
+:root { --bg: #F5F5F4; --fg: #1C1C1E; --fg2: rgba(28,28,30,0.6); --card: #fff; --line: rgba(0,0,0,0.08); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #161617; --fg: #F2F2F3; --fg2: rgba(242,242,243,0.6); --card: #1F1F21; --line: rgba(255,255,255,0.08); } }
+:root[data-theme="dark"] { --bg: #161617; --fg: #F2F2F3; --fg2: rgba(242,242,243,0.6); --card: #1F1F21; --line: rgba(255,255,255,0.08); }
+* { box-sizing: border-box; margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.5 -apple-system, system-ui, sans-serif; padding: 40px 24px 80px; }
+main { max-width: 1200px; margin: 0 auto; }
+h1 { font-size: 28px; letter-spacing: -0.02em; line-height: 1.1; }
+p.lead { color: var(--fg2); margin: 8px 0 32px; max-width: 60ch; }
+section { margin-bottom: 48px; }
+h2 { font-size: 20px; letter-spacing: -0.015em; display: flex; gap: 10px; align-items: baseline; }
+h2 small { font-size: 13px; color: var(--fg2); font-weight: 500; }
+p.what { color: var(--fg2); margin: 4px 0 14px; max-width: 70ch; }
+.shots { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 10px; }
+.shots a { display: block; border-radius: 10px; overflow: hidden; background: var(--card); box-shadow: 0 0 0 0.5px var(--line), 0 1px 3px rgba(0,0,0,0.06); transition: transform 100ms ease-out; }
+.shots a:active { transform: scale(0.99); }
+.shots img { display: block; width: 100%; height: auto; }
+.shots span { display: block; padding: 6px 10px; font-size: 12px; color: var(--fg2); }
+.open { display: inline-block; margin-top: 10px; font-weight: 600; color: var(--fg); text-decoration: none; border-bottom: 1px solid var(--line); }
+@media (max-width: 720px) { .shots { grid-template-columns: 1fr; } body { padding: 24px 16px 60px; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Five directions for Sich</h1>
+  <p class="lead">Each is a working prototype: click a screenshot to open it, then use the Simulate panel in its corner (Agent asks · Answer · Quota low · Theme). All five keep one rule: no colour until something needs you.</p>
+
+  <section>
+    <h2>1 · Lanes <small>timeline, not a kanban</small></h2>
+    <p class="what">Every session is a row with a three-hour track of its history ending at <em>now</em>. You can see who has been stalling and how long each wait lasted. Quota lives in the toolbar.</p>
+    <div class="shots">
+      <a href="UI_PROTO_D1_LANES.html?theme=light"><img src="UI_PROTO_D1_LANES_signal.png" alt=""><span>one needs you</span></a>
+      <a href="UI_PROTO_D1_LANES.html?theme=light&calm=1"><img src="UI_PROTO_D1_LANES_calm.png" alt=""><span>calm</span></a>
+      <a href="UI_PROTO_D1_LANES.html?theme=dark"><img src="UI_PROTO_D1_LANES_dark.png" alt=""><span>dark</span></a>
+    </div>
+  </section>
+
+  <section>
+    <h2>2 · Exposé <small>the board is the terminals</small></h2>
+    <p class="what">A Mission Control grid of live terminal thumbnails. The one that needs you comes forward, full-colour, with its question as a sheet; the rest recede by size and depth. Click a thumbnail to zoom it to the window.</p>
+    <div class="shots">
+      <a href="UI_PROTO_D2_EXPOSE.html?theme=light"><img src="UI_PROTO_D2_EXPOSE_signal.png" alt=""><span>one needs you</span></a>
+      <a href="UI_PROTO_D2_EXPOSE.html?theme=light&calm=1"><img src="UI_PROTO_D2_EXPOSE_calm.png" alt=""><span>calm</span></a>
+      <a href="UI_PROTO_D2_EXPOSE.html?theme=dark"><img src="UI_PROTO_D2_EXPOSE_dark.png" alt=""><span>dark</span></a>
+    </div>
+  </section>
+
+  <section>
+    <h2>3 · Native <small>a first-party Mac app</small></h2>
+    <p class="what">Three panes like Mail or Xcode: a translucent source list grouped by state, the selected session's terminal in the middle, quota and session details in an inspector. A permission request is a sheet dropping from the toolbar.</p>
+    <div class="shots">
+      <a href="UI_PROTO_D3_NATIVE.html?theme=light"><img src="UI_PROTO_D3_NATIVE_signal.png" alt=""><span>one needs you</span></a>
+      <a href="UI_PROTO_D3_NATIVE.html?theme=light&calm=1"><img src="UI_PROTO_D3_NATIVE_calm.png" alt=""><span>calm</span></a>
+      <a href="UI_PROTO_D3_NATIVE.html?theme=dark"><img src="UI_PROTO_D3_NATIVE_dark.png" alt=""><span>dark</span></a>
+    </div>
+  </section>
+
+  <section>
+    <h2>4 · Wall <small>a status board for a second monitor</small></h2>
+    <p class="what">Readable from across the room: one huge number says how many need you, then one tall row per session with clocks ticking by the second, and quota as big percentages. Nothing to click except Allow and Deny.</p>
+    <div class="shots">
+      <a href="UI_PROTO_D4_WALL.html?theme=dark"><img src="UI_PROTO_D4_WALL_signal.png" alt=""><span>one needs you</span></a>
+      <a href="UI_PROTO_D4_WALL.html?theme=dark&calm=1"><img src="UI_PROTO_D4_WALL_calm.png" alt=""><span>calm</span></a>
+      <a href="UI_PROTO_D4_WALL.html?theme=light"><img src="UI_PROTO_D4_WALL_light.png" alt=""><span>light</span></a>
+    </div>
+  </section>
+
+  <section>
+    <h2>5 · Inbox <small>no board at all</small></h2>
+    <p class="what">A single prioritised list like Things or Reminders. What needs you sits expanded at the top and gets checked off when answered; working sessions are one line each; everything else is folded away.</p>
+    <div class="shots">
+      <a href="UI_PROTO_D5_INBOX.html?theme=light"><img src="UI_PROTO_D5_INBOX_signal.png" alt=""><span>one needs you</span></a>
+      <a href="UI_PROTO_D5_INBOX.html?theme=light&calm=1"><img src="UI_PROTO_D5_INBOX_calm.png" alt=""><span>calm</span></a>
+      <a href="UI_PROTO_D5_INBOX.html?theme=dark"><img src="UI_PROTO_D5_INBOX_dark.png" alt=""><span>dark</span></a>
+    </div>
+  </section>
+</main>
+</body>
+</html>

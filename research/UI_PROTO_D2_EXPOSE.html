@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sich — Exposé board</title>
+<style>
+/* ============================================================================
+   Sich "Exposé" board — a design artifact, not shipping code.
+
+   The board IS the terminals. Like Mission Control: every session is a live
+   miniature of its own terminal, laid out in a grid. There are no columns —
+   state is told by grouping, size and depth. Sessions that need you come
+   forward (bigger, deeper shadow, accent ring, with the agent's question as a
+   small sheet anchored to the thumbnail). Working sessions sit at normal size.
+   Everything else recedes: smaller, dimmer, further back.
+
+   Colour rule: the chrome is monochrome. Terminal content keeps its natural
+   ANSI colours but desaturated — except on a session that needs you, whose
+   terminal is shown at full strength. One accent (orange) marks needs-you and
+   a low quota pool, and nothing else.
+
+   Click a thumbnail and it zooms to fill the window along a spring from its
+   own rect; Esc or clicking outside sends it back along the same path.
+   ========================================================================== */
+:root {
+  --canvas:    #ECECEA;
+  --surface:   #FFFFFF;
+  --hairline:  rgba(0,0,0,0.08);
+  --ink:       #1C1C1E;
+  --ink-2:     rgba(28,28,30,0.62);
+  --ink-3:     rgba(28,28,30,0.42);
+  --ink-4:     rgba(28,28,30,0.14);
+  --chrome:    rgba(236,236,234,0.72);
+  --chip:      rgba(20,20,22,0.55);
+  --chip-ink:  rgba(255,255,255,0.92);
+  --term-bg:   #1B1C1F;
+  --term-fg:   #D7D8DC;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.10), 0 4px 10px rgba(0,0,0,0.08);
+  --shadow-lg: 0 2px 4px rgba(0,0,0,0.12), 0 18px 40px rgba(0,0,0,0.22);
+  --accent:      #E0611A;
+  --accent-ink:  #FFFFFF;
+  --accent-wash: rgba(224,97,26,0.10);
+  /* ANSI */
+  --a-green: #4FB06A; --a-red: #DE5A5A; --a-blue: #5B9BE0; --a-yellow: #D6A33A; --a-magenta: #B57BD8; --a-cyan: #46B2B8;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --canvas: #101012; --surface: #1C1C1F; --hairline: rgba(255,255,255,0.09);
+    --ink: #F2F2F3; --ink-2: rgba(242,242,243,0.64); --ink-3: rgba(242,242,243,0.42); --ink-4: rgba(242,242,243,0.14);
+    --chrome: rgba(16,16,18,0.72); --chip: rgba(10,10,12,0.6);
+    --term-bg: #0C0C0E; --term-fg: #D0D1D6;
+    --shadow-sm: 0 0 0 0.5px rgba(255,255,255,0.07), 0 4px 12px rgba(0,0,0,0.5);
+    --shadow-lg: 0 0 0 0.5px rgba(255,255,255,0.10), 0 24px 60px rgba(0,0,0,0.7);
+    --accent: #FF8A3D; --accent-ink: #1A0D04; --accent-wash: rgba(255,138,61,0.12);
+  }
+}
+:root[data-theme="dark"] {
+  --canvas: #101012; --surface: #1C1C1F; --hairline: rgba(255,255,255,0.09);
+  --ink: #F2F2F3; --ink-2: rgba(242,242,243,0.64); --ink-3: rgba(242,242,243,0.42); --ink-4: rgba(242,242,243,0.14);
+  --chrome: rgba(16,16,18,0.72); --chip: rgba(10,10,12,0.6);
+  --term-bg: #0C0C0E; --term-fg: #D0D1D6;
+  --shadow-sm: 0 0 0 0.5px rgba(255,255,255,0.07), 0 4px 12px rgba(0,0,0,0.5);
+  --shadow-lg: 0 0 0 0.5px rgba(255,255,255,0.10), 0 24px 60px rgba(0,0,0,0.7);
+  --accent: #FF8A3D; --accent-ink: #1A0D04; --accent-wash: rgba(255,138,61,0.12);
+}
+
+* { box-sizing: border-box; margin: 0; }
+html { -webkit-font-smoothing: antialiased; }
+body {
+  background: var(--canvas); color: var(--ink);
+  font: 13px/1.38 system-ui, -apple-system, "SF Pro Text", sans-serif;
+  letter-spacing: -0.003em; min-height: 100vh;
+}
+.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px; letter-spacing: 0; }
+
+/* ---------- Toolbar ---------- */
+.toolbar {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: center; gap: 18px;
+  height: 52px; padding: 0 20px;
+  background: var(--chrome);
+  backdrop-filter: blur(20px) saturate(180%); -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-bottom: 0.5px solid var(--hairline);
+}
+.wordmark { font-weight: 600; font-size: 14px; letter-spacing: -0.01em; }
+.summary { color: var(--ink-3); }
+.summary b { color: var(--ink-2); font-weight: 500; }
+.spacer { flex: 1; }
+
+/* Compact capacity strip: four pools as tiny gauges. */
+.cap { display: flex; gap: 14px; align-items: center; }
+.pool { display: flex; flex-direction: column; gap: 3px; min-width: 76px; }
+.pool .l { display: flex; justify-content: space-between; gap: 8px; color: var(--ink-3); }
+.pool .l b { color: var(--ink-2); font-weight: 500; }
+.pool .bar { height: 3px; border-radius: 2px; background: var(--ink-4); overflow: hidden; }
+.pool .bar i { display: block; height: 100%; background: var(--ink-2); border-radius: 2px; }
+.pool.low .l b, .pool.low .l span { color: var(--accent); font-weight: 600; }
+.pool.low .bar i { background: var(--accent); }
+
+.attention {
+  display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 11px; border-radius: 13px;
+  font: 600 12px system-ui, -apple-system, sans-serif; border: none; cursor: pointer;
+  background: var(--accent); color: var(--accent-ink);
+  transition: transform 100ms ease-out;
+}
+.attention:active { transform: scale(0.97); }
+.attention.calm { background: transparent; color: var(--ink-3); font-weight: 500; cursor: default; }
+.attention kbd { font: inherit; opacity: 0.7; font-weight: 500; }
+
+/* ---------- Groups ---------- */
+.stage { padding: 8px 24px 80px; }
+.group { padding-top: 22px; }
+.group-head {
+  display: flex; align-items: baseline; gap: 8px; padding: 0 2px 12px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--ink-3);
+}
+.group-head .n { font-weight: 500; }
+.group[data-group="needs"] .group-head { color: var(--accent); }
+.group .grid { display: grid; gap: 20px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+.group[data-group="needs"] .grid { grid-template-columns: repeat(auto-fill, minmax(360px, 420px)); gap: 28px; }
+.group[data-group="rest"] .grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
+.group:empty, .group.empty { display: none; }
+
+/* ---------- Thumbnail ---------- */
+.thumb {
+  position: relative; border-radius: 10px; overflow: hidden;
+  background: var(--term-bg); aspect-ratio: 16 / 10;
+  box-shadow: var(--shadow-sm); cursor: default; user-select: none;
+  transition: transform 100ms ease-out, box-shadow 250ms ease;
+  will-change: transform;
+}
+.thumb:active { transform: scale(0.97); }
+.thumb:hover { box-shadow: var(--shadow-lg); }
+/* Terminal content: rendered at a fixed 'real' size, then scaled down to fit. */
+.term {
+  position: absolute; left: 0; top: 0; width: 720px; height: 450px; padding: 14px 16px;
+  font: 13px/1.5 ui-monospace, "SF Mono", Menlo, monospace; color: var(--term-fg);
+  white-space: pre; overflow: hidden; transform-origin: 0 0;
+  filter: saturate(0.25) opacity(0.78);
+  transition: filter 300ms ease;
+}
+.thumb[data-state="needs"] .term { filter: none; }
+.thumb[data-state="working"] .term { filter: saturate(0.4) opacity(0.9); }
+.group[data-group="rest"] .thumb .term { filter: saturate(0) opacity(0.55); }
+.group[data-group="rest"] .thumb { box-shadow: 0 0.5px 0 var(--hairline); }
+.term .g { color: var(--a-green); } .term .r { color: var(--a-red); } .term .b { color: var(--a-blue); }
+.term .y { color: var(--a-yellow); } .term .m { color: var(--a-magenta); } .term .c { color: var(--a-cyan); }
+.term .d { opacity: 0.5; } .term .w { font-weight: 600; }
+.term .cur { display: inline-block; width: 7px; height: 14px; background: var(--term-fg); vertical-align: -2px; opacity: 0.8; }
+
+/* Chip: translucent material sitting on the thumbnail. */
+.chip {
+  position: absolute; left: 10px; right: 10px; bottom: 10px; z-index: 2;
+  display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; border-radius: 7px;
+  background: var(--chip); color: var(--chip-ink);
+  backdrop-filter: blur(14px) saturate(160%); -webkit-backdrop-filter: blur(14px) saturate(160%);
+  border-top: 0.5px solid rgba(255,255,255,0.18);
+  font-size: 11px;
+}
+.chip .repo { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip .sep { opacity: 0.45; }
+.chip .agent, .chip .state { opacity: 0.8; }
+.chip .t { margin-left: auto; font-variant-numeric: tabular-nums; opacity: 0.8; flex: none; }
+.chip .title { display: none; }
+
+/* Needs you: comes forward. */
+.thumb[data-state="needs"] {
+  box-shadow: 0 0 0 1.5px var(--accent), var(--shadow-lg);
+  transform: scale(1.02);
+}
+.thumb[data-state="needs"]:active { transform: scale(0.99); }
+.thumb[data-state="needs"] .chip { bottom: auto; top: 10px; }
+/* Needs-you shows the tail of the transcript, where the question is. */
+.thumb[data-state="needs"] .term { top: auto; bottom: 0; transform-origin: 0 100%; padding-bottom: 150px; }
+
+/* The ask sheet: anchored to the bottom of the thumbnail, materializes from it. */
+.ask {
+  position: absolute; left: 10px; right: 10px; bottom: 10px; z-index: 3;
+  padding: 10px 12px 11px; border-radius: 9px;
+  background: rgba(255,255,255,0.86); color: #1C1C1E;
+  backdrop-filter: blur(24px) saturate(180%); -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border-top: 0.5px solid rgba(255,255,255,0.7);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+  transform-origin: 50% 100%;
+  animation: materialize 360ms cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+:root[data-theme="dark"] .ask { background: rgba(36,36,40,0.82); color: #F2F2F3; border-top-color: rgba(255,255,255,0.14); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .ask { background: rgba(36,36,40,0.82); color: #F2F2F3; border-top-color: rgba(255,255,255,0.14); } }
+@keyframes materialize {
+  from { opacity: 0; transform: scale(0.92) translateY(8px); filter: blur(6px); }
+  to   { opacity: 1; transform: none; filter: none; }
+}
+.ask .q { font-weight: 600; font-size: 13px; }
+.ask .q code { font: 12px ui-monospace, "SF Mono", Menlo, monospace; color: var(--accent); }
+.ask .since { margin-top: 2px; opacity: 0.6; }
+.ask .actions { display: flex; gap: 6px; margin-top: 9px; }
+.ask button {
+  flex: 1; height: 26px; padding: 0 10px; border-radius: 6px; cursor: pointer;
+  font: 500 12px system-ui, -apple-system, sans-serif;
+  border: 0.5px solid rgba(0,0,0,0.18); background: rgba(255,255,255,0.6); color: inherit;
+  transition: transform 100ms ease-out;
+}
+:root[data-theme="dark"] .ask button { border-color: rgba(255,255,255,0.18); background: rgba(255,255,255,0.08); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .ask button { border-color: rgba(255,255,255,0.18); background: rgba(255,255,255,0.08); } }
+.ask button:active { transform: scale(0.97); }
+.ask button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+.ask kbd { font: inherit; opacity: 0.6; margin-left: 5px; }
+
+/* ---------- Zoomed session ---------- */
+.scrim { position: fixed; inset: 0; z-index: 20; background: rgba(0,0,0,0.35); opacity: 0; pointer-events: none; transition: opacity 300ms ease; }
+.scrim.on { opacity: 1; pointer-events: auto; }
+.zoom {
+  position: fixed; z-index: 21; border-radius: 12px; overflow: hidden; background: var(--term-bg);
+  box-shadow: var(--shadow-lg); display: none; transform-origin: 0 0;
+}
+.zoom.on { display: block; }
+.zoom .term { width: 100%; height: 100%; transform: none; filter: none; font-size: 14px; padding: 22px 26px; }
+.zoom .bar {
+  position: absolute; left: 0; right: 0; top: 0; height: 40px; display: flex; align-items: center; gap: 10px; padding: 0 14px;
+  background: var(--chip); color: var(--chip-ink); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border-bottom: 0.5px solid rgba(255,255,255,0.12); font-size: 12px;
+}
+.zoom .bar b { font-weight: 600; }
+.zoom .bar .esc { margin-left: auto; opacity: 0.6; }
+.zoom .term { padding-top: 56px; }
+
+/* ---------- Demo controls (not part of the design) ---------- */
+.sim {
+  position: fixed; right: 16px; bottom: 16px; z-index: 30; display: flex; gap: 6px; padding: 6px; border-radius: 10px;
+  background: var(--chrome); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 0 0 0.5px var(--hairline), 0 8px 24px rgba(0,0,0,0.08);
+}
+.sim button { font: 500 11px system-ui, -apple-system, sans-serif; color: var(--ink-2); border: none; background: transparent; height: 24px; padding: 0 9px; border-radius: 6px; cursor: pointer; }
+.sim button:hover { background: var(--ink-4); color: var(--ink); }
+.sim .label { align-self: center; padding: 0 6px; color: var(--ink-3); font-size: 11px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .thumb, .attention, .ask button { transition: opacity 200ms ease; }
+  .thumb:active, .attention:active, .ask button:active { transform: none; }
+  .ask { animation: fade 200ms ease both; }
+  @keyframes fade { from { opacity: 0 } to { opacity: 1 } }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .toolbar, .sim { background: var(--canvas); backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .chip, .zoom .bar { background: #141416; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .ask { background: var(--surface); backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
+@media (max-width: 720px) {
+  .toolbar { padding: 0 16px; gap: 12px; }
+  .summary, .cap { display: none; }
+  .stage { padding: 4px 16px 80px; }
+  .group .grid, .group[data-group="needs"] .grid, .group[data-group="rest"] .grid { grid-template-columns: 1fr; gap: 16px; }
+}
+</style>
+</head>
+<body>
+
+<header class="toolbar">
+  <span class="wordmark">Sich</span>
+  <span class="summary"><b id="sum-sessions">8</b> sessions · <b id="sum-working">3</b> working</span>
+  <span class="spacer"></span>
+  <div class="cap mono" id="cap">
+    <div class="pool"><div class="l"><b>Claude 5h</b><span>64%</span></div><div class="bar"><i style="width:64%"></i></div></div>
+    <div class="pool"><div class="l"><b>Claude wk</b><span>41%</span></div><div class="bar"><i style="width:41%"></i></div></div>
+    <div class="pool" id="pool-codex"><div class="l"><b>Codex wk</b><span>86%</span></div><div class="bar"><i style="width:86%"></i></div></div>
+    <div class="pool"><div class="l"><b>API</b><span>firewalled</span></div><div class="bar"><i style="width:0"></i></div></div>
+  </div>
+  <button class="attention" id="attention"></button>
+</header>
+
+<main class="stage" id="stage">
+  <section class="group" data-group="needs"><div class="group-head">Needs you <span class="n"></span></div><div class="grid"></div></section>
+  <section class="group" data-group="working"><div class="group-head">Working <span class="n"></span></div><div class="grid"></div></section>
+  <section class="group" data-group="rest"><div class="group-head">Queue · Parked · Blocked · Done <span class="n"></span></div><div class="grid"></div></section>
+</main>
+
+<div class="scrim" id="scrim"></div>
+<div class="zoom" id="zoom"><div class="bar"><b id="zoom-title"></b><span id="zoom-meta"></span><span class="esc">esc to return</span></div><div class="term" id="zoom-term"></div></div>
+
+<div class="sim" aria-label="Demo controls">
+  <span class="label">Simulate</span>
+  <button id="sim-turn">Agent asks</button>
+  <button id="sim-answer">Answer</button>
+  <button id="sim-quota">Quota low</button>
+  <button id="sim-theme">Theme</button>
+</div>
+
+<script>
+// Synthetic demo data. Times are minutes since the state was entered. Transcripts are HTML.
+const T = {
+  a: `<span class="d">$</span> <span class="w">claude</span>
+<span class="d">Claude Code · ~/sich</span>
+
+<span class="d">Type a prompt to start. Card is queued; no agent turn yet.</span>
+
+<span class="d">&gt;</span> <span class="cur"></span>`,
+  b: `<span class="d">$</span> ssh deploy@build-01.hetzner
+<span class="r">ssh: connect to host build-01.hetzner port 22: Operation timed out</span>
+<span class="d">$</span> ssh deploy@build-01.hetzner
+<span class="r">ssh: connect to host build-01.hetzner port 22: Operation timed out</span>
+
+<span class="d">[sich] host unreachable · parked until it answers</span>`,
+  c: `<span class="d">&gt;</span> Add a stall guard: WORKING → NEEDS YOU after 10 silent minutes
+
+<span class="y">●</span> I'll read the card state machine first.
+
+<span class="g">●</span> <span class="w">Read</span>(app/Sources/Board/CardState.swift)
+  <span class="d">└</span> Read 188 lines
+
+<span class="g">●</span> <span class="w">Search</span>(pattern: "lastOutputAt", path: "app/Sources/")
+  <span class="d">└</span> Found 2 files
+
+<span class="g">●</span> <span class="w">Update</span>(app/Sources/Board/StallGuard.swift)
+  <span class="d">└</span> Updated with 31 additions and 0 removals
+   12 <span class="g">+</span>   let threshold: Duration = .seconds(600)
+   13 <span class="g">+</span>   func tick(now: ContinuousClock.Instant) {
+   14 <span class="g">+</span>     guard card.state == .running else { return }
+
+<span class="g">●</span> <span class="w">Bash</span>(swift test --filter StallGuardTests)
+  <span class="d">└</span> Building…<span class="cur"></span>`,
+  d: `<span class="d">╭──────────────────────────────────────────╮</span>
+<span class="d">│</span> <span class="w">OpenAI Codex</span> <span class="d">(v0.42) · ~/sahaidachny</span>        <span class="d">│</span>
+<span class="d">╰──────────────────────────────────────────╯</span>
+<span class="d">user</span>
+Write progress.yaml back after each iteration
+
+<span class="c">codex</span>
+Adding a writeback hook to the iteration loop.
+
+<span class="m">exec</span> <span class="d">$</span> uv run pytest tests/test_progress_writeback.py -q
+<span class="g">........................</span><span class="r">F</span><span class="g">.........</span>                    <span class="d">[ 85%]</span>
+<span class="r">FAILED</span> tests/test_progress_writeback.py::test_atomic_rename
+<span class="d">34 passed, 1 failed, 5 pending</span>
+
+<span class="c">codex</span>
+The rename isn't atomic on tmpfs. Switching to os.replace.<span class="cur"></span>`,
+  e: `<span class="d">&gt;</span> Add idempotency keys to the refund endpoint and cover the retry path
+
+<span class="y">●</span> I'll start by reading the refund handler and its tests.
+
+<span class="g">●</span> <span class="w">Read</span>(src/payments/refunds.py)
+  <span class="d">└</span> Read 142 lines
+
+<span class="g">●</span> <span class="w">Search</span>(pattern: "idempotency", path: "src/")
+  <span class="d">└</span> Found 3 files
+
+<span class="g">●</span> <span class="w">Read</span>(src/payments/store.py)
+  <span class="d">└</span> Read 96 lines
+
+<span class="y">●</span> The store already has a lookup(key) — I'll reuse it.
+
+<span class="g">●</span> <span class="w">Update</span>(src/payments/refunds.py)
+  <span class="d">└</span> Updating…<span class="cur"></span>`,
+  f: `<span class="d">&gt;</span> Add a story pane that renders the LikeC4 view for the selected card
+
+<span class="g">●</span> <span class="w">Read</span>(app/Sources/Story/StoryPane.swift)
+  <span class="d">└</span> Read 214 lines
+
+<span class="g">●</span> <span class="w">Update</span>(app/Sources/Story/StoryPane.swift)
+  <span class="d">└</span> Updated with 22 additions and 3 removals
+   41 <span class="r">-</span>   let view = LikeC4View(model: model)
+   41 <span class="g">+</span>   let view = LikeC4View(model: model, scope: card.id)
+
+<span class="y">●</span> The schema needs a new table for story snapshots.
+
+<span class="g">●</span> <span class="w">Write</span>(db/schema.sql)
+  <span class="y">Allow Claude to write to db/schema.sql?</span>
+  <span class="d">1. Yes   2. Yes, and don't ask again   3. No</span>
+  <span class="d">&gt;</span> <span class="cur"></span>`,
+  g: `<span class="d">&gt;</span> Sign release provenance and document how to verify it
+
+<span class="g">●</span> <span class="w">Bash</span>(gh pr create --title "Sign release provenance" --base main)
+  <span class="d">└</span> https://github.com/roman-romanov-o/sich/pull/4
+
+<span class="g">●</span> <span class="w">Bash</span>(gh pr checks 4 --watch)
+  <span class="d">└</span> ci        <span class="g">pass</span>  4m12s
+     codeql    <span class="g">pass</span>  6m40s
+     forwarder <span class="g">pass</span>  0m18s
+
+<span class="y">●</span> All checks green. The PR is waiting on review before it can merge.
+
+<span class="d">[sich] blocked · awaiting review · 95m</span>`,
+  h: `<span class="d">&gt;</span> Pin Periphery 3.8.0 in CI and remove the dead code it surfaced
+
+<span class="g">●</span> <span class="w">Bash</span>(gh pr merge 3 --squash)
+  <span class="d">└</span> ✓ Squashed and merged pull request #3
+
+<span class="y">●</span> Merged. Periphery is pinned and the three unused symbols are gone.
+
+<span class="d">[sich] done · merged · 3h</span>`,
+};
+const cards = [
+  { id: 'a', col: 'queue',   repo: 'sich',          agent: 'claude', title: 'Homebrew cask for the signed DMG', transcript: T.a },
+  { id: 'b', col: 'parked',  repo: 'infra@hetzner', agent: 'claude', title: 'Rotate the deploy key on the build box', live: 'host unreachable', transcript: T.b },
+  { id: 'c', col: 'working', repo: 'sich',          agent: 'claude', title: 'Stall guard for silent sessions', live: 'editing StallGuard.swift', t: 12, transcript: T.c },
+  { id: 'd', col: 'working', repo: 'sahaidachny',   agent: 'codex',  title: 'Write progress.yaml back after each iteration', live: 'pytest · 34/40', t: 4, transcript: T.d },
+  { id: 'e', col: 'working', repo: 'payments-api',  agent: 'claude', title: 'Idempotency keys on the refund endpoint', live: 'reading refunds.py', t: 2, transcript: T.e,
+    ask: { q: 'Run <code>alembic upgrade head</code>?', yes: 'Allow', no: 'Deny' } },
+  { id: 'f', col: 'needs',   repo: 'sahaidachny',   agent: 'claude', title: 'LikeC4 story pane', transcript: T.f,
+    ask: { q: 'Allow write to <code>schema.sql</code>?', yes: 'Allow', no: 'Deny' }, t: 4 },
+  { id: 'g', col: 'blocked', repo: 'sich',          agent: 'claude', title: 'Sign release provenance', live: 'PR #4 · awaiting review', t: 95, transcript: T.g },
+  { id: 'h', col: 'done',    repo: 'sich',          agent: 'claude', title: 'Pin Periphery 3.8.0 in CI', live: 'merged', t: 180, transcript: T.h },
+];
+const groupOf = col => col === 'needs' ? 'needs' : col === 'working' ? 'working' : 'rest';
+const stateLabel = { queue: 'queued', parked: 'parked', working: 'working', needs: 'needs you', blocked: 'blocked', done: 'done' };
+
+function thumbEl(c) {
+  const el = document.createElement('article');
+  el.className = 'thumb'; el.dataset.id = c.id; el.dataset.state = c.col;
+  const ask = c.col === 'needs' && c.ask ? `
+    <div class="ask">
+      <div class="q">${c.ask.q}</div>
+      <div class="since mono">waiting ${c.t}m · ↵ open</div>
+      <div class="actions">
+        <button class="primary" data-act="yes">${c.ask.yes}<kbd>Y</kbd></button>
+        <button data-act="no">${c.ask.no}<kbd>N</kbd></button>
+      </div>
+    </div>` : '';
+  const t = c.t != null && c.col !== 'done' ? `<span class="t">${c.t}m</span>` : '';
+  el.innerHTML = `<div class="term">${c.transcript}</div>
+    <div class="chip"><span class="repo">${c.col === 'needs' ? c.title : c.repo}</span><span class="sep">·</span><span class="agent">${c.col === 'needs' ? c.repo : c.agent}</span><span class="sep">·</span><span class="state">${c.col === 'needs' ? c.agent : stateLabel[c.col]}</span>${t}</div>${ask}`;
+  return el;
+}
+
+const stage = document.getElementById('stage');
+const grids = Object.fromEntries([...stage.querySelectorAll('.group')].map(s => [s.dataset.group, s.querySelector('.grid')]));
+
+function fitTerms() {
+  for (const el of stage.querySelectorAll('.thumb')) {
+    const term = el.querySelector('.term');
+    const w = el.clientWidth; if (!w) continue;
+    term.style.transform = `scale(${w / 720})`;
+  }
+}
+function render() {
+  for (const g of Object.values(grids)) g.replaceChildren();
+  for (const c of cards) grids[groupOf(c.col)].appendChild(thumbEl(c));
+  for (const [g, grid] of Object.entries(grids)) {
+    const n = grid.children.length;
+    grid.parentElement.querySelector('.n').textContent = n || '';
+    grid.parentElement.classList.toggle('empty', n === 0);
+  }
+  const needs = cards.filter(c => c.col === 'needs').length;
+  const btn = document.getElementById('attention');
+  btn.classList.toggle('calm', needs === 0);
+  btn.innerHTML = needs ? `${needs} need${needs === 1 ? 's' : ''} you <kbd>⌘J</kbd>` : 'Nobody needs you';
+  document.getElementById('sum-sessions').textContent = cards.length;
+  document.getElementById('sum-working').textContent = cards.filter(c => c.col === 'working').length;
+  fitTerms();
+}
+addEventListener('resize', fitTerms);
+
+// ---------- FLIP with a critically damped spring (damping 1.0, response 0.4s) ----------
+// Starts from the live on-screen rect, so a move interrupted mid-flight never jumps.
+const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+function springFrames(dx, dy, response = 0.4, sx = 1, sy = 1) {
+  const w = 2 * Math.PI / response, frames = [], steps = 40, dur = response * 1.6;
+  for (let i = 0; i <= steps; i++) {
+    const t = (i / steps) * dur, k = (1 + w * t) * Math.exp(-w * t);
+    frames.push({ transform: `translate(${dx * k}px, ${dy * k}px) scale(${1 + (sx - 1) * k}, ${1 + (sy - 1) * k})` });
+  }
+  frames[steps] = { transform: 'none' };
+  return { frames, duration: dur * 1000 };
+}
+function move(mutate) {
+  const before = new Map([...stage.querySelectorAll('.thumb')].map(el => [el.dataset.id, el.getBoundingClientRect()]));
+  mutate(); render();
+  for (const el of stage.querySelectorAll('.thumb')) {
+    const a = before.get(el.dataset.id); if (!a) continue;
+    const b = el.getBoundingClientRect();
+    const dx = a.left - b.left, dy = a.top - b.top, sx = a.width / b.width, sy = a.height / b.height;
+    if (!dx && !dy && sx === 1 && sy === 1) continue;
+    if (reduce.matches) { el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200 }); continue; }
+    const { frames, duration } = springFrames(dx, dy, 0.4, sx, sy);
+    el.style.transformOrigin = '0 0';
+    el.animate(frames, { duration, easing: 'linear' });
+  }
+}
+
+// ---------- Zoom: thumbnail ↔ full window along the same path ----------
+const zoom = document.getElementById('zoom'), scrim = document.getElementById('scrim');
+let zoomFrom = null, zoomId = null;
+function zoomRect() { const m = 24; return { left: m, top: 60, width: innerWidth - m * 2, height: innerHeight - 60 - m }; }
+function openZoom(id) {
+  const c = cards.find(c => c.id === id), el = stage.querySelector(`.thumb[data-id="${id}"]`);
+  if (!c || !el) return;
+  zoomFrom = el.getBoundingClientRect(); zoomId = id;
+  const to = zoomRect();
+  Object.assign(zoom.style, { left: to.left + 'px', top: to.top + 'px', width: to.width + 'px', height: to.height + 'px' });
+  document.getElementById('zoom-title').textContent = c.title;
+  document.getElementById('zoom-meta').textContent = `${c.repo} · ${c.agent} · ${stateLabel[c.col]}`;
+  document.getElementById('zoom-term').innerHTML = c.transcript;
+  zoom.classList.add('on'); scrim.classList.add('on');
+  el.style.visibility = 'hidden';
+  if (reduce.matches) { zoom.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200 }); return; }
+  const { frames, duration } = springFrames(zoomFrom.left - to.left, zoomFrom.top - to.top, 0.45, zoomFrom.width / to.width, zoomFrom.height / to.height);
+  zoom.animate(frames, { duration, easing: 'linear' });
+}
+function closeZoom() {
+  if (!zoomId) return;
+  const el = stage.querySelector(`.thumb[data-id="${zoomId}"]`);
+  const to = el ? el.getBoundingClientRect() : zoomFrom, from = zoomRect();
+  scrim.classList.remove('on');
+  const done = () => { zoom.classList.remove('on'); if (el) el.style.visibility = ''; zoomId = null; };
+  if (reduce.matches) { zoom.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 200 }).onfinish = done; return; }
+  // Same path back: spring from the window rect toward the thumbnail's live rect.
+  const w = 2 * Math.PI / 0.45, steps = 40, dur = 0.45 * 1.6, frames = [];
+  const dx = to.left - from.left, dy = to.top - from.top, sx = to.width / from.width, sy = to.height / from.height;
+  for (let i = 0; i <= steps; i++) {
+    const t = (i / steps) * dur, k = 1 - (1 + w * t) * Math.exp(-w * t);
+    frames.push({ transform: `translate(${dx * k}px, ${dy * k}px) scale(${1 + (sx - 1) * k}, ${1 + (sy - 1) * k})` });
+  }
+  zoom.animate(frames, { duration: dur * 1000, easing: 'linear', fill: 'forwards' }).onfinish = done;
+}
+stage.addEventListener('click', e => {
+  const b = e.target.closest('button[data-act]');
+  if (b) { answer(b.closest('.thumb').dataset.id); return; }
+  const th = e.target.closest('.thumb'); if (th) openZoom(th.dataset.id);
+});
+scrim.addEventListener('click', closeZoom);
+addEventListener('keydown', e => { if (e.key === 'Escape') closeZoom(); });
+
+// ---------- Simulation ----------
+document.getElementById('sim-turn').onclick = () => {
+  const c = cards.find(c => c.col === 'working' && c.ask);
+  if (c) move(() => { c.col = 'needs'; c.t = 0; });
+};
+function answer(id) {
+  const c = cards.find(c => c.id === id) || cards.find(c => c.col === 'needs');
+  if (c) move(() => { c.col = 'working'; c.t = 0; c.live = 'resuming…'; });
+}
+document.getElementById('sim-answer').onclick = () => answer();
+document.getElementById('sim-quota').onclick = () => {
+  const p = document.getElementById('pool-codex'), low = !p.classList.contains('low');
+  p.classList.toggle('low', low);
+  p.querySelector('.l span').textContent = low ? '6%' : '86%';
+  p.querySelector('.bar i').style.width = low ? '6%' : '86%';
+};
+document.getElementById('sim-theme').onclick = () => {
+  const r = document.documentElement, dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const cur = r.dataset.theme || (dark ? 'dark' : 'light');
+  r.dataset.theme = cur === 'dark' ? 'light' : 'dark';
+};
+// Live clocks tick once a minute — motion that informs, not motion that decorates.
+setInterval(() => { for (const c of cards) if (c.t != null && c.col !== 'done') c.t++; render(); }, 60000);
+
+const p = new URLSearchParams(location.search);
+if (p.get('calm') === '1') cards.find(c => c.id === 'f').col = 'working';
+if (p.get('theme')) document.documentElement.dataset.theme = p.get('theme');
+render();
+</script>
+</body>
+</html>

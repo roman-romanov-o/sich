@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sich — inbox</title>
+<style>
+/* ============================================================================
+   Sich "inbox" — design option D5, a design artifact, not shipping code.
+
+   The product is "who needs me". So the board is gone. What remains is one
+   prioritised list in a narrow column, like Things or an email inbox:
+   the sessions waiting on you come first and are expanded with the agent's
+   exact question and the answer buttons; working sessions are one line
+   each; blocked / queued / parked sit folded away with a count; done is a
+   logbook link. Answering an item checks it and it leaves; the rest of the
+   list springs up from where it was.
+
+   Colour rule: monochrome. One accent, and only for an item waiting on you
+   or a quota pool about to run dry. A calm list has no colour on it.
+   ========================================================================== */
+:root {
+  --canvas:   #F6F6F7;
+  --surface:  #FFFFFF;
+  --hairline: rgba(0,0,0,0.08);
+  --ink:      #1C1C1E;
+  --ink-2:    rgba(28,28,30,0.60);
+  --ink-3:    rgba(28,28,30,0.38);
+  --ink-4:    rgba(28,28,30,0.14);
+  --shadow:   0 0.5px 0 rgba(0,0,0,0.05), 0 1px 3px rgba(0,0,0,0.05);
+  --chrome:   rgba(246,246,247,0.75);
+  --accent:      #D4500B;
+  --accent-ink:  #FFFFFF;
+  --accent-wash: rgba(212,80,11,0.08);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --canvas: #121214; --surface: #1C1C1F; --hairline: rgba(255,255,255,0.08);
+    --ink: #F2F2F3; --ink-2: rgba(242,242,243,0.62); --ink-3: rgba(242,242,243,0.38); --ink-4: rgba(242,242,243,0.13);
+    --shadow: 0 0 0 0.5px rgba(255,255,255,0.06);
+    --chrome: rgba(18,18,20,0.75);
+    --accent: #FF8A3D; --accent-ink: #1A0D04; --accent-wash: rgba(255,138,61,0.10);
+  }
+}
+:root[data-theme="dark"] {
+  --canvas: #121214; --surface: #1C1C1F; --hairline: rgba(255,255,255,0.08);
+  --ink: #F2F2F3; --ink-2: rgba(242,242,243,0.62); --ink-3: rgba(242,242,243,0.38); --ink-4: rgba(242,242,243,0.13);
+  --shadow: 0 0 0 0.5px rgba(255,255,255,0.06);
+  --chrome: rgba(18,18,20,0.75);
+  --accent: #FF8A3D; --accent-ink: #1A0D04; --accent-wash: rgba(255,138,61,0.10);
+}
+
+* { box-sizing: border-box; margin: 0; }
+html { -webkit-font-smoothing: antialiased; }
+body {
+  background: var(--canvas); color: var(--ink);
+  font: 15px/1.4 system-ui, -apple-system, "SF Pro Text", sans-serif;
+  min-height: 100vh; display: flex; flex-direction: column;
+}
+.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+kbd { font: 500 11px ui-monospace, "SF Mono", Menlo, monospace; color: var(--ink-3); }
+
+/* ---------- Top bar: translucent, content scrolls under, edge fade not a rule ---------- */
+.topbar {
+  position: sticky; top: 0; z-index: 5;
+  height: 44px; display: flex; align-items: center; justify-content: space-between;
+  padding: 0 max(16px, calc(50vw - 340px));
+  background: var(--chrome);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+}
+.topbar::after {
+  content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 14px; pointer-events: none;
+  background: linear-gradient(var(--canvas), transparent);
+  -webkit-mask: linear-gradient(#000, transparent); mask: linear-gradient(#000, transparent);
+}
+.wordmark { font-weight: 600; font-size: 14px; letter-spacing: -0.01em; }
+.topbar .status { font-size: 13px; color: var(--ink-3); display: inline-flex; align-items: center; gap: 7px; }
+.topbar .status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); display: none; }
+body.lit .topbar .status { color: var(--ink); font-weight: 500; }
+body.lit .topbar .status .dot { display: block; }
+
+/* ---------- Page ---------- */
+.page { width: 100%; max-width: 680px; margin: 0 auto; padding: 28px 16px 120px; }
+h1 { font-size: 28px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; }
+.sub { margin-top: 6px; color: var(--ink-2); font-size: 15px; }
+.sub b { color: var(--ink); font-weight: 500; }
+.pools { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+.pool {
+  display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 12px;
+  background: var(--surface); box-shadow: var(--shadow);
+  font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums;
+}
+.pool b { color: var(--ink); font-weight: 500; }
+.pool.low { color: var(--accent); }
+.pool.low b { color: var(--accent); }
+.pool.low::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+
+section { margin-top: 32px; }
+.sec-head {
+  display: flex; align-items: baseline; gap: 8px; padding: 0 4px 8px;
+  font-size: 13px; font-weight: 600; color: var(--ink-3); letter-spacing: 0.01em;
+}
+.sec-head .n { font-weight: 500; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+section.needs .sec-head { color: var(--accent); }
+section.needs .sec-head .n { color: var(--accent); }
+.list { background: var(--surface); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; }
+.list:empty { display: none; }
+.quiet { padding: 14px 16px; color: var(--ink-3); font-size: 14px; }
+
+/* ---------- Items ---------- */
+.item {
+  position: relative; display: block; padding: 12px 16px;
+  border-top: 0.5px solid var(--hairline);
+  transition: transform 100ms ease-out;
+  will-change: transform; cursor: default; user-select: none;
+}
+.item:first-child { border-top: none; }
+.item:active { transform: scale(0.98); }
+.item .row { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.item .title { font-size: 15px; font-weight: 500; letter-spacing: -0.01em; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item .meta { font-size: 13px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.item .t { font-size: 13px; color: var(--ink-3); font-variant-numeric: tabular-nums; flex: none; }
+.item .sub-row { margin-top: 2px; font-size: 13px; color: var(--ink-3); }
+
+/* Working: a quiet live mark, no colour. */
+.item[data-state="working"] .row::before {
+  content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ink-3); flex: none; align-self: center;
+}
+.item[data-state="working"] .meta { color: var(--ink-2); }
+.item[data-state="done"] .title { color: var(--ink-3); font-weight: 400; }
+
+/* Needs you: expanded, with the check circle and the question. */
+.item[data-state="needs"] { padding: 14px 16px 14px 48px; }
+.item[data-state="needs"] .check {
+  position: absolute; left: 16px; top: 15px; width: 20px; height: 20px; border-radius: 50%;
+  border: 1.5px solid var(--accent); display: grid; place-items: center; cursor: pointer;
+  transition: background 150ms ease, transform 100ms ease-out;
+}
+.item[data-state="needs"] .check:active { transform: scale(0.9); }
+.item[data-state="needs"] .check svg { width: 11px; height: 11px; stroke: var(--accent-ink); stroke-width: 2.5; fill: none; opacity: 0; transition: opacity 120ms ease; }
+.item.checked .check { background: var(--accent); }
+.item.checked .check svg { opacity: 1; }
+.item[data-state="needs"] .title { white-space: normal; }
+.item .ask { margin-top: 8px; font-size: 15px; color: var(--ink); }
+.item .ask code { font: 13.5px ui-monospace, "SF Mono", Menlo, monospace; color: var(--accent); }
+.item .waiting { margin-top: 2px; font-size: 13px; color: var(--ink-3); }
+.item .actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.item .actions button {
+  font: 500 13px system-ui, -apple-system, sans-serif; height: 28px; padding: 0 12px; border-radius: 7px;
+  border: 0.5px solid var(--ink-4); background: var(--surface); color: var(--ink); cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px;
+  transition: transform 100ms ease-out;
+}
+.item .actions button:active { transform: scale(0.96); }
+.item .actions button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+.item .actions button.primary kbd { color: var(--accent-ink); opacity: 0.7; }
+.item .actions .open { margin-left: auto; border: none; background: transparent; color: var(--ink-2); }
+
+/* ---------- Disclosure groups ---------- */
+details { margin-top: 32px; }
+details summary {
+  list-style: none; cursor: pointer; display: flex; align-items: baseline; gap: 8px; padding: 0 4px 8px;
+  font-size: 13px; font-weight: 600; color: var(--ink-3);
+}
+details summary::-webkit-details-marker { display: none; }
+details summary .chev { display: inline-block; width: 10px; font-size: 11px; transition: transform 250ms cubic-bezier(.2,.9,.3,1); }
+details[open] summary .chev { transform: rotate(90deg); }
+details summary .n { font-weight: 500; font-variant-numeric: tabular-nums; }
+details .list { transform-origin: top; }
+details[open] .list { animation: unfold 380ms linear; }
+@keyframes unfold {
+  0%   { opacity: 0; transform: translateY(-6px) scaleY(0.96); }
+  40%  { opacity: 1; transform: translateY(0.8px) scaleY(1.004); }
+  100% { opacity: 1; transform: none; }
+}
+
+.logbook { display: block; margin: 40px 4px 0; font-size: 13px; color: var(--ink-3); text-decoration: none; }
+.logbook b { font-weight: 500; }
+
+/* ---------- Keyboard hint row ---------- */
+.keys {
+  position: fixed; left: 0; right: 0; bottom: 0; height: 32px; z-index: 4;
+  display: flex; align-items: center; justify-content: center; gap: 18px;
+  font-size: 12px; color: var(--ink-3);
+  background: var(--chrome); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+}
+.keys kbd { color: var(--ink-2); }
+
+/* ---------- Demo controls (not part of the design) ---------- */
+.sim {
+  position: fixed; right: 16px; bottom: 44px; z-index: 6; display: flex; gap: 6px;
+  padding: 6px; border-radius: 10px;
+  background: var(--chrome); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 0 0 0.5px var(--hairline), 0 8px 24px rgba(0,0,0,0.08);
+}
+.sim button {
+  font: 500 11px system-ui, -apple-system, sans-serif; color: var(--ink-2);
+  border: none; background: transparent; height: 24px; padding: 0 9px; border-radius: 6px; cursor: pointer;
+}
+.sim button:hover { background: var(--ink-4); color: var(--ink); }
+.sim .label { align-self: center; padding: 0 6px; color: var(--ink-3); font-size: 11px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .item, .item .actions button, .item .check, details summary .chev { transition: opacity 200ms ease; }
+  .item:active, .item .actions button:active, .item .check:active { transform: none; }
+  details[open] .list { animation: fade 200ms ease; }
+  @keyframes fade { from { opacity: 0 } to { opacity: 1 } }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .topbar, .keys, .sim { background: var(--canvas); backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
+@media (max-width: 720px) {
+  .topbar .status { display: none; }
+  .sim { right: 8px; bottom: 40px; flex-wrap: wrap; max-width: calc(100vw - 16px); }
+  .sim .label { display: none; }
+  .keys { display: none; }
+  .page { padding-bottom: 96px; }
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <span class="wordmark">Sich</span>
+  <span class="status" id="status"><span class="dot"></span><span id="status-text"></span></span>
+</header>
+
+<main class="page">
+  <h1 id="heading">Today</h1>
+  <p class="sub" id="sub"></p>
+  <div class="pools">
+    <span class="pool"><b>Claude 5h</b> 64%</span>
+    <span class="pool"><b>week</b> 41%</span>
+    <span class="pool" id="pool-codex"><b>Codex</b> 86%</span>
+    <span class="pool"><b>API</b> firewalled</span>
+  </div>
+
+  <section class="needs" id="sec-needs">
+    <div class="sec-head">Needs you <span class="n"></span></div>
+    <div class="list" data-col="needs"></div>
+  </section>
+
+  <section id="sec-working">
+    <div class="sec-head">Working <span class="n"></span></div>
+    <div class="list" data-col="working"></div>
+  </section>
+
+  <details id="sec-blocked">
+    <summary><span class="chev">▶</span>Blocked <span class="n"></span></summary>
+    <div class="list" data-col="blocked"></div>
+  </details>
+  <details id="sec-queue">
+    <summary><span class="chev">▶</span>Queued <span class="n"></span></summary>
+    <div class="list" data-col="queue"></div>
+  </details>
+  <details id="sec-parked">
+    <summary><span class="chev">▶</span>Parked <span class="n"></span></summary>
+    <div class="list" data-col="parked"></div>
+  </details>
+
+  <a class="logbook" href="#" id="logbook"><b>Logbook</b> · <span class="n"></span> done</a>
+</main>
+
+<div class="keys"><span><kbd>j</kbd> <kbd>k</kbd> move</span><span><kbd>y</kbd> <kbd>n</kbd> answer</span><span><kbd>↵</kbd> open</span></div>
+
+<div class="sim" aria-label="Demo controls">
+  <span class="label">Simulate</span>
+  <button id="sim-turn">Agent asks</button>
+  <button id="sim-answer">Answer</button>
+  <button id="sim-quota">Quota low</button>
+  <button id="sim-theme">Theme</button>
+</div>
+
+<script>
+// Synthetic demo data. Times are minutes since the state was entered.
+const cards = [
+  { id: 'a', col: 'queue',   repo: 'sich',          agent: 'claude', title: 'Homebrew cask for the signed DMG' },
+  { id: 'b', col: 'parked',  repo: 'infra@hetzner', agent: 'claude', title: 'Rotate the deploy key on the build box', live: 'host unreachable' },
+  { id: 'c', col: 'working', repo: 'sich',          agent: 'claude', title: 'Stall guard for silent sessions', live: 'editing StallGuard.swift', t: 12 },
+  { id: 'd', col: 'working', repo: 'sahaidachny',   agent: 'codex',  title: 'Write progress.yaml back after each iteration', live: 'pytest · 34/40', t: 4 },
+  { id: 'e', col: 'working', repo: 'payments-api',  agent: 'claude', title: 'Idempotency keys on the refund endpoint', live: 'reading refunds.py', t: 2,
+    ask: { q: 'Run <code>alembic upgrade head</code>?', yes: 'Allow', no: 'Deny' } },
+  { id: 'f', col: 'needs',   repo: 'sahaidachny',   agent: 'claude', title: 'LikeC4 story pane',
+    ask: { q: 'Allow write to <code>schema.sql</code>?', yes: 'Allow', no: 'Deny' }, t: 4 },
+  { id: 'g', col: 'blocked', repo: 'sich',          agent: 'claude', title: 'Sign release provenance', live: 'PR #4 · awaiting review', t: 95 },
+  { id: 'h', col: 'done',    repo: 'sich',          agent: 'claude', title: 'Pin Periphery 3.8.0 in CI', live: 'merged', t: 180 },
+];
+
+function itemEl(c) {
+  const el = document.createElement('article');
+  el.className = 'item'; el.dataset.id = c.id; el.dataset.state = c.col;
+  if (c.col === 'needs') {
+    el.innerHTML = `
+      <span class="check" data-act="yes"><svg viewBox="0 0 12 12"><path d="M2 6.5l2.6 2.6L10 3.5"/></svg></span>
+      <div class="row"><span class="title">${c.title}</span></div>
+      <div class="sub-row">${c.repo} · ${c.agent}</div>
+      <div class="ask">${c.ask.q}</div>
+      <div class="waiting">waiting ${c.t}m</div>
+      <div class="actions">
+        <button class="primary" data-act="yes">${c.ask.yes} <kbd>Y</kbd></button>
+        <button data-act="no">${c.ask.no} <kbd>N</kbd></button>
+        <button class="open" data-act="open">Open <kbd>↵</kbd></button>
+      </div>`;
+    return el;
+  }
+  const t = c.t != null && c.col !== 'done' ? `<span class="t">${c.t}m</span>` : '';
+  const meta = c.live ? `<span class="meta">${c.live}</span>` : `<span class="meta">${c.repo} · ${c.agent}</span>`;
+  el.innerHTML = `<div class="row"><span class="title">${c.title}</span>${meta}${t}</div>`;
+  return el;
+}
+
+const lists = Object.fromEntries([...document.querySelectorAll('.list')].map(l => [l.dataset.col, l]));
+
+function render() {
+  for (const l of Object.values(lists)) l.replaceChildren();
+  for (const c of cards) if (lists[c.col]) lists[c.col].appendChild(itemEl(c));
+  for (const [col, l] of Object.entries(lists)) {
+    const n = l.children.length;
+    const head = l.parentElement.querySelector('.n');
+    head.textContent = n || '';
+    if (!n && col === 'needs') l.innerHTML = '<div class="quiet">Nobody needs you.</div>';
+  }
+  const needs = cards.filter(c => c.col === 'needs').length;
+  const working = cards.filter(c => c.col === 'working').length;
+  const done = cards.filter(c => c.col === 'done').length;
+  document.body.classList.toggle('lit', needs > 0);
+  document.getElementById('status-text').textContent = needs ? `${needs} need${needs === 1 ? 's' : ''} you` : 'All quiet';
+  document.getElementById('sub').innerHTML = `${new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })} · <b>${working}</b> working · ${needs ? `<b>${needs}</b> need${needs === 1 ? 's' : ''} you` : 'nobody needs you'}`;
+  document.querySelector('#logbook .n').textContent = done;
+}
+
+// ---------- FLIP with a critically damped spring (damping 1.0, response 0.4s) ----------
+// Starts from the live on-screen position, so a move interrupted mid-flight never jumps.
+const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+function springFrames(dx, dy, response = 0.4) {
+  const w = 2 * Math.PI / response, frames = [], steps = 40, dur = response * 1.6;
+  for (let i = 0; i <= steps; i++) {
+    const t = (i / steps) * dur, k = (1 + w * t) * Math.exp(-w * t);
+    frames.push({ transform: `translate(${dx * k}px, ${dy * k}px)` });
+  }
+  frames[steps] = { transform: 'none' };
+  return { frames, duration: dur * 1000 };
+}
+function move(mutate) {
+  const before = new Map([...document.querySelectorAll('.item')].map(el => [el.dataset.id, el.getBoundingClientRect()]));
+  mutate(); render();
+  for (const el of document.querySelectorAll('.item')) {
+    const a = before.get(el.dataset.id); if (!a) continue;
+    const b = el.getBoundingClientRect(), dx = a.left - b.left, dy = a.top - b.top;
+    if (!dx && !dy) continue;
+    if (reduce.matches) { el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200 }); continue; }
+    const { frames, duration } = springFrames(dx, dy);
+    el.animate(frames, { duration, easing: 'linear' });
+  }
+}
+
+// Answering: check it, let it collapse (height + opacity, critically damped), then the list springs up.
+function answer(id) {
+  const c = cards.find(c => c.id === id) || cards.find(c => c.col === 'needs');
+  if (!c) return;
+  const el = document.querySelector(`.item[data-id="${c.id}"]`);
+  const finish = () => move(() => { c.col = 'working'; c.t = 0; c.live = 'resuming…'; });
+  if (!el || reduce.matches) { finish(); return; }
+  el.classList.add('checked');
+  const h = el.getBoundingClientRect().height;
+  el.style.overflow = 'hidden';
+  const w = 2 * Math.PI / 0.35, steps = 30, dur = 0.35 * 1.6, frames = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = (i / steps) * dur, k = (1 + w * t) * Math.exp(-w * t);
+    frames.push({ height: `${h * k}px`, opacity: Math.max(0, k * 1.2 - 0.2), paddingTop: `${14 * k}px`, paddingBottom: `${14 * k}px` });
+  }
+  setTimeout(() => {
+    const anim = el.animate(frames, { duration: dur * 1000, easing: 'linear', fill: 'forwards' });
+    anim.onfinish = finish;
+  }, 180);
+}
+
+document.getElementById('sim-turn').onclick = () => {
+  const c = cards.find(c => c.col === 'working' && c.ask);
+  if (c) move(() => { c.col = 'needs'; c.t = 0; });
+};
+document.getElementById('sim-answer').onclick = () => answer();
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-act]'); if (!b) return;
+  const item = b.closest('.item'); if (!item) return;
+  if (b.dataset.act === 'open') return;
+  answer(item.dataset.id);
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'y' || e.key === 'n') answer();
+});
+document.getElementById('sim-quota').onclick = () => {
+  const p = document.getElementById('pool-codex'), low = !p.classList.contains('low');
+  p.classList.toggle('low', low);
+  p.innerHTML = low ? '<b>Codex</b> 6% · hold' : '<b>Codex</b> 86%';
+};
+document.getElementById('sim-theme').onclick = () => {
+  const r = document.documentElement, dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const cur = r.dataset.theme || (dark ? 'dark' : 'light');
+  r.dataset.theme = cur === 'dark' ? 'light' : 'dark';
+};
+// Live clocks tick once a minute — motion that informs, not motion that decorates.
+setInterval(() => { for (const c of cards) if (c.t != null && c.col !== 'done') c.t++; render(); }, 60000);
+
+const p = new URLSearchParams(location.search);
+if (p.get('calm') === '1') cards.find(c => c.id === 'f').col = 'working';
+if (p.get('theme')) document.documentElement.dataset.theme = p.get('theme');
+render();
+</script>
+</body>
+</html>
