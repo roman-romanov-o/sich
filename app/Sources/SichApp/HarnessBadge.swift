@@ -15,12 +15,17 @@ final class HarnessBadge: NSView {
     private(set) var agent: CardAgent
     private var mark: NSImage?
     private var tint: NSColor = .clear
+    private let pointSize: CGFloat
 
-    init(agent: CardAgent) {
+    /// `pointSize` is the square the mark sits in (16 in headers, 12 on a card
+    /// footer); `alpha` lets the footer mark sit a step quieter than the title.
+    init(agent: CardAgent, pointSize: CGFloat = 16, alpha: CGFloat = 1) {
         self.agent = agent
+        self.pointSize = pointSize
         super.init(frame: .zero)
         wantsLayer = true
         layer?.borderWidth = 0
+        alphaValue = alpha
         yieldWidthToWindow()
         set(agent: agent)
     }
@@ -28,7 +33,7 @@ final class HarnessBadge: NSView {
     required init?(coder: NSCoder) { nil }
 
     /// The silhouette stands alone at icon size; no repeated badge container.
-    override var intrinsicContentSize: NSSize { NSSize(width: 16, height: 16) }
+    override var intrinsicContentSize: NSSize { NSSize(width: pointSize, height: pointSize) }
 
     /// Re-point the badge at another harness (the drill-in header keeps one badge
     /// across focused cards).
@@ -44,7 +49,7 @@ final class HarnessBadge: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let mark else { return }
-        let side = min(15, min(bounds.width, bounds.height))
+        let side = min(pointSize - 1, min(bounds.width, bounds.height))
         let markRect = NSRect(
             x: (bounds.width - side) / 2, y: (bounds.height - side) / 2,
             width: side, height: side)

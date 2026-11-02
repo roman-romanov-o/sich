@@ -28,11 +28,6 @@ public struct ClaudeProfile: Codable, Sendable, Equatable, Identifiable {
     public var pool5h: String { "\(poolPrefix)_5h" }
     public var poolWeekly: String { "\(poolPrefix)_weekly" }
 
-    /// Label shown in the quota panel (`claude`, `claude · Work`, …).
-    public var quotaLabel: String {
-        isDefault ? "claude" : "claude · \(name)"
-    }
-
     /// JSONL transcript root for this profile's usage estimate.
     public var projectsDir: URL {
         ClaudeLaunchEnv.projectsDir(forConfigDir: configDir)

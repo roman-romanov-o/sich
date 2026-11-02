@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sich — watchtower board</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ============================================================================
+   Sich "watchtower" board — a design artifact, not shipping code.
+   Follows UI_PROTO_C_SIGNAL_ONLY's rule, dressed in the icon's palette.
+
+   The icon already is the rule: a dark tower on cream, and one ember — the
+   signal fire. So the board is monochrome tower-green on cream, and the ember
+   appears only when the watch has something for you: a session waiting on
+   you, or a quota pool about to run dry. When nobody needs you the fire in the
+   header tower is out and no ember is on screen.
+   ========================================================================== */
+:root {
+  --canvas:    #F4EFE4;   /* icon cream */
+  --surface:   #FBF8F1;
+  --hairline:  #DDD5C4;
+  --ink:       #14261C;   /* tower green */
+  --ink-2:     #5E6B61;
+  --ink-3:     #8A9188;
+  --ink-4:     #CFC8B8;
+  --shadow:    0 0.5px 0 rgba(20,38,28,0.08), 0 1px 2px rgba(20,38,28,0.05);
+  --chrome:    rgba(244,239,228,0.78);
+  /* The only hue in the system: the icon's ember. Fill vs. text-safe variant. */
+  --ember:      #E8731A;
+  --ember-ink:  #B4520B;
+  --ember-wash: rgba(232,115,26,0.10);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --canvas: #0F1A14; --surface: #18251D; --hairline: #26362C;
+    --ink: #ECE5D6; --ink-2: #A3AA9C; --ink-3: #6F7A6E; --ink-4: #2E4035;
+    --shadow: 0 0 0 0.5px rgba(236,229,214,0.05);
+    --chrome: rgba(15,26,20,0.78);
+    --ember: #FF9640; --ember-ink: #FF9640; --ember-wash: rgba(255,150,64,0.10);
+  }
+}
+:root[data-theme="dark"] {
+  --canvas: #0F1A14; --surface: #18251D; --hairline: #26362C;
+  --ink: #ECE5D6; --ink-2: #A3AA9C; --ink-3: #6F7A6E; --ink-4: #2E4035;
+  --shadow: 0 0 0 0.5px rgba(236,229,214,0.05);
+  --chrome: rgba(15,26,20,0.78);
+  --ember: #FF9640; --ember-ink: #FF9640; --ember-wash: rgba(255,150,64,0.10);
+}
+
+* { box-sizing: border-box; margin: 0; }
+html { -webkit-font-smoothing: antialiased; }
+body {
+  background: var(--canvas); color: var(--ink);
+  font: 13px/1.38 "Geist", system-ui, -apple-system, sans-serif;
+  min-height: 100vh; display: flex; flex-direction: column;
+}
+.mono { font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px; letter-spacing: 0; }
+
+/* ---------- Toolbar: translucent material, content scrolls beneath ---------- */
+.toolbar {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: center; gap: 14px;
+  height: 52px; padding: 0 20px;
+  background: var(--chrome);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border-bottom: 0.5px solid var(--hairline);
+}
+.brand { display: flex; align-items: center; gap: 8px; }
+.tower { width: 21px; height: 24px; color: var(--ink); flex: none; }
+.tower .fire { fill: var(--ember); opacity: 0; transform-origin: 12px 14px; transform: scale(0.4); transition: opacity 300ms ease, transform 400ms cubic-bezier(.2,.9,.3,1); }
+body.lit .tower .fire { opacity: 1; transform: scale(1); }
+.wordmark { font-weight: 600; font-size: 15px; letter-spacing: -0.02em; }
+.toolbar .spacer { flex: 1; }
+.summary { color: var(--ink-3); }
+.summary b { color: var(--ink-2); font-weight: 500; }
+
+.attention {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 28px; padding: 0 10px; border-radius: 7px;
+  font: 600 12px "Geist", system-ui, sans-serif; color: var(--ink);
+  border: none; background: transparent; cursor: pointer;
+  transition: transform 100ms ease-out, background 200ms ease;
+}
+.attention:hover { background: var(--ember-wash); }
+.attention:active { transform: scale(0.96); }
+.attention .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ember); box-shadow: 0 0 0 3px var(--ember-wash); }
+.attention kbd { font: 500 11px "JetBrains Mono", ui-monospace, monospace; color: var(--ink-3); }
+.attention.calm { color: var(--ink-3); font-weight: 500; cursor: default; }
+.attention.calm:hover { background: transparent; }
+.attention.calm .dot { display: none; }
+
+/* ---------- Board ---------- */
+.board {
+  flex: 1; display: grid;
+  grid-template-columns: repeat(6, minmax(176px, 1fr)) 256px;
+  padding: 0 8px 24px; overflow-x: auto;
+}
+.col { padding: 20px 8px 0; min-width: 0; }
+.col-head {
+  display: flex; align-items: baseline; gap: 8px;
+  margin: 0 4px 12px; padding-bottom: 7px;
+  border-bottom: 1px solid var(--ink);
+  font: 500 10px "JetBrains Mono", ui-monospace, monospace;
+  letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink);
+}
+.col-head .n { margin-left: auto; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.col[data-col="needs"].lit .col-head { color: var(--ember-ink); border-color: var(--ember); }
+.col[data-col="needs"].lit .col-head .n { color: var(--ember-ink); }
+.col-list { display: flex; flex-direction: column; gap: 8px; min-height: 40px; }
+.empty { padding: 2px 4px; color: var(--ink-4); }
+
+/* Calm Needs-you column: the watch is quiet, on purpose. */
+.quiet { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 28px 0 0; color: var(--ink-4); }
+.quiet svg { width: 54px; height: 60px; }
+.quiet p { font: 500 10px "JetBrains Mono", ui-monospace, monospace; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); }
+
+/* ---------- Card ---------- */
+.card {
+  position: relative; overflow: hidden;
+  background: var(--surface); border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 10px 12px 11px;
+  cursor: default; user-select: none;
+  transition: transform 100ms ease-out;
+  will-change: transform;
+}
+.card:active { transform: scale(0.985); }
+.card .repo { color: var(--ink-3); display: flex; justify-content: space-between; gap: 8px; }
+.card .repo span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card .title { font-size: 13.5px; font-weight: 600; line-height: 1.28; margin: 4px 0 0; letter-spacing: -0.015em; }
+.card .live { margin-top: 7px; color: var(--ink-3); display: flex; justify-content: space-between; gap: 8px; }
+.card .live span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card .live .t { font-variant-numeric: tabular-nums; flex: none; }
+
+.card[data-state="working"] .live span:first-child { color: var(--ink-2); }
+.card[data-state="done"] { background: transparent; box-shadow: inset 0 0 0 1px var(--hairline); }
+.card[data-state="done"] .title { color: var(--ink-3); font-weight: 500; text-decoration: line-through; text-decoration-color: var(--ink-4); }
+.card[data-state="parked"] .title { color: var(--ink-2); font-weight: 500; }
+
+/* Needs you: a flame bar on the leading edge — the one place ember lives on a card. */
+.card[data-state="needs"] { padding-left: 15px; box-shadow: var(--shadow), 0 6px 18px var(--ember-wash); }
+.card[data-state="needs"]::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--ember); }
+.card .ask { display: none; }
+.card[data-state="needs"] .ask { display: block; margin-top: 9px; padding-top: 9px; border-top: 1px dashed var(--hairline); }
+.card[data-state="needs"] .live { display: none; }
+.ask .q { color: var(--ink); font-weight: 500; }
+.ask .q code { font: 500 11.5px "JetBrains Mono", ui-monospace, monospace; color: var(--ember-ink); }
+.ask .since { color: var(--ember-ink); margin-top: 3px; }
+.ask .actions { display: flex; gap: 6px; margin-top: 9px; }
+.ask button {
+  flex: 1; height: 24px; padding: 0 8px; border-radius: 5px; cursor: pointer;
+  font: 500 12px "Geist", system-ui, sans-serif;
+  border: 1px solid var(--hairline); background: transparent; color: var(--ink);
+  transition: transform 100ms ease-out;
+}
+.ask button:active { transform: scale(0.96); }
+.ask button.primary { background: var(--ink); color: var(--canvas); border-color: var(--ink); }
+.ask kbd { font: 500 10px "JetBrains Mono", ui-monospace, monospace; color: inherit; opacity: 0.55; margin-left: 5px; }
+
+/* ---------- Capacity ---------- */
+.capacity { padding: 20px 12px 0 18px; border-left: 1px solid var(--hairline); margin-left: 8px; }
+.capacity .col-head { margin-left: 0; margin-right: 0; }
+.pool { padding: 8px 0 12px; }
+.pool-head { display: flex; justify-content: space-between; align-items: baseline; }
+.pool-name { font-weight: 600; letter-spacing: -0.01em; }
+.pool-left { font-variant-numeric: tabular-nums; color: var(--ink-2); }
+/* Segmented gauge: ten ticks, read like an instrument rather than a progress bar. */
+.bar {
+  height: 8px; margin: 7px 0 5px; background: var(--ink-4);
+  -webkit-mask: repeating-linear-gradient(90deg, #000 0 calc(10% - 2px), transparent calc(10% - 2px) 10%);
+          mask: repeating-linear-gradient(90deg, #000 0 calc(10% - 2px), transparent calc(10% - 2px) 10%);
+}
+.bar i { display: block; height: 100%; background: var(--ink); }
+.pool-meta { color: var(--ink-3); display: flex; justify-content: space-between; }
+.pool.low .pool-left { color: var(--ember-ink); font-weight: 600; }
+.pool.low .bar i { background: var(--ember); }
+.verdict {
+  margin-top: 14px; padding: 9px 10px;
+  border: 1px solid var(--ink); border-radius: 4px;
+  font: 500 10.5px/1.5 "JetBrains Mono", ui-monospace, monospace; color: var(--ink-2);
+}
+.verdict b { display: block; color: var(--ink); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; }
+.verdict.warn { border-color: var(--ember); }
+.verdict.warn b { color: var(--ember-ink); }
+
+/* ---------- Demo controls (not part of the design) ---------- */
+.sim {
+  position: fixed; right: 16px; bottom: 16px; display: flex; gap: 6px;
+  padding: 6px; border-radius: 10px;
+  background: var(--chrome); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 0 0 1px var(--hairline), 0 8px 24px rgba(20,38,28,0.08);
+}
+.sim button {
+  font: 500 11px "Geist", system-ui, sans-serif; color: var(--ink-2);
+  border: none; background: transparent; height: 24px; padding: 0 9px; border-radius: 6px; cursor: pointer;
+}
+.sim button:hover { background: var(--ink-4); color: var(--ink); }
+.sim .label { align-self: center; padding: 0 6px; color: var(--ink-3); font-size: 11px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .card, .attention, .ask button, .tower .fire { transition: opacity 200ms ease; }
+  .card:active, .attention:active, .ask button:active { transform: none; }
+  .tower .fire, body.lit .tower .fire { transform: none; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .toolbar, .sim { background: var(--canvas); backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
+@media (max-width: 720px) {
+  .board { grid-template-columns: repeat(7, 220px); }
+  .toolbar { padding: 0 16px; }
+  .summary { display: none; }
+}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="tower" viewBox="0 0 24 27">
+    <path fill="currentColor" d="M12 0.5l1.2 2.2-1.2 1.6-1.2-1.6z"/>
+    <path fill="currentColor" d="M12 4L2.5 10h19z"/>
+    <path fill="currentColor" d="M5.5 10h2v4h-2zM16.5 10h2v4h-2z"/>
+    <path fill="currentColor" d="M4.5 14h15v2h-15zM6.5 16.5h11l1.2 9.5H5.3z"/>
+  </symbol>
+</svg>
+
+<header class="toolbar">
+  <span class="brand">
+    <svg class="tower" viewBox="0 0 24 27" aria-hidden="true">
+      <use href="#tower"/>
+      <path class="fire" d="M12 9.6c1.9 1.3 2.8 2.6 2.1 3.8-.4.6-1.1.9-2.1.9s-1.7-.3-2.1-.9c-.5-.9-.2-1.8.8-2.6 0 .8.4 1.2 1 1.2.2-.9.3-1.6.3-2.4z"/>
+    </svg>
+    <span class="wordmark">Sich</span>
+  </span>
+  <span class="summary"><b id="sum-sessions">7</b> sessions · <b id="sum-working">3</b> working</span>
+  <span class="spacer"></span>
+  <button class="attention" id="attention"></button>
+</header>
+
+<main class="board" id="board">
+  <section class="col" data-col="queue"><div class="col-head">Queue <span class="n"></span></div><div class="col-list"></div></section>
+  <section class="col" data-col="parked"><div class="col-head">Parked <span class="n"></span></div><div class="col-list"></div></section>
+  <section class="col" data-col="working"><div class="col-head">Working <span class="n"></span></div><div class="col-list"></div></section>
+  <section class="col" data-col="needs"><div class="col-head">Needs you <span class="n"></span></div><div class="col-list"></div></section>
+  <section class="col" data-col="blocked"><div class="col-head">Blocked <span class="n"></span></div><div class="col-list"></div></section>
+  <section class="col" data-col="done"><div class="col-head">Done <span class="n"></span></div><div class="col-list"></div></section>
+
+  <aside class="capacity">
+    <div class="col-head">Capacity</div>
+    <div class="pool">
+      <div class="pool-head"><span class="pool-name">Claude · 5h</span><span class="pool-left mono">64% left</span></div>
+      <div class="bar"><i style="width:64%"></i></div>
+      <div class="pool-meta mono"><span>interactive</span><span>resets 2h 14m</span></div>
+    </div>
+    <div class="pool">
+      <div class="pool-head"><span class="pool-name">Claude · week</span><span class="pool-left mono">41% left</span></div>
+      <div class="bar"><i style="width:41%"></i></div>
+      <div class="pool-meta mono"><span>interactive</span><span>resets 3d</span></div>
+    </div>
+    <div class="pool" id="pool-codex">
+      <div class="pool-head"><span class="pool-name">Codex · week</span><span class="pool-left mono">86% left</span></div>
+      <div class="bar"><i style="width:86%"></i></div>
+      <div class="pool-meta mono"><span>plus</span><span>resets 5d</span></div>
+    </div>
+    <div class="pool">
+      <div class="pool-head"><span class="pool-name">API credits</span><span class="pool-left mono">untouched</span></div>
+      <div class="bar"><i style="width:0"></i></div>
+      <div class="pool-meta mono"><span>firewalled</span><span>no headless runs</span></div>
+    </div>
+    <p class="verdict" id="verdict"><b>Clear to launch</b>Claude 5h has headroom.</p>
+  </aside>
+</main>
+
+<div class="sim" aria-label="Demo controls">
+  <span class="label">Simulate</span>
+  <button id="sim-turn">Agent asks</button>
+  <button id="sim-answer">Answer</button>
+  <button id="sim-quota">Quota low</button>
+  <button id="sim-theme">Theme</button>
+</div>
+
+<script>
+// Synthetic demo data. Times are minutes since the state was entered.
+const cards = [
+  { id: 'a', col: 'queue',   repo: 'sich',          agent: 'claude', title: 'Homebrew cask for the signed DMG' },
+  { id: 'b', col: 'parked',  repo: 'infra@hetzner', agent: 'claude', title: 'Rotate the deploy key on the build box', live: 'host unreachable' },
+  { id: 'c', col: 'working', repo: 'sich',          agent: 'claude', title: 'Stall guard for silent sessions', live: 'editing StallGuard.swift', t: 12 },
+  { id: 'd', col: 'working', repo: 'sahaidachny',   agent: 'codex',  title: 'Write progress.yaml back after each iteration', live: 'pytest · 34/40', t: 4 },
+  { id: 'e', col: 'working', repo: 'payments-api',  agent: 'claude', title: 'Idempotency keys on the refund endpoint', live: 'reading refunds.py', t: 2,
+    ask: { q: 'Run <code>alembic upgrade head</code>?', yes: 'Allow', no: 'Deny' } },
+  { id: 'f', col: 'needs',   repo: 'sahaidachny',   agent: 'claude', title: 'LikeC4 story pane',
+    ask: { q: 'Allow write to <code>schema.sql</code>?', yes: 'Allow', no: 'Deny' }, t: 4 },
+  { id: 'g', col: 'blocked', repo: 'sich',          agent: 'claude', title: 'Sign release provenance', live: 'PR #4 · awaiting review', t: 95 },
+  { id: 'h', col: 'done',    repo: 'sich',          agent: 'claude', title: 'Pin Periphery 3.8.0 in CI', live: 'merged', t: 180 },
+];
+
+function cardEl(c) {
+  const el = document.createElement('article');
+  el.className = 'card'; el.dataset.id = c.id; el.dataset.state = c.col;
+  const ask = c.ask ? `
+    <div class="ask">
+      <div class="q">${c.ask.q}</div>
+      <div class="since mono">waiting ${c.col === 'needs' ? c.t : 0}m · ↵ open</div>
+      <div class="actions">
+        <button class="primary" data-act="yes">${c.ask.yes}<kbd>Y</kbd></button>
+        <button data-act="no">${c.ask.no}<kbd>N</kbd></button>
+      </div>
+    </div>` : '';
+  const live = c.live ? `<div class="live mono"><span>${c.live}</span>${c.t != null && c.col !== 'done' ? `<span class="t">${c.t}m</span>` : ''}</div>` : '';
+  el.innerHTML = `<div class="repo mono"><span>${c.repo}</span><span>${c.agent}</span></div>
+                  <h3 class="title">${c.title}</h3>${live}${ask}`;
+  return el;
+}
+
+const board = document.getElementById('board');
+const lists = Object.fromEntries([...board.querySelectorAll('.col')].map(s => [s.dataset.col, s.querySelector('.col-list')]));
+const quiet = `<div class="quiet"><svg viewBox="0 0 24 27"><use href="#tower"/></svg><p>Watch is quiet</p></div>`;
+
+function render() {
+  for (const l of Object.values(lists)) l.replaceChildren();
+  for (const c of cards) lists[c.col].appendChild(cardEl(c));
+  for (const [col, l] of Object.entries(lists)) {
+    const n = l.children.length;
+    l.parentElement.querySelector('.n').textContent = n || '';
+    if (!n) l.innerHTML = col === 'needs' ? quiet : '<div class="empty mono">—</div>';
+    l.parentElement.classList.toggle('lit', col === 'needs' && n > 0);
+  }
+  const needs = cards.filter(c => c.col === 'needs').length;
+  document.body.classList.toggle('lit', needs > 0);
+  const btn = document.getElementById('attention');
+  btn.classList.toggle('calm', needs === 0);
+  btn.innerHTML = needs ? `<span class="dot"></span>${needs} need${needs === 1 ? 's' : ''} you <kbd>⌘J</kbd>` : 'Nobody needs you';
+  document.getElementById('sum-sessions').textContent = cards.length;
+  document.getElementById('sum-working').textContent = cards.filter(c => c.col === 'working').length;
+}
+
+// ---------- FLIP with a critically damped spring (damping 1.0, response 0.4s) ----------
+// Starts from the live on-screen position, so a move interrupted mid-flight never jumps.
+const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+function springFrames(dx, dy, response = 0.4) {
+  const w = 2 * Math.PI / response, frames = [], steps = 40, dur = response * 1.6;
+  for (let i = 0; i <= steps; i++) {
+    const t = (i / steps) * dur, k = (1 + w * t) * Math.exp(-w * t);
+    frames.push({ transform: `translate(${dx * k}px, ${dy * k}px)` });
+  }
+  frames[steps] = { transform: 'none' };
+  return { frames, duration: dur * 1000 };
+}
+function move(mutate) {
+  const before = new Map([...board.querySelectorAll('.card')].map(el => [el.dataset.id, el.getBoundingClientRect()]));
+  mutate(); render();
+  for (const el of board.querySelectorAll('.card')) {
+    const a = before.get(el.dataset.id); if (!a) continue;
+    const b = el.getBoundingClientRect(), dx = a.left - b.left, dy = a.top - b.top;
+    if (!dx && !dy) continue;
+    if (reduce.matches) { el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200 }); continue; }
+    const { frames, duration } = springFrames(dx, dy);
+    el.animate(frames, { duration, easing: 'linear' });
+  }
+}
+
+// ---------- Simulation ----------
+document.getElementById('sim-turn').onclick = () => {
+  const c = cards.find(c => c.col === 'working' && c.ask);
+  if (c) move(() => { c.col = 'needs'; c.t = 0; });
+};
+function answer(id) {
+  const c = cards.find(c => c.id === id) || cards.find(c => c.col === 'needs');
+  if (c) move(() => { c.col = 'working'; c.t = 0; c.live = 'resuming…'; });
+}
+document.getElementById('sim-answer').onclick = () => answer();
+board.addEventListener('click', e => {
+  const b = e.target.closest('button[data-act]'); if (!b) return;
+  answer(b.closest('.card').dataset.id);
+});
+document.getElementById('sim-quota').onclick = () => {
+  const p = document.getElementById('pool-codex'), low = !p.classList.contains('low');
+  p.classList.toggle('low', low);
+  p.querySelector('.pool-left').textContent = low ? '6% left' : '86% left';
+  p.querySelector('.bar i').style.width = low ? '6%' : '86%';
+  const v = document.getElementById('verdict');
+  v.classList.toggle('warn', low);
+  v.innerHTML = low
+    ? '<b>Hold Codex work</b>Codex week runs out before reset. Route to Claude.'
+    : '<b>Clear to launch</b>Claude 5h has headroom.';
+};
+document.getElementById('sim-theme').onclick = () => {
+  const r = document.documentElement, dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const cur = r.dataset.theme || (dark ? 'dark' : 'light');
+  r.dataset.theme = cur === 'dark' ? 'light' : 'dark';
+};
+// Live clocks tick once a minute — motion that informs, not motion that decorates.
+setInterval(() => { for (const c of cards) if (c.t != null && c.col !== 'done') c.t++; render(); }, 60000);
+
+const p = new URLSearchParams(location.search);
+if (p.get('calm') === '1') cards.find(c => c.id === 'f').col = 'working';
+if (p.get('theme')) document.documentElement.dataset.theme = p.get('theme');
+render();
+</script>
+</body>
+</html>

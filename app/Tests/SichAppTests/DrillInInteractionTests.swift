@@ -59,53 +59,70 @@ struct DrillInInteractionTests {
         #expect(shell.cards.map(\.id) == before)   // nothing lost on the way back
     }
 
-    /// The mouse path (US-002 AC#2). Drives a REAL `mouseDown` through the window's
-    /// own event delivery, NOT a direct `goBack()` call — the Interaction-AC Binding
-    /// Rule: a click AC must be exercised by a dispatched event. It also asserts the
-    /// pill (not the embedded terminal that mounts over the panel) owns the click
-    /// point — the geometry half of "I cannot see / cannot reach the pill". The
-    /// pill's *visibility* remains a human sign-off; that it is reachable is here
-    /// machine-verified.
-    @Test("clicking the ← board pill returns to the board (real mouse-event path, US-002 AC#2)")
-    func backPillClickReturnsToBoard() throws {
-        let shell = BoardShell(seeds: singleSeed())
+    /// A real window with the production titlebar on it — the toolbar lives on the
+    /// window, not in the content view, so the titlebar tests need both.
+    private func drilledWindow(_ shell: BoardShell) -> NSWindow {
         let root = shell.buildContentForTesting()
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 720),
-            styleMask: [.titled], backing: .buffered, defer: false
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered, defer: false
         )
         window.contentView = root
+        shell.titlebar.install(on: window)
+        root.layoutSubtreeIfNeeded()
+        return window
+    }
 
+    /// The mouse path (US-002 AC#2): the titlebar's "‹ Board" button, clicked through
+    /// the control's own action path (`performClick`), not a direct `goBack()` call.
+    @Test("clicking ‹ Board in the titlebar returns to the board (US-002 AC#2)")
+    func titlebarBackReturnsToBoard() throws {
+        let shell = BoardShell(seeds: singleSeed())
+        _ = drilledWindow(shell)
         let card = try #require(shell.cards.first)
         shell.drill(into: card)
-        root.layoutSubtreeIfNeeded()
+        #expect(shell.titlebar.isShowing, "an open card shows the titlebar")
 
-        // The pill's center, in window base coordinates.
-        let pill = shell.drillIn.backPill
-        let center = pill.convert(NSPoint(x: pill.bounds.midX, y: pill.bounds.midY), to: nil)
+        shell.titlebar.backButton.performClick(nil)
 
-        // Geometry: real hit-testing resolves the point to the pill, NOT the terminal
-        // surface mounted over the panel. RED if the surface (or anything) covers it —
-        // the class of bug behind "the pill isn't there / can't be reached".
-        let hit = try #require(root.hitTest(center))
-        #expect(hit === pill,
-            "the ← board pill must be the hit target, not covered by the terminal")
-
-        // Act: a real left-mouse-down, dispatched to the genuinely hit-tested view.
-        // (Like the Esc test, this dispatches to the resolved target directly rather
-        // than through `NSWindow.sendEvent`, whose mouse routing is gated for an
-        // offscreen, non-key window — that gating is AppKit's behavior, not ours.)
-        let click = try #require(NSEvent.mouseEvent(
-            with: .leftMouseDown, location: center, modifierFlags: [], timestamp: 0,
-            windowNumber: window.windowNumber, context: nil,
-            eventNumber: 0, clickCount: 1, pressure: 1
-        ))
-        hit.mouseDown(with: click)
-
-        // Assert: the click returned to the board.
-        #expect(shell.drillIn.isHidden == true,
-            "clicking ← board must return to the board")
+        #expect(shell.drillIn.isHidden == true, "‹ Board must return to the board")
         #expect(shell.boardView.isHidden == false)
+        #expect(!shell.titlebar.isShowing, "the board keeps its plain titlebar")
+    }
+
+    /// The point of the redesign: after switching, the first thing you read is which
+    /// task you are in — its title and where it runs, in the window's own titlebar.
+    @Test("drilling in names the task and its folder in the titlebar; back restores the board's")
+    func titlebarNamesTheTask() throws {
+        let shell = BoardShell(seeds: [BoardSeed(
+            sessionID: "demo/one", projectDir: NSHomeDirectory() + "/demo",
+            agent: .claude, state: .running, scrollback: "ready")])
+        let window = drilledWindow(shell)
+        window.title = "Sich — mission control"
+        window.backgroundColor = BoardTheme.canvas
+        let card = try #require(shell.cards.first)
+        let frame = window.frame
+
+        shell.drill(into: card)
+        let title = card.title ?? BoardTheme.shortPath(card.projectDir)
+        #expect(shell.titlebar.plate.titleForTesting == title)
+        #expect(shell.titlebar.plate.directoryForTesting == "~/demo")
+        #expect(window.title == title, "the Window menu and VoiceOver read the task too")
+        #expect(window.backgroundColor == BoardTheme.termBg, "titlebar and terminal share one paper")
+        #expect(window.frame == frame, "showing the toolbar must not resize the window")
+
+        shell.returnToBoard()
+        #expect(window.title == "Sich — mission control")
+        #expect(window.backgroundColor == BoardTheme.canvas)
+        #expect(window.frame == frame, "hiding it must not either")
+    }
+
+    @Test("a remote card's folder reads host:path")
+    func remoteDirectoryReadsHostPath() {
+        let card = BoardCard(sessionID: "remote/roman@studio.tail00ee33.ts.net/api", projectDir: "roman@studio.tail00ee33.ts.net",
+                             agent: .claude, state: .idle, remoteDir: "~/work/api")
+        #expect(TaskTitlebar.directory(of: card) == "roman@studio:~/work/api")
     }
 
     /// The keyboard path back (US-002 AC#2), driven by a REAL `⌘[` `NSEvent` through
@@ -181,54 +198,5 @@ struct DrillInInteractionTests {
         #expect(shell.drillIn.isHidden == false,
             "Esc must reach the child agent, not return to the board")
         #expect(shell.boardView.isHidden == true)
-    }
-
-    /// Fabricate a linked git worktree (a `.git` FILE pointing at the main repo's
-    /// `worktrees/<name>` metadata) and return the checkout path. Pure filesystem —
-    /// no real `git`, so it never mints a worktree in this repo.
-    private func makeWorktreeCheckout(branch: String) throws -> String {
-        let fm = FileManager.default
-        let base = fm.temporaryDirectory.appendingPathComponent("wt-\(UUID().uuidString)")
-        let meta = base.appendingPathComponent("main/.git/worktrees/wt")
-        let checkout = base.appendingPathComponent("wt")
-        try fm.createDirectory(at: meta, withIntermediateDirectories: true)
-        try fm.createDirectory(at: checkout, withIntermediateDirectories: true)
-        try "ref: refs/heads/\(branch)\n".write(
-            to: meta.appendingPathComponent("HEAD"), atomically: true, encoding: .utf8)
-        try "../..\n".write(
-            to: meta.appendingPathComponent("commondir"), atomically: true, encoding: .utf8)
-        try "gitdir: \(meta.path)\n".write(
-            to: checkout.appendingPathComponent(".git"), atomically: true, encoding: .utf8)
-        return checkout.path
-    }
-
-    /// Drilling into a card that lives in a git worktree surfaces the amber worktree
-    /// pill with the branch name, so the operator sees edits land on a side branch.
-    /// A normal checkout leaves it hidden — the indicator is opt-in on real geometry.
-    @Test("drill-in shows the worktree indicator for a worktree checkout, hides it otherwise")
-    func worktreeIndicatorReflectsCheckout() throws {
-        let checkout = try makeWorktreeCheckout(branch: "task/fix-login")
-        let seeds = [
-            BoardSeed(sessionID: "wt/one", projectDir: checkout,
-                      agent: .claude, state: .running, scrollback: "on a worktree"),
-            BoardSeed(sessionID: "plain/one", projectDir: "/tmp",
-                      agent: .claude, state: .running, scrollback: "shared checkout"),
-        ]
-        let shell = BoardShell(seeds: seeds)
-        shell.buildContentForTesting()
-        let worktreeCard = try #require(shell.cards.first { $0.projectDir == checkout })
-        let plainCard = try #require(shell.cards.first { $0.projectDir == "/tmp" })
-
-        shell.drill(into: worktreeCard)
-        #expect(shell.drillIn.worktreeTag.isHidden == false,
-            "a worktree checkout shows the indicator")
-        #expect(shell.drillIn.worktreeTag.stringValue == "WORKTREE · task/fix-login",
-            "the pill names the worktree branch")
-
-        // A plain (non-worktree) card leaves the pill hidden.
-        shell.returnToBoard()
-        shell.drill(into: plainCard)
-        #expect(shell.drillIn.worktreeTag.isHidden == true,
-            "a normal checkout hides the indicator")
     }
 }

@@ -14,6 +14,7 @@ import Foundation
 final class ProcessLineStream: RemoteLineStream, @unchecked Sendable {
     private let process = Process()
     private let output = Pipe()
+    private let errors = Pipe()
     private let lock = NSLock()
     private var buffer = Data()
 
@@ -23,13 +24,14 @@ final class ProcessLineStream: RemoteLineStream, @unchecked Sendable {
         arguments: [String],
         environment: [String: String]? = nil,
         onLines: @escaping @Sendable ([Data]) -> Void,
+        onHeartbeat: @escaping @Sendable () -> Void,
         onExit: @escaping @Sendable (Int32) -> Void
     ) {
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         if let environment { process.environment = environment }
         process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
+        process.standardError = errors
         process.standardInput = FileHandle.nullDevice
 
         let reader = output.fileHandleForReading
@@ -38,8 +40,14 @@ final class ProcessLineStream: RemoteLineStream, @unchecked Sendable {
             let lines = self.absorb(handle.availableData)
             if !lines.isEmpty { onLines(lines) }
         }
+        // stderr carries no data, only proof of life (the relay command's beat).
+        let beats = errors.fileHandleForReading
+        beats.readabilityHandler = { handle in
+            if !handle.availableData.isEmpty { onHeartbeat() }
+        }
         process.terminationHandler = { [weak self] process in
             reader.readabilityHandler = nil
+            beats.readabilityHandler = nil
             // Whatever the child wrote just before exiting is still in the pipe.
             if let self, let rest = try? reader.readToEnd() {
                 let lines = self.absorb(rest)
@@ -49,6 +57,7 @@ final class ProcessLineStream: RemoteLineStream, @unchecked Sendable {
         }
         guard (try? process.run()) != nil else {
             reader.readabilityHandler = nil
+            beats.readabilityHandler = nil
             process.terminationHandler = nil
             return nil
         }
@@ -56,6 +65,7 @@ final class ProcessLineStream: RemoteLineStream, @unchecked Sendable {
 
     func cancel() {
         output.fileHandleForReading.readabilityHandler = nil
+        errors.fileHandleForReading.readabilityHandler = nil
         process.terminationHandler = nil
         if process.isRunning { process.terminate() }
     }
@@ -92,12 +102,13 @@ public struct SSHLineTransport: RemoteLineTransport {
     public func start(
         argv: [String],
         onLines: @escaping @Sendable ([Data]) -> Void,
+        onHeartbeat: @escaping @Sendable () -> Void,
         onExit: @escaping @Sendable (Int32) -> Void
     ) -> RemoteLineStream? {
         guard Self.spawningEnabled, let executable = argv.first else { return nil }
         guard (try? PoolFirewall.classify(argv)) != nil else { return nil }
         return ProcessLineStream(
             executable: executable, arguments: Array(argv.dropFirst()),
-            onLines: onLines, onExit: onExit)
+            onLines: onLines, onHeartbeat: onHeartbeat, onExit: onExit)
     }
 }

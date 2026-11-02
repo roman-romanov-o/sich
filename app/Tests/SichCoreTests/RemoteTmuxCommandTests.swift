@@ -201,7 +201,7 @@ struct RemoteTmuxCommandTests {
             + " -c '\\''claude --session-id 0ee0e692-9af6-4a17-b926-2fa812db33b3; exec $SHELL -il'\\'''"
         let relay = ["/usr/bin/ssh", "-o", "ServerAliveInterval=15",
                      "-o", "ServerAliveCountMax=3", "build-box",
-                     "tail -n 200 -F ~/.sich/events.jsonl"]
+                     RemoteTmuxCommand.relayCommand]
         let install = ["/usr/bin/ssh", "build-box", "cat > ~/.claude/sich-forward.sh"]
         let probe = ["/usr/bin/ssh", "build-box", "cat ~/.claude/sich-forward.sh 2>/dev/null"]
 

@@ -26,10 +26,17 @@ final class ClaudeThemeTests: XCTestCase {
 
         // Hues come from this appearance's ANSI ramp — the light ramp is tuned for
         // paper, so success/error/warning must differ between the two sides.
-        for token in ["success", "error", "warning", "planMode", "permission"] {
+        for token in ["success", "error", "warning", "planMode", "permission", "userMessageBackground"] {
             XCTAssertNotEqual(lightOverrides[token], darkOverrides[token],
                               "\(token) must be re-resolved for the appearance")
         }
+
+        // "auto mode on" in the footer is drawn in `warning`: it must recede to the
+        // board's dim ink, and user prompts must sit on the vivid prompt band.
+        let dimInk = BoardTheme.rgb(BoardTheme.textDim, in: NSAppearance(named: .darkAqua)!)
+        XCTAssertEqual(darkOverrides["warning"], "rgb(\(dimInk.r),\(dimInk.g),\(dimInk.b))")
+        let band = BoardTheme.rgb(BoardTheme.promptBand, in: NSAppearance(named: .darkAqua)!)
+        XCTAssertEqual(darkOverrides["userMessageBackground"], "rgb(\(band.r),\(band.g),\(band.b))")
 
         // Every value is in the `rgb(r,g,b)` syntax Claude's own themes use.
         for (token, value) in lightOverrides {

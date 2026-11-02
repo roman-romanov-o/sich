@@ -55,28 +55,74 @@ struct HookNormalizerTests {
     @Test func cursorCamelCaseVocabularyDrivesTheSameLifecycle() throws {
         func cursor(_ name: String, extra: String = "") throws -> SignalEvent {
             try #require(normalize(
-                #"{"hook_event_name":"\#(name)","sich_agent":"cursor","conversation_id":"conv-1","workspace_roots":["/repo"]\#(extra)}"#))
+                #"{"hook_event_name":"\#(name)","sich_agent":"cursor","conversation_id":"conv-1","sich_pid":"98009","workspace_roots":["/repo"]\#(extra)}"#))
         }
         let start = try cursor("sessionStart")
         #expect(start.agent == .cursor)
         #expect(start.kind == .sessionStart)
-        #expect(start.sessionID == "conv-1", "Cursor names the session conversation_id")
+        #expect(start.sessionID == "cursor:98009",
+                "a Cursor session is the launched `agent` process, not its conversation_id")
         #expect(start.cwd == "/repo", "no cwd on the payload → first workspace root")
 
         let store = HookSessionStore()
         store.ingest([start])
-        #expect(store.entry(for: "conv-1")?.state == .idle)
+        #expect(store.entry(for: "cursor:98009")?.state == .idle)
         store.ingest([try cursor("beforeSubmitPrompt")])
-        #expect(store.entry(for: "conv-1")?.state == .running)
+        #expect(store.entry(for: "cursor:98009")?.state == .running)
         #expect(try cursor("preToolUse", extra: #","tool_name":"Read""#).kind == .toolUse)
-        #expect(try cursor("postToolUseFailure").kind == .errorExit)
+        #expect(try cursor("postToolUseFailure").kind == .toolUse,
+                "a failed tool call is the agent at work, not an external block")
         #expect(try cursor("preCompact").kind == .compaction)
         #expect(try cursor("subagentStart").kind == .subagentStart)
         #expect(try cursor("subagentStop").kind == .subagentStop)
         store.ingest([try cursor("stop")])
-        #expect(store.entry(for: "conv-1")?.state == .waitingForInput)
+        #expect(store.entry(for: "cursor:98009")?.state == .waitingForInput)
         store.ingest([try cursor("sessionEnd")])
-        #expect(store.entry(for: "conv-1")?.state == .idle)
+        #expect(store.entry(for: "cursor:98009")?.state == .idle)
+    }
+
+    /// The operator report (2026-10-28, the "#53" Cursor card): one review turn
+    /// flapped WORKING → NEEDS YOU → BLOCKED → … while its commands ran. The
+    /// recorded events.jsonl explains it: the turn fanned out to two subagents that
+    /// fired hooks under their OWN `conversation_id`s, some tool events of the turn
+    /// carried the id of the card's EARLIER chat (already Stop-latched), and three
+    /// ordinary tool failures (file not found, `tsc` missing, a red vitest) each
+    /// classified as `blocked`. The board picked the freshest of four entries every
+    /// poll. All of it is ONE `agent` process: it must be one session whose only
+    /// transitions are the prompt and the turn end.
+    @Test func cursorSubagentsAndStaleChatIDsFoldIntoTheLaunchedProcess() throws {
+        func event(_ name: String, conv: String, at offset: TimeInterval, extra: String = "") throws -> SignalEvent {
+            try #require(normalize(
+                #"{"hook_event_name":"\#(name)","sich_agent":"cursor","sich_pid":"98009","sich_card_id":"CARD","conversation_id":"\#(conv)","workspace_roots":["/repo"],"timestamp":\#(arrival.timeIntervalSince1970 + offset)\#(extra)}"#))
+        }
+        let store = HookSessionStore(stallThreshold: 600)
+        // The card's first chat: checkout the PR, two `gh` failures, turn end.
+        store.ingest([try event("beforeSubmitPrompt", conv: "old-chat", at: 0)])
+        store.ingest([try event("postToolUseFailure", conv: "old-chat", at: 5, extra: #","tool_name":"Shell","error_message":"Repository not found""#)])
+        store.ingest([try event("stop", conv: "old-chat", at: 10)])
+        #expect(store.entry(for: "cursor:98009")?.state == .waitingForInput)
+
+        // The review turn in a NEW chat of the same process.
+        store.ingest([try event("beforeSubmitPrompt", conv: "root", at: 100)])
+        store.ingest([try event("preToolUse", conv: "sub-a", at: 105, extra: #","tool_name":"Read""#)])
+        store.ingest([try event("postToolUse", conv: "old-chat", at: 110, extra: #","tool_name":"Grep""#)])
+        store.ingest([try event("postToolUseFailure", conv: "sub-b", at: 115, extra: #","tool_name":"Read","error_message":"File not found""#)])
+        store.ingest([try event("postToolUse", conv: "sub-a", at: 120, extra: #","tool_name":"Shell""#)])
+        store.ingest([try event("postToolUseFailure", conv: "sub-b", at: 125, extra: #","tool_name":"Shell","error_message":"sh: tsc: command not found""#)])
+        #expect(store.entry(for: "cursor:98009")?.state == .running)
+        #expect(store.entry(for: "sub-a") == nil, "a subagent is not a session of its own")
+        #expect(store.entry(for: "old-chat") == nil)
+
+        // Mid-turn silence of the root (it is waiting on the subagents) is covered
+        // by the subagents' own hooks — no stall-guard NEEDS YOU.
+        store.sweepStale(now: arrival.addingTimeInterval(700))
+        #expect(store.entry(for: "cursor:98009")?.state == .running)
+
+        store.ingest([try event("stop", conv: "root", at: 710, extra: #","status":"completed""#)])
+        #expect(store.entry(for: "cursor:98009")?.state == .waitingForInput)
+        #expect(store.transitions(for: "cursor:98009")
+                == [.running, .waitingForInput, .running, .waitingForInput],
+                "two prompts, two turn ends — nothing in between moved the card")
     }
 
     @Test func antigravityEventsStampedByTheScriptDriveTheLifecycle() throws {
@@ -193,6 +239,14 @@ struct HookNormalizerTests {
             #"{"hook_event_name":"SubagentStop","session_id":"S","agent_id":"a1","background_tasks":[{"id":"a1","status":"running"}]}"#))
         #expect(selfListed.backgroundBusy == false,
                 "the stopping agent's own entry is not a still-open background task")
+
+        // A backgrounded SHELL (live capture: a Metro dev server left running by
+        // `run_in_background`) is not a child the turn waits on — the Stop that
+        // leaves it running is a real turn end.
+        let shellOnly = try #require(normalize(
+            #"{"hook_event_name":"Stop","session_id":"S","background_tasks":[{"id":"bpws0wrz7","type":"shell","status":"running","description":"Start Metro dev server"}]}"#))
+        #expect(shellOnly.backgroundBusy == false,
+                "a running background shell does not hold the background parenthesis open")
     }
 
     /// The idle nudge is the turn boundary restated — it must route through `stop`

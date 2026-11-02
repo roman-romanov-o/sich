@@ -51,17 +51,6 @@ public enum SessionDisposition: Sendable, Equatable {
         }
     }
 
-    /// A short word for a status badge / window-title bracket: only a real signal
-    /// kill reads as "crashed"; a non-zero exit reads as "exited".
-    public var shortLabel: String {
-        switch self {
-        case .starting: return "starting"
-        case .running: return "running"
-        case .exited: return "exited"
-        case .crashed: return "crashed"
-        }
-    }
-
     /// A clear, unobtrusive end-of-session line for the surface, so a terminated
     /// window reads as *finished*, not *hung*. `nil` while still live.
     public var endBanner: String? {

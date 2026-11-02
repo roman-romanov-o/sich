@@ -241,6 +241,13 @@ public final class SessionsPoller {
         sink(SessionsFeed.cards(from: store.entries))
     }
 
+    /// A `!` bash-mode line was submitted in a card's own terminal — the prompt
+    /// submit Claude Code fires no hook for (`HookSessionStore.noteOperatorSubmit`).
+    func noteOperatorSubmit(cardID: UUID) {
+        store.noteOperatorSubmit(cardID: cardID, at: Date())
+        sink(SessionsFeed.cards(from: store.entries))
+    }
+
     // MARK: - Remote intake (US-003)
 
     /// Follow one remote host's event log and fold its lines into the SAME store the

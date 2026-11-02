@@ -8,7 +8,7 @@ The board renders six column groups (`BoardView.ColumnGroup`), left to right:
 
 | Column | Meaning | Underlying `CardState`s |
 |---|---|---|
-| **BACKLOG** | shelved on purpose (defer, unknown host) | `parked`, `unknown`, `unreachable` |
+| **BACKLOG** | shelved on purpose (defer, unknown host) — pick the next task from here | `parked`, `unknown`, `unreachable` |
 | **QUEUE** | ready to pull / at rest | `idle` |
 | **WORKING** | an agent is actively producing | `running`, `running-tests` |
 | **NEEDS YOU** | the agent waits on **you** | `waiting-for-input` |
@@ -52,7 +52,24 @@ from the board.
    the turn latch does not arm. The FINAL Stop — the one whose payload reports
    the background drained — is the real turn end and routes NEEDS YOU as usual.
    The stall guard (2.1) still bounds the parenthesis: a child that goes silent
-   past the threshold routes attention anyway.
+   past the threshold routes attention anyway. Only a backgrounded **agent** holds
+   the parenthesis open. A backgrounded **shell** (`"type":"shell"` — a dev server,
+   a watch task) is not a child the turn waits on: a Stop that leaves one running
+   is a real turn end and routes NEEDS YOU.
+
+   2.4. **A `!` bash-mode command is a turn.** Claude Code runs a `!command` line
+   (and the model turn answering its output) with no `UserPromptSubmit` and no
+   tool hooks — only the closing `Stop`. In a card's own terminal, Enter on a
+   `!` line stands in for the missing prompt submit: the card's live Claude
+   session, if at rest, goes WORKING and the `Stop` brings it back to NEEDS YOU.
+   A `!` command typed in any other terminal stays invisible — there is no
+   signal to observe.
+
+   2.5. **A failed tool call is WORKING.** `PostToolUseFailure` (Cursor
+   `postToolUseFailure`) — a file not found, a non-zero shell exit, a red test
+   run — is an ordinary step of the agent's loop: it reads the error and carries
+   on, and no operator action is useful. It never moves the card to BLOCKED,
+   which is reserved for waiting on something **external** and is set by hand.
 
 3. **Turn ended, agent waiting for the user → NEEDS YOU.** The agent stopped
    (finished its turn, asked a question, requested permission) and is idle until
@@ -101,6 +118,14 @@ from the board.
 - Cursor has no permission-request hook and no on-screen menu the board
   scrapes, so a Cursor approval prompt does **not** light NEEDS YOU; the card
   shows WORKING until the turn ends (`stop`).
+- A Cursor session is the launched `agent` **process** (`sich_pid`, stamped by
+  the hook script), not Cursor's `conversation_id`. Cursor's subagents fire
+  hooks under their own conversation ids, and a tool call of the current chat
+  can carry the id of an earlier chat of the same process; keyed per
+  conversation, one turn became four competing entries and the card flapped
+  WORKING → NEEDS YOU → BLOCKED (observed 2026-10-28). Keyed per process, a
+  subagent's hooks keep the root's turn WORKING (rule 2) and only the root's
+  `stop` ends it.
 - Resume is `agent resume` (latest chat, not cwd-filtered): with several Cursor
   cards open, a revived card may pick up the most recent chat rather than its own.
 - Cursor quota is MEASURED the same way Claude's is: a hidden pty runs `agent --trust` in `~/.sich/usage-probe`, types `/usage`, and parses the `Included NN% used` row + `Resets Mon D` (one monthly pool, no tokens or keychain touched). Refreshed every 5 min; `swift run sich-probe cursor` runs one scrape by hand.

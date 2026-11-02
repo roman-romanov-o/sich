@@ -86,6 +86,10 @@ public final class HookSessionStore {
     // OPERATOR's prompt, not the WORK — the card stays WORKING. Only consulted when
     // an event doesn't carry the flag itself; a payload's own array is authoritative.
     private var backgroundBusy: Set<SessionKey> = []
+    // Sessions whose last applied signal was `SessionEnd`: the agent process is gone,
+    // so the card's terminal is a plain shell again and an operator Enter there is
+    // not a prompt submit (see `noteOperatorSubmit`).
+    private var ended: Set<SessionKey> = []
     // Emitted state path per session (a transition is recorded only on a real state
     // change), mirroring the Python `StateReconciler.transitions_for` — the parity
     // diff (TC-INT-324) asserts on this, not just the final state.
@@ -131,6 +135,29 @@ public final class HookSessionStore {
                 applyBurst(key: key, burst: burst)
             }
         }
+    }
+
+    /// The operator pressed Enter on a `!` line in a card's own terminal. Claude Code
+    /// runs such a bash-mode command (and the model turn that answers its output)
+    /// WITHOUT firing `UserPromptSubmit` — only the closing `Stop` — so the hooks
+    /// alone leave the card frozen where it was. The keystroke stands in for the
+    /// missing prompt submit: the card's live Claude session, if it is at rest
+    /// (`waitingForInput` after a Stop, or `idle` before its first prompt), goes to
+    /// WORKING and the turn latch releases; the eventual `Stop` returns it to NEEDS
+    /// YOU. Anything else — no observed session, a non-Claude agent, an exited
+    /// session whose terminal is a plain shell — is left untouched (never guess).
+    public func noteOperatorSubmit(cardID: UUID, at now: Date) {
+        let candidates = bySession.filter { _, entry in
+            entry.cardID.flatMap(UUID.init(uuidString:)) == cardID
+        }
+        guard let (key, entry) = candidates.max(by: { $0.value.updatedAt < $1.value.updatedAt }),
+              entry.agent == .claude, !ended.contains(key),
+              entry.state == .waitingForInput || entry.state == .idle
+        else { return }
+        ingest([SignalEvent(
+            kind: .userInput, source: .pty, agent: entry.agent, sessionID: key.id,
+            timestamp: max(now, entry.updatedAt), cardID: entry.cardID, host: key.host
+        )])
     }
 
     private static func key(of event: SignalEvent) -> SessionKey {
@@ -182,6 +209,7 @@ public final class HookSessionStore {
         let decisive = dominant(burst)
         lastEventAt[key] = burst.map(\.timestamp).max()!
         burst.forEach { updateBackgroundBusy(key: key, event: $0) }
+        if decisive.kind == .sessionEnd { ended.insert(key) } else { ended.remove(key) }
         let next = resolveNext(key: key, event: decisive)
         noteTurnBoundary(key: key, kind: decisive.kind, next: next)
         write(

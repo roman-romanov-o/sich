@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sich — native window</title>
+<style>
+/* ============================================================================
+   Sich "native" — a design artifact, not shipping code.
+
+   Concept: stop looking like a web kanban. Look like a first-party macOS app
+   (Familiarity: build on what people already know; things that look the same
+   behave the same). A three-pane document window, like Mail / Notes / Xcode:
+
+     1. SOURCE LIST sidebar (heavy translucent material) — sessions grouped
+        under section headers. Needs-you rows are bold with an accent dot, the
+        way unread mail is.
+     2. MAIN pane — the selected session's terminal under a unified toolbar.
+        A permission request arrives as a SHEET that slides down from the
+        toolbar, anchored to the title, and leaves the same way.
+     3. INSPECTOR — quota pools as segmented level indicators, a verdict, and
+        the session's metadata.
+
+   Colour rule: system-neutral grays. The only accent is for a session that
+   needs you (dot, section header, sheet default button) and a quota pool
+   about to run dry. Everything else is told apart by weight, size and leading.
+   ========================================================================== */
+:root {
+  --desk-a: #c9d3dd; --desk-b: #e6e1d6;         /* wallpaper-ish backdrop */
+  --window:  #FFFFFF;
+  --paper:   #FFFFFF;                          /* terminal paper */
+  --sidebar: rgba(236,236,238,0.72);           /* heavy material */
+  --toolbar: rgba(250,250,250,0.78);           /* light material (never over sidebar) */
+  --inspector: #F6F6F7;
+  --hairline: rgba(0,0,0,0.10);
+  --ink:   #1D1D1F;
+  --ink-2: rgba(29,29,31,0.62);
+  --ink-3: rgba(29,29,31,0.42);
+  --ink-4: rgba(29,29,31,0.12);
+  --row-sel: rgba(0,0,0,0.08);
+  --control: rgba(0,0,0,0.05);
+  --level: #4A4A4F;
+  --level-track: rgba(0,0,0,0.10);
+  --scrim: rgba(0,0,0,0.06);
+  --shadow-window: 0 0 0 0.5px rgba(0,0,0,0.25), 0 22px 60px rgba(0,0,0,0.28), 0 2px 8px rgba(0,0,0,0.12);
+  --accent:      #E0531E;
+  --accent-ink:  #FFFFFF;
+  --accent-wash: rgba(224,83,30,0.10);
+  --cursor: #1D1D1F;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --desk-a: #2a2f3a; --desk-b: #1b1b22;
+    --window: #232326; --paper: #1E1E21;
+    --sidebar: rgba(40,40,44,0.78); --toolbar: rgba(46,46,50,0.80); --inspector: #252528;
+    --hairline: rgba(255,255,255,0.10);
+    --ink: #F2F2F4; --ink-2: rgba(242,242,244,0.62); --ink-3: rgba(242,242,244,0.40); --ink-4: rgba(242,242,244,0.12);
+    --row-sel: rgba(255,255,255,0.12); --control: rgba(255,255,255,0.07);
+    --level: #C9C9CE; --level-track: rgba(255,255,255,0.12);
+    --scrim: rgba(0,0,0,0.22);
+    --shadow-window: 0 0 0 0.5px rgba(255,255,255,0.14), 0 22px 60px rgba(0,0,0,0.6);
+    --accent: #FF7A3D; --accent-ink: #1B0D05; --accent-wash: rgba(255,122,61,0.14);
+    --cursor: #F2F2F4;
+  }
+}
+:root[data-theme="dark"] {
+  --desk-a: #2a2f3a; --desk-b: #1b1b22;
+  --window: #232326; --paper: #1E1E21;
+  --sidebar: rgba(40,40,44,0.78); --toolbar: rgba(46,46,50,0.80); --inspector: #252528;
+  --hairline: rgba(255,255,255,0.10);
+  --ink: #F2F2F4; --ink-2: rgba(242,242,244,0.62); --ink-3: rgba(242,242,244,0.40); --ink-4: rgba(242,242,244,0.12);
+  --row-sel: rgba(255,255,255,0.12); --control: rgba(255,255,255,0.07);
+  --level: #C9C9CE; --level-track: rgba(255,255,255,0.12);
+  --scrim: rgba(0,0,0,0.22);
+  --shadow-window: 0 0 0 0.5px rgba(255,255,255,0.14), 0 22px 60px rgba(0,0,0,0.6);
+  --accent: #FF7A3D; --accent-ink: #1B0D05; --accent-wash: rgba(255,122,61,0.14);
+  --cursor: #F2F2F4;
+}
+
+* { box-sizing: border-box; margin: 0; }
+html { -webkit-font-smoothing: antialiased; }
+body {
+  min-height: 100vh; display: grid; place-items: center; padding: 28px;
+  background: var(--desk-b);
+  background-image: radial-gradient(120% 90% at 20% 0%, var(--desk-a), var(--desk-b) 70%);
+  color: var(--ink);
+  font: 13px/1.38 -apple-system, system-ui, "SF Pro Text", sans-serif;
+  letter-spacing: -0.003em;
+}
+.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+
+/* ---------- Window ---------- */
+.window {
+  width: min(1384px, 100%); height: min(644px, calc(100vh - 56px));
+  border-radius: 10px; overflow: hidden;
+  background: var(--window); box-shadow: var(--shadow-window);
+  display: grid; grid-template-columns: 236px 1fr 232px; grid-template-rows: 52px 1fr;
+  position: relative;
+}
+
+/* ---------- Sidebar: heavy material, full height, owns the traffic lights ---------- */
+.sidebar {
+  grid-row: 1 / 3; grid-column: 1;
+  background: var(--sidebar);
+  backdrop-filter: blur(24px) saturate(160%); -webkit-backdrop-filter: blur(24px) saturate(160%);
+  border-right: 1px solid var(--hairline);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.lights { display: flex; gap: 8px; padding: 18px 0 0 14px; height: 52px; flex: none; }
+.lights i { width: 12px; height: 12px; border-radius: 50%; background: var(--ink-4); box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.12); }
+.source { flex: 1; overflow-y: auto; padding: 0 8px 12px; }
+.sect { margin-top: 8px; padding: 10px 10px 4px; font-size: 11px; font-weight: 600; color: var(--ink-3); letter-spacing: 0; display: flex; justify-content: space-between; }
+.sect .n { font-weight: 500; font-variant-numeric: tabular-nums; }
+.sect.lit { color: var(--accent); }
+.sect:empty { display: none; }
+.row {
+  display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; column-gap: 7px;
+  padding: 5px 8px; border-radius: 6px; cursor: default; user-select: none;
+  transition: transform 100ms ease-out; will-change: transform;
+}
+.row:active { transform: scale(0.97); }
+.row.sel { background: var(--row-sel); }
+.row svg { width: 16px; height: 16px; color: var(--ink-2); }
+.row > div:nth-child(2) { min-width: 0; }
+.row .t { font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.2; }
+.row .r { font-size: 11px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.25; }
+.row .trail { font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.row[data-state="needs"] .t { font-weight: 600; }
+.row[data-state="needs"] svg { color: var(--accent); }
+.row[data-state="needs"] .trail { color: var(--accent); font-weight: 600; }
+.row[data-state="done"] .t { color: var(--ink-3); }
+.row[data-state="parked"] .t { color: var(--ink-2); }
+.row .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-left: 6px; display: none; }
+.row[data-state="needs"] .dot { display: inline-block; }
+.row .trail-wrap { display: flex; align-items: center; }
+
+/* ---------- Toolbar: light material over the main pane only ---------- */
+.toolbar {
+  grid-row: 1; grid-column: 2; z-index: 3;
+  display: flex; align-items: center; gap: 10px; padding: 0 14px;
+  background: var(--toolbar);
+  backdrop-filter: blur(20px) saturate(180%); -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-bottom: 1px solid var(--hairline);
+}
+.toolbar .title { font-weight: 600; font-size: 13px; letter-spacing: -0.01em; }
+.toolbar .sub { font-size: 11px; color: var(--ink-3); }
+.toolbar .spacer { flex: 1; }
+.seg { display: inline-flex; background: var(--control); border-radius: 7px; padding: 2px; }
+.seg button {
+  font: 500 12px -apple-system, system-ui, sans-serif; color: var(--ink-2);
+  border: none; background: transparent; height: 22px; padding: 0 10px; border-radius: 5px; cursor: pointer;
+  transition: transform 100ms ease-out;
+}
+.seg button:active { transform: scale(0.97); }
+.seg button.on { background: var(--window); color: var(--ink); box-shadow: 0 0.5px 1px rgba(0,0,0,0.18); }
+.state { font-size: 11px; font-weight: 500; color: var(--ink-2); display: inline-flex; align-items: center; gap: 5px; }
+.state i { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); }
+.state.needs { color: var(--accent); }
+.state.needs i { background: var(--accent); }
+.att {
+  display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 6px;
+  font: 600 12px -apple-system, system-ui, sans-serif; color: var(--ink); background: var(--control);
+  border: none; cursor: pointer; transition: transform 100ms ease-out;
+}
+.att:active { transform: scale(0.97); }
+.att .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.att.calm { color: var(--ink-3); font-weight: 500; background: transparent; cursor: default; }
+.att.calm .dot { display: none; }
+.att kbd { font: 500 11px -apple-system, system-ui, sans-serif; color: var(--ink-3); }
+
+/* ---------- Main: terminal paper ---------- */
+.main { grid-row: 2; grid-column: 2; position: relative; background: var(--paper); overflow: hidden; }
+.term {
+  height: 100%; overflow-y: auto; padding: 18px 22px 24px;
+  font: 12.5px/1.6 ui-monospace, "SF Mono", Menlo, monospace; color: var(--ink);
+  white-space: pre-wrap; word-break: break-word;
+}
+.term .u { color: var(--ink); }
+.term .d { color: var(--ink-2); }
+.term .m { color: var(--ink-3); }
+.term .b { font-weight: 600; }
+.term .cur { display: inline-block; width: 7px; height: 14px; background: var(--cursor); vertical-align: -2px; margin-left: 1px; }
+.term .prompt {
+  margin-top: 14px; padding: 6px 10px; border: 1px solid var(--ink-4); border-radius: 6px; color: var(--ink-2);
+}
+
+/* ---------- Sheet: anchored to the toolbar, enters and exits along the same path ---------- */
+.scrim { position: absolute; inset: 0; background: var(--scrim); opacity: 0; pointer-events: none; transition: opacity 240ms ease; z-index: 4; }
+.main.asking .scrim { opacity: 1; pointer-events: auto; }
+.sheet {
+  position: absolute; top: 0; left: 50%; z-index: 5;
+  width: 400px; padding: 18px 20px 16px;
+  background: var(--window); border-radius: 0 0 12px 12px;
+  box-shadow: 0 0 0 0.5px var(--hairline), 0 18px 40px rgba(0,0,0,0.22);
+  transform-origin: 50% 0;
+  transform: translate(-50%, -100%) scale(0.98); opacity: 0; filter: blur(6px);
+  transition: transform 360ms cubic-bezier(0.2, 0.9, 0.25, 1), opacity 240ms ease, filter 300ms ease;
+  pointer-events: none;
+}
+.main.asking .sheet { transform: translate(-50%, 0) scale(1); opacity: 1; filter: blur(0); pointer-events: auto; }
+.sheet .glyph { width: 28px; height: 28px; color: var(--accent); float: left; margin: 2px 12px 0 0; }
+.sheet h2 { font-size: 13px; font-weight: 600; margin-bottom: 3px; }
+.sheet p { font-size: 11.5px; color: var(--ink-2); line-height: 1.45; }
+.sheet code { font: 11.5px ui-monospace, "SF Mono", Menlo, monospace; color: var(--ink); }
+.sheet .btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; clear: both; }
+.sheet button {
+  font: 500 12px -apple-system, system-ui, sans-serif; height: 24px; padding: 0 14px; min-width: 76px;
+  border-radius: 6px; border: 0.5px solid var(--hairline); background: var(--window); color: var(--ink); cursor: pointer;
+  box-shadow: 0 0.5px 1px rgba(0,0,0,0.10); transition: transform 100ms ease-out;
+}
+.sheet button:active { transform: scale(0.97); }
+.sheet button.default { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+.sheet kbd { font: inherit; opacity: 0.55; margin-left: 5px; }
+
+/* ---------- Inspector ---------- */
+.inspector {
+  grid-row: 1 / 3; grid-column: 3; background: var(--inspector); border-left: 1px solid var(--hairline);
+  padding: 16px 14px; overflow-y: auto;
+}
+.ih { font-size: 11px; font-weight: 600; color: var(--ink-3); margin: 10px 0 8px; }
+.ih:first-child { margin-top: 36px; }
+.pool { margin-bottom: 11px; }
+.pool-head { display: flex; justify-content: space-between; font-size: 12px; }
+.pool-head b { font-weight: 500; }
+.pool-head span { color: var(--ink-2); font-variant-numeric: tabular-nums; font-size: 11px; }
+.level { height: 7px; margin: 5px 0 3px; background: var(--level-track); border-radius: 1px;
+  -webkit-mask: repeating-linear-gradient(90deg, #000 0 calc(10% - 1.5px), transparent calc(10% - 1.5px) 10%);
+          mask: repeating-linear-gradient(90deg, #000 0 calc(10% - 1.5px), transparent calc(10% - 1.5px) 10%); }
+.level i { display: block; height: 100%; background: var(--level); }
+.pool-meta { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--ink-3); }
+.pool.low .pool-head span { color: var(--accent); font-weight: 600; }
+.pool.low .level i { background: var(--accent); }
+.verdict { font-size: 11.5px; color: var(--ink-2); padding: 8px 10px; background: var(--control); border-radius: 6px; line-height: 1.4; margin-top: 2px; }
+.verdict b { display: block; color: var(--ink); font-weight: 600; }
+.verdict.warn b { color: var(--accent); }
+.meta { display: grid; grid-template-columns: auto 1fr; column-gap: 10px; row-gap: 4px; font-size: 11px; }
+.meta dt { color: var(--ink-3); } .meta dd { color: var(--ink); font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- Demo controls (not part of the design) ---------- */
+.sim {
+  position: fixed; right: 16px; bottom: 16px; display: flex; gap: 6px; padding: 6px; border-radius: 10px; z-index: 10;
+  background: var(--toolbar); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 0 0 0.5px var(--hairline), 0 8px 24px rgba(0,0,0,0.12);
+}
+.sim button { font: 500 11px -apple-system, system-ui, sans-serif; color: var(--ink-2); border: none; background: transparent; height: 24px; padding: 0 9px; border-radius: 6px; cursor: pointer; }
+.sim button:hover { background: var(--control); color: var(--ink); }
+.sim .label { align-self: center; padding: 0 6px; color: var(--ink-3); font-size: 11px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .row, .seg button, .att, .sheet button { transition: opacity 200ms ease; }
+  .row:active, .seg button:active, .att:active, .sheet button:active { transform: none; }
+  .sheet { transition: opacity 200ms ease; filter: none; transform: translate(-50%, 0) scale(1); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .sidebar { background: var(--inspector); backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .toolbar, .sim { background: var(--window); backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
+@media (prefers-contrast: more) {
+  :root { --hairline: rgba(0,0,0,0.4); }
+  :root[data-theme="dark"] { --hairline: rgba(255,255,255,0.45); }
+  .sheet button, .verdict, .row.sel { border: 1px solid var(--hairline); }
+}
+@media (max-width: 720px) {
+  body { padding: 0; }
+  .window { width: 100%; height: 100vh; border-radius: 0; grid-template-columns: 1fr; }
+  .toolbar, .main, .inspector { display: none; }
+  .sidebar { grid-column: 1; border-right: none; }
+  .sim { display: none; }
+}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="g-circle" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.4"/></symbol>
+  <symbol id="g-run" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M6.6 5.6v4.8L10.4 8z" fill="currentColor"/></symbol>
+  <symbol id="g-ask" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="currentColor"/><path d="M8 4.6v4.2M8 10.8v.9" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="g-pause" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M6.4 5.5v5M9.6 5.5v5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+  <symbol id="g-block" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5.2 8h5.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></symbol>
+  <symbol id="g-done" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5.4 8.2l1.8 1.8 3.5-3.8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="g-shield" viewBox="0 0 28 28"><path d="M14 3l9 3.4v7.2c0 5.2-3.6 9.3-9 11.4-5.4-2.1-9-6.2-9-11.4V6.4z" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M14 9v6M14 18v1.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+</svg>
+
+<div class="window">
+  <aside class="sidebar">
+    <div class="lights"><i></i><i></i><i></i></div>
+    <nav class="source" id="source"></nav>
+  </aside>
+
+  <header class="toolbar">
+    <div>
+      <div class="title" id="tb-title"></div>
+      <div class="sub" id="tb-sub"></div>
+    </div>
+    <span class="state" id="tb-state"><i></i><span></span></span>
+    <span class="spacer"></span>
+    <button class="att" id="attention"></button>
+    <span class="seg"><button class="on">Terminal</button><button>Diff</button><button>Log</button></span>
+  </header>
+
+  <section class="main" id="main">
+    <div class="term" id="term"></div>
+    <div class="scrim" id="scrim"></div>
+    <div class="sheet" id="sheet" role="dialog" aria-modal="true">
+      <svg class="glyph"><use href="#g-shield"/></svg>
+      <h2 id="sheet-title">Allow write?</h2>
+      <p id="sheet-body"></p>
+      <div class="btns">
+        <button id="sheet-deny">Deny<kbd>N</kbd></button>
+        <button class="default" id="sheet-allow">Allow<kbd>↩</kbd></button>
+      </div>
+    </div>
+  </section>
+
+  <aside class="inspector">
+    <div class="ih">Capacity</div>
+    <div class="pool"><div class="pool-head"><b>Claude · 5h</b><span>64% left</span></div><div class="level"><i style="width:64%"></i></div><div class="pool-meta"><span>interactive</span><span>resets 2h 14m</span></div></div>
+    <div class="pool"><div class="pool-head"><b>Claude · week</b><span>41% left</span></div><div class="level"><i style="width:41%"></i></div><div class="pool-meta"><span>interactive</span><span>resets 3d</span></div></div>
+    <div class="pool" id="pool-codex"><div class="pool-head"><b>Codex · week</b><span>86% left</span></div><div class="level"><i style="width:86%"></i></div><div class="pool-meta"><span>plus</span><span>resets 5d</span></div></div>
+    <div class="pool"><div class="pool-head"><b>API credits</b><span>untouched</span></div><div class="level"><i style="width:0"></i></div><div class="pool-meta"><span>firewalled</span><span>no headless runs</span></div></div>
+    <p class="verdict" id="verdict"><b>Clear to launch</b>Claude 5h has headroom.</p>
+    <div class="ih">Session</div>
+    <dl class="meta" id="meta"></dl>
+  </aside>
+</div>
+
+<div class="sim" aria-label="Demo controls">
+  <span class="label">Simulate</span>
+  <button id="sim-turn">Agent asks</button>
+  <button id="sim-answer">Answer</button>
+  <button id="sim-quota">Quota low</button>
+  <button id="sim-theme">Theme</button>
+</div>
+
+<script>
+// Synthetic demo data. Times are minutes since the state was entered.
+const cards = [
+  { id: 'a', col: 'queue',   repo: 'sich',          agent: 'claude', title: 'Homebrew cask for the signed DMG', branch: 'brew-cask', pid: '—',
+    transcript: `<span class="m">Session created. No agent running yet — type <span class="b">claude</span> to start.</span>\n\n<span class="m">~/sich $</span> <span class="cur"></span>` },
+  { id: 'b', col: 'parked',  repo: 'infra@hetzner', agent: 'claude', title: 'Rotate the deploy key on the build box', live: 'host unreachable', branch: 'main', pid: '—',
+    transcript: `<span class="m">ssh: connect to host build.hetzner port 22: No route to host</span>\n<span class="m">Parked until the host answers.</span>` },
+  { id: 'c', col: 'working', repo: 'sich',          agent: 'claude', title: 'Stall guard for silent sessions', live: 'editing StallGuard.swift', t: 12, branch: 'stall-guard', pid: '48112',
+    transcript: `<span class="u">&gt; Add a stall guard: a WORKING card with no output for 10 minutes moves to NEEDS YOU.</span>\n\n<span class="d">● I'll read the card state machine first.</span>\n\n<span class="d">● <span class="b">Read</span>(app/Sources/Sich/CardState.swift)\n  ⎿ Read 212 lines</span>\n\n<span class="d">● <span class="b">Update</span>(app/Sources/Sich/StallGuard.swift)\n  ⎿ Added 64 lines</span>\n\n<span class="d">● Writing the timer reset on observed output<span class="cur"></span></span>` },
+  { id: 'd', col: 'working', repo: 'sahaidachny',   agent: 'codex',  title: 'Write progress.yaml back after each iteration', live: 'pytest · 34/40', t: 4, branch: 'progress-writeback', pid: '48230',
+    transcript: `<span class="u">&gt; Persist progress.yaml after every iteration, not only at the end.</span>\n\n<span class="d">● <span class="b">Bash</span>(pytest tests/ -q)\n  ⎿ ..................................   [34/40]<span class="cur"></span></span>` },
+  { id: 'e', col: 'working', repo: 'payments-api',  agent: 'claude', title: 'Idempotency keys on the refund endpoint', live: 'reading refunds.py', t: 2, branch: 'refund-idempotency', pid: '48301',
+    ask: { q: 'Run <code>alembic upgrade head</code>?', body: 'Claude wants to run a database migration against the local dev database.' },
+    transcript: `<span class="u">&gt; Add idempotency keys to the refund endpoint and cover the retry path.</span>\n\n<span class="d">● I'll start by reading the refund handler and its tests.</span>\n\n<span class="d">● <span class="b">Read</span>(src/payments/refunds.py)\n  ⎿ Read 142 lines<span class="cur"></span></span>` },
+  { id: 'f', col: 'needs',   repo: 'sahaidachny',   agent: 'claude', title: 'LikeC4 story pane', t: 4, branch: 'story-pane', pid: '47990',
+    ask: { q: 'Allow write to <code>schema.sql</code>?', body: 'Claude wants to write 38 lines to <code>db/schema.sql</code>. The file is tracked and has uncommitted changes.' },
+    transcript: `<span class="u">&gt; Add a story pane that renders the LikeC4 model next to the editor.</span>\n\n<span class="d">● The pane needs a <span class="b">stories</span> table. I'll add it to the schema.</span>\n\n<span class="d">● <span class="b">Update</span>(db/schema.sql)</span>\n\n<div class="prompt">Allow write to db/schema.sql?  <span class="b">[y]</span> yes  <span class="b">[n]</span> no  <span class="cur"></span></div>` },
+  { id: 'g', col: 'blocked', repo: 'sich',          agent: 'claude', title: 'Sign release provenance', live: 'PR #4 · awaiting review', t: 95, branch: 'release-provenance', pid: '47312',
+    transcript: `<span class="d">● Opened PR #4: Sign release provenance and document how to verify a release.</span>\n\n<span class="m">Waiting on review. Nothing to do here until it lands.</span>` },
+  { id: 'h', col: 'done',    repo: 'sich',          agent: 'claude', title: 'Pin Periphery 3.8.0 in CI', live: 'merged', t: 180, branch: 'periphery-pin', pid: '—',
+    transcript: `<span class="d">● Merged. CI is green on main.</span>` },
+];
+const sections = [
+  ['needs', 'Needs you', 'g-ask'], ['working', 'Working', 'g-run'], ['blocked', 'Blocked', 'g-block'],
+  ['parked', 'Parked', 'g-pause'], ['queue', 'Queue', 'g-circle'], ['done', 'Done', 'g-done'],
+];
+const stateLabel = { needs: 'Needs you', working: 'Working', blocked: 'Blocked', parked: 'Parked', queue: 'Queued', done: 'Done' };
+let selected = 'f';
+
+function rowEl(c, glyph) {
+  const el = document.createElement('div');
+  el.className = 'row' + (c.id === selected ? ' sel' : ''); el.dataset.id = c.id; el.dataset.state = c.col;
+  const trail = c.col === 'needs' ? `${c.t}m` : (c.t != null && c.col !== 'done' ? `${c.t}m` : '');
+  el.innerHTML = `<svg><use href="#${glyph}"/></svg>
+    <div><div class="t">${c.title}</div><div class="r">${c.repo} · ${c.agent}</div></div>
+    <div class="trail-wrap"><span class="trail">${trail}</span><i class="dot"></i></div>`;
+  return el;
+}
+
+const source = document.getElementById('source');
+function render() {
+  source.replaceChildren();
+  for (const [col, label, glyph] of sections) {
+    const items = cards.filter(c => c.col === col);
+    if (!items.length) continue;
+    const h = document.createElement('div');
+    h.className = 'sect' + (col === 'needs' ? ' lit' : ''); h.innerHTML = `<span>${label}</span><span class="n">${items.length}</span>`;
+    source.appendChild(h);
+    for (const c of items) source.appendChild(rowEl(c, glyph));
+  }
+  const c = cards.find(c => c.id === selected);
+  document.getElementById('tb-title').textContent = c.title;
+  document.getElementById('tb-sub').textContent = `${c.repo} · ${c.agent} · ${c.branch}`;
+  const st = document.getElementById('tb-state');
+  st.className = 'state' + (c.col === 'needs' ? ' needs' : '');
+  st.querySelector('span').textContent = stateLabel[c.col] + (c.live && c.col === 'working' ? ` · ${c.live}` : '');
+  document.getElementById('term').innerHTML = c.transcript;
+  document.getElementById('meta').innerHTML = `<dt>Agent</dt><dd>${c.agent}</dd><dt>Branch</dt><dd>${c.branch}</dd><dt>cwd</dt><dd>~/${c.repo.split('@')[0]}</dd><dt>pid</dt><dd>${c.pid}</dd><dt>Started</dt><dd>${c.t != null ? c.t + 'm ago' : '—'}</dd>`;
+  const needs = cards.filter(c => c.col === 'needs').length;
+  const btn = document.getElementById('attention');
+  btn.classList.toggle('calm', needs === 0);
+  btn.innerHTML = needs ? `<span class="dot"></span>${needs} need${needs === 1 ? 's' : ''} you <kbd>⌘J</kbd>` : 'Nobody needs you';
+  // Sheet: shown only when the selected session is the one asking.
+  const main = document.getElementById('main');
+  if (c.col === 'needs' && c.ask) {
+    document.getElementById('sheet-title').innerHTML = c.ask.q;
+    document.getElementById('sheet-body').innerHTML = c.ask.body;
+    main.classList.add('asking');
+  } else main.classList.remove('asking');
+}
+
+// ---------- FLIP with a critically damped spring (damping 1.0, response 0.4s) ----------
+// Starts from the live on-screen position, so a move interrupted mid-flight never jumps.
+const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+function springFrames(dx, dy, response = 0.4) {
+  const w = 2 * Math.PI / response, frames = [], steps = 40, dur = response * 1.6;
+  for (let i = 0; i <= steps; i++) {
+    const t = (i / steps) * dur, k = (1 + w * t) * Math.exp(-w * t);
+    frames.push({ transform: `translate(${dx * k}px, ${dy * k}px)` });
+  }
+  frames[steps] = { transform: 'none' };
+  return { frames, duration: dur * 1000 };
+}
+function move(mutate) {
+  const before = new Map([...source.querySelectorAll('.row')].map(el => [el.dataset.id, el.getBoundingClientRect()]));
+  mutate(); render();
+  for (const el of source.querySelectorAll('.row')) {
+    const a = before.get(el.dataset.id); if (!a) continue;
+    const b = el.getBoundingClientRect(), dx = a.left - b.left, dy = a.top - b.top;
+    if (!dx && !dy) continue;
+    if (reduce.matches) { el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200 }); continue; }
+    const { frames, duration } = springFrames(dx, dy);
+    el.animate(frames, { duration, easing: 'linear' });
+  }
+}
+
+// ---------- Interaction ----------
+source.addEventListener('pointerdown', e => {
+  const r = e.target.closest('.row'); if (!r) return;
+  selected = r.dataset.id; move(() => {});
+});
+function answer() {
+  const c = cards.find(c => c.id === selected && c.col === 'needs') || cards.find(c => c.col === 'needs');
+  if (c) move(() => { c.col = 'working'; c.t = 0; c.live = 'resuming…'; c.transcript = c.transcript.replace(/<div class="prompt">[\s\S]*<\/div>/, '<span class="d">● Allowed. Writing db/schema.sql<span class="cur"></span></span>'); });
+}
+document.getElementById('sheet-allow').onclick = answer;
+document.getElementById('sheet-deny').onclick = answer;
+document.addEventListener('keydown', e => {
+  if (!document.getElementById('main').classList.contains('asking')) return;
+  if (e.key === 'Enter' || e.key === 'y' || e.key === 'n' || e.key === 'Escape') answer();
+});
+document.getElementById('sim-turn').onclick = () => {
+  const c = cards.find(c => c.col === 'working' && c.ask);
+  if (c) move(() => { c.col = 'needs'; c.t = 0; selected = c.id; });
+};
+document.getElementById('sim-answer').onclick = answer;
+document.getElementById('sim-quota').onclick = () => {
+  const p = document.getElementById('pool-codex'), low = !p.classList.contains('low');
+  p.classList.toggle('low', low);
+  p.querySelector('.pool-head span').textContent = low ? '6% left' : '86% left';
+  p.querySelector('.level i').style.width = low ? '6%' : '86%';
+  const v = document.getElementById('verdict');
+  v.classList.toggle('warn', low);
+  v.innerHTML = low ? '<b>Hold Codex work</b>Codex week runs out before reset. Route to Claude.' : '<b>Clear to launch</b>Claude 5h has headroom.';
+};
+document.getElementById('sim-theme').onclick = () => {
+  const r = document.documentElement, dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const cur = r.dataset.theme || (dark ? 'dark' : 'light');
+  r.dataset.theme = cur === 'dark' ? 'light' : 'dark';
+};
+// Live clocks tick once a minute — motion that informs, not motion that decorates.
+setInterval(() => { for (const c of cards) if (c.t != null && c.col !== 'done') c.t++; render(); }, 60000);
+
+const p = new URLSearchParams(location.search);
+if (p.get('calm') === '1') { const f = cards.find(c => c.id === 'f'); f.col = 'working'; f.live = 'editing StoryPane.swift'; f.transcript = f.transcript.replace(/<div class="prompt">[\s\S]*<\/div>/, '<span class="d">● Updated db/schema.sql with 38 additions<span class="cur"></span></span>'); selected = 'c'; }
+if (p.get('theme')) document.documentElement.dataset.theme = p.get('theme');
+render();
+</script>
+</body>
+</html>

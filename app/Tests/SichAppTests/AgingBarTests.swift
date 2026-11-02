@@ -30,16 +30,16 @@ struct AgingBarTests {
         #expect(SessionCard.agingFraction(30 * 60) > fourMinutes, "monotonic")
     }
 
-    @Test("the bar's ink warms with age — translucent amber young, solid alert red old")
+    @Test("the bar's ink deepens with age — translucent NEEDS YOU red young, solid deep red old")
     func agingInkWarms() {
         let young = SessionCard.agingColor(4 * 60)
         let old = SessionCard.agingColor(4 * 3600)
         #expect(young.alphaComponent < 0.45, "a young bar stays quiet")
         #expect(old.alphaComponent == 1.0, "an old bar is at full strength")
-        let alert = BoardTheme.alert.usingColorSpace(.sRGB)!
+        let deep = BoardTheme.needsStroke.usingColorSpace(.sRGB)!
         let oldRGB = old.usingColorSpace(.sRGB)!
-        #expect(abs(oldRGB.redComponent - alert.redComponent) < 0.01,
-                "past the 3h mark the ink IS the alert red")
+        #expect(abs(oldRGB.redComponent - deep.redComponent) < 0.01,
+                "past the 3h mark the ink IS the deep red")
     }
 
     // MARK: - The card face

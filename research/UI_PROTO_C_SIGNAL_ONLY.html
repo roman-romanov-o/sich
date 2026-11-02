@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sich — signal-only board</title>
+<style>
+/* ============================================================================
+   Sich "signal-only" board — a design artifact, not shipping code.
+
+   One rule: the board is grayscale. Colour is spent on exactly one thing —
+   a session that is waiting on you (and a quota pool about to run dry, which
+   is the same question: "act now"). A calm board has zero colour on screen.
+
+   Hierarchy comes from weight, size, opacity and spacing (Apple: hierarchy
+   from weight + size + leading as a set). State that needs no action —
+   working, blocked, done — is told apart by type and position, never hue.
+   ========================================================================== */
+:root {
+  --canvas:    #F5F5F4;
+  --surface:   #FFFFFF;
+  --hairline:  rgba(0,0,0,0.08);
+  --ink:       #1C1C1E;
+  --ink-2:     rgba(28,28,30,0.62);
+  --ink-3:     rgba(28,28,30,0.40);
+  --ink-4:     rgba(28,28,30,0.16);
+  --shadow:    0 0.5px 0 rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  --chrome:    rgba(245,245,244,0.72);
+  /* The only hue in the system. */
+  --signal:      #D4500B;
+  --signal-ink:  #FFFFFF;
+  --signal-wash: rgba(212,80,11,0.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --canvas:   #161617; --surface: #1F1F21; --hairline: rgba(255,255,255,0.08);
+    --ink: #F2F2F3; --ink-2: rgba(242,242,243,0.62); --ink-3: rgba(242,242,243,0.38); --ink-4: rgba(242,242,243,0.14);
+    --shadow: 0 0 0 0.5px rgba(255,255,255,0.06);
+    --chrome: rgba(22,22,23,0.72);
+    --signal: #FF8A3D; --signal-ink: #1A0D04; --signal-wash: rgba(255,138,61,0.08);
+  }
+}
+:root[data-theme="dark"] {
+  --canvas:   #161617; --surface: #1F1F21; --hairline: rgba(255,255,255,0.08);
+  --ink: #F2F2F3; --ink-2: rgba(242,242,243,0.62); --ink-3: rgba(242,242,243,0.38); --ink-4: rgba(242,242,243,0.14);
+  --shadow: 0 0 0 0.5px rgba(255,255,255,0.06);
+  --chrome: rgba(22,22,23,0.72);
+  --signal: #FF8A3D; --signal-ink: #1A0D04; --signal-wash: rgba(255,138,61,0.08);
+}
+
+* { box-sizing: border-box; margin: 0; }
+html { -webkit-font-smoothing: antialiased; }
+body {
+  background: var(--canvas); color: var(--ink);
+  font: 13px/1.38 system-ui, -apple-system, "SF Pro Text", sans-serif;
+  letter-spacing: -0.003em;
+  min-height: 100vh; display: flex; flex-direction: column;
+}
+.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px; letter-spacing: 0; }
+
+/* ---------- Toolbar: translucent material, content scrolls beneath ---------- */
+.toolbar {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: center; gap: 16px;
+  height: 52px; padding: 0 20px;
+  background: var(--chrome);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-bottom: 0.5px solid var(--hairline);
+}
+.wordmark { font-weight: 600; font-size: 14px; letter-spacing: -0.01em; }
+.toolbar .spacer { flex: 1; }
+.summary { color: var(--ink-3); }
+.summary b { color: var(--ink-2); font-weight: 500; }
+
+.attention {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 26px; padding: 0 11px; border-radius: 13px;
+  font-weight: 600; font-size: 12px;
+  border: none; cursor: pointer; font-family: inherit;
+  background: var(--signal); color: var(--signal-ink);
+  transition: transform 100ms ease-out, opacity 200ms ease;
+}
+.attention:active { transform: scale(0.96); }
+.attention.calm { background: transparent; color: var(--ink-3); font-weight: 500; cursor: default; }
+.attention kbd { font: inherit; opacity: 0.7; font-weight: 500; }
+
+/* ---------- Board ---------- */
+.board {
+  flex: 1; display: grid;
+  grid-template-columns: repeat(6, minmax(176px, 1fr)) 248px;
+  gap: 0; padding: 0 8px 24px; overflow-x: auto;
+}
+.col { padding: 18px 8px 0; min-width: 0; }
+.col-head {
+  display: flex; align-items: baseline; gap: 6px;
+  padding: 0 4px 12px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+  color: var(--ink-3); text-transform: uppercase;
+}
+.col-head .n { font-weight: 500; font-variant-numeric: tabular-nums; }
+.col[data-col="needs"].lit .col-head { color: var(--signal); }
+.col-list { display: flex; flex-direction: column; gap: 8px; min-height: 40px; }
+.empty { padding: 4px; color: var(--ink-4); }
+
+/* ---------- Card ---------- */
+.card {
+  background: var(--surface); border-radius: 10px;
+  box-shadow: var(--shadow);
+  padding: 10px 12px 11px;
+  cursor: default; user-select: none;
+  transition: transform 100ms ease-out, box-shadow 200ms ease;
+  will-change: transform;
+}
+.card:active { transform: scale(0.985); }
+.card .repo { color: var(--ink-3); display: flex; justify-content: space-between; gap: 8px; }
+.card .repo span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card .title { font-size: 13px; font-weight: 500; line-height: 1.3; margin: 3px 0 0; letter-spacing: -0.01em; }
+.card .live { margin-top: 7px; color: var(--ink-3); display: flex; justify-content: space-between; gap: 8px; }
+.card .live span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card .live .t { font-variant-numeric: tabular-nums; flex: none; }
+
+/* Working: no hue. A filled glyph and a live clock say "in motion". */
+.card[data-state="working"] .live span:first-child { color: var(--ink-2); }
+
+/* Blocked / parked / queue: quiet. Done: receded. */
+.card[data-state="done"] { background: transparent; box-shadow: inset 0 0 0 0.5px var(--hairline); }
+.card[data-state="done"] .title { color: var(--ink-3); font-weight: 400; }
+.card[data-state="parked"] .title { color: var(--ink-2); font-weight: 400; }
+
+/* Needs you: the one place colour lives. */
+.card[data-state="needs"] {
+  box-shadow: 0 0 0 1.5px var(--signal), 0 4px 14px var(--signal-wash);
+  background: var(--surface);
+}
+.card .ask { display: none; }
+.card[data-state="needs"] .ask { display: block; margin-top: 9px; padding-top: 9px; border-top: 0.5px solid var(--hairline); }
+.card[data-state="needs"] .live { display: none; }
+.ask .q { color: var(--signal); font-weight: 500; }
+.ask .q code { font: 11px ui-monospace, "SF Mono", Menlo, monospace; color: var(--ink); }
+.ask .since { color: var(--ink-3); margin-top: 2px; }
+.ask .actions { display: flex; gap: 6px; margin-top: 9px; }
+.ask button {
+  font: 500 12px system-ui, -apple-system, sans-serif;
+  flex: 1; height: 24px; padding: 0 8px; border-radius: 6px; cursor: pointer;
+  border: 0.5px solid var(--ink-4); background: var(--surface); color: var(--ink);
+  transition: transform 100ms ease-out;
+}
+.ask button:active { transform: scale(0.96); }
+.ask button.primary { background: var(--ink); color: var(--surface); border-color: transparent; }
+.ask kbd { font: inherit; color: inherit; opacity: 0.5; margin-left: 4px; }
+
+/* ---------- Capacity ---------- */
+.capacity { padding: 18px 12px 0 16px; border-left: 0.5px solid var(--hairline); margin-left: 8px; }
+.pool { padding: 10px 0 12px; border-bottom: 0.5px solid var(--hairline); }
+.pool:last-of-type { border-bottom: none; }
+.pool-head { display: flex; justify-content: space-between; align-items: baseline; }
+.pool-name { font-weight: 500; }
+.pool-left { font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.bar { height: 4px; border-radius: 2px; background: var(--ink-4); margin: 7px 0 5px; overflow: hidden; }
+.bar i { display: block; height: 100%; border-radius: 2px; background: var(--ink-2); }
+.pool-meta { color: var(--ink-3); display: flex; justify-content: space-between; }
+.pool.low .pool-left { color: var(--signal); font-weight: 600; }
+.pool.low .bar i { background: var(--signal); }
+.verdict { margin-top: 14px; color: var(--ink-2); }
+.verdict b { color: var(--ink); font-weight: 600; display: block; margin-bottom: 2px; }
+
+/* ---------- Demo controls (not part of the design) ---------- */
+.sim {
+  position: fixed; right: 16px; bottom: 16px; display: flex; gap: 6px;
+  padding: 6px; border-radius: 10px;
+  background: var(--chrome); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 0 0 0.5px var(--hairline), 0 8px 24px rgba(0,0,0,0.08);
+}
+.sim button {
+  font: 500 11px system-ui, -apple-system, sans-serif; color: var(--ink-2);
+  border: none; background: transparent; height: 24px; padding: 0 9px; border-radius: 6px; cursor: pointer;
+}
+.sim button:hover { background: var(--ink-4); color: var(--ink); }
+.sim .label { align-self: center; padding: 0 6px; color: var(--ink-3); font-size: 11px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .card, .attention, .ask button { transition: opacity 200ms ease; }
+  .card:active, .attention:active, .ask button:active { transform: none; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .toolbar, .sim { background: var(--canvas); backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
+@media (max-width: 720px) {
+  .board { grid-template-columns: repeat(7, 220px); padding: 0 8px 24px; }
+  .toolbar { padding: 0 16px; }
+  .summary { display: none; }
+}
+</style>
+</head>
+<body>
+
+<header class="toolbar">
+  <span class="wordmark">Sich</span>
+  <span class="summary"><b id="sum-sessions">7</b> sessions · <b id="sum-working">3</b> working</span>
+  <span class="spacer"></span>
+  <button class="attention" id="attention"></button>
+</header>
+
+<main class="board" id="board">
+  <section class="col" data-col="queue"><div class="col-head">Queue <span class="n"></span></div><div class="col-list"></div></section>
+  <section class="col" data-col="parked"><div class="col-head">Parked <span class="n"></span></div><div class="col-list"></div></section>
+  <section class="col" data-col="working"><div class="col-head">Working <span class="n"></span></div><div class="col-list"></div></section>
+  <section class="col" data-col="needs"><div class="col-head">Needs you <span class="n"></span></div><div class="col-list"></div></section>
+  <section class="col" data-col="blocked"><div class="col-head">Blocked <span class="n"></span></div><div class="col-list"></div></section>
+  <section class="col" data-col="done"><div class="col-head">Done <span class="n"></span></div><div class="col-list"></div></section>
+
+  <aside class="capacity">
+    <div class="col-head" style="padding-left:0">Capacity</div>
+    <div class="pool">
+      <div class="pool-head"><span class="pool-name">Claude · 5h</span><span class="pool-left mono">64% left</span></div>
+      <div class="bar"><i style="width:64%"></i></div>
+      <div class="pool-meta mono"><span>interactive</span><span>resets 2h 14m</span></div>
+    </div>
+    <div class="pool">
+      <div class="pool-head"><span class="pool-name">Claude · week</span><span class="pool-left mono">41% left</span></div>
+      <div class="bar"><i style="width:41%"></i></div>
+      <div class="pool-meta mono"><span>interactive</span><span>resets 3d</span></div>
+    </div>
+    <div class="pool" id="pool-codex">
+      <div class="pool-head"><span class="pool-name">Codex · week</span><span class="pool-left mono">86% left</span></div>
+      <div class="bar"><i style="width:86%"></i></div>
+      <div class="pool-meta mono"><span>plus</span><span>resets 5d</span></div>
+    </div>
+    <div class="pool">
+      <div class="pool-head"><span class="pool-name">API credits</span><span class="pool-left mono">untouched</span></div>
+      <div class="bar"><i style="width:0"></i></div>
+      <div class="pool-meta mono"><span>firewalled</span><span>no headless runs</span></div>
+    </div>
+    <p class="verdict" id="verdict"><b>Safe to start another session</b>Claude 5h has headroom.</p>
+  </aside>
+</main>
+
+<div class="sim" aria-label="Demo controls">
+  <span class="label">Simulate</span>
+  <button id="sim-turn">Agent asks</button>
+  <button id="sim-answer">Answer</button>
+  <button id="sim-quota">Quota low</button>
+  <button id="sim-theme">Theme</button>
+</div>
+
+<script>
+// Synthetic demo data. Times are minutes since the state was entered.
+const cards = [
+  { id: 'a', col: 'queue',   repo: 'sich',          agent: 'claude', title: 'Homebrew cask for the signed DMG' },
+  { id: 'b', col: 'parked',  repo: 'infra@hetzner', agent: 'claude', title: 'Rotate the deploy key on the build box', live: 'host unreachable' },
+  { id: 'c', col: 'working', repo: 'sich',          agent: 'claude', title: 'Stall guard for silent sessions', live: 'editing StallGuard.swift', t: 12 },
+  { id: 'd', col: 'working', repo: 'sahaidachny',   agent: 'codex',  title: 'Write progress.yaml back after each iteration', live: 'pytest · 34/40', t: 4 },
+  { id: 'e', col: 'working', repo: 'payments-api',  agent: 'claude', title: 'Idempotency keys on the refund endpoint', live: 'reading refunds.py', t: 2,
+    ask: { q: 'Run <code>alembic upgrade head</code>?', yes: 'Allow', no: 'Deny' } },
+  { id: 'f', col: 'needs',   repo: 'sahaidachny',   agent: 'claude', title: 'LikeC4 story pane',
+    ask: { q: 'Allow write to <code>schema.sql</code>?', yes: 'Allow', no: 'Deny' }, t: 4 },
+  { id: 'g', col: 'blocked', repo: 'sich',          agent: 'claude', title: 'Sign release provenance', live: 'PR #4 · awaiting review', t: 95 },
+  { id: 'h', col: 'done',    repo: 'sich',          agent: 'claude', title: 'Pin Periphery 3.8.0 in CI', live: 'merged', t: 180 },
+];
+const stateOf = col => col;
+
+function cardEl(c) {
+  const el = document.createElement('article');
+  el.className = 'card'; el.dataset.id = c.id; el.dataset.state = stateOf(c.col);
+  const ask = c.ask ? `
+    <div class="ask">
+      <div class="q">${c.ask.q}</div>
+      <div class="since mono">waiting <span class="wt">${c.col === 'needs' ? c.t : 0}</span>m · ↵ open</div>
+      <div class="actions">
+        <button class="primary" data-act="yes">${c.ask.yes}<kbd>Y</kbd></button>
+        <button data-act="no">${c.ask.no}<kbd>N</kbd></button>
+      </div>
+    </div>` : '';
+  const live = c.live ? `<div class="live mono"><span>${c.live}</span>${c.t != null && c.col !== 'done' ? `<span class="t">${c.t}m</span>` : ''}</div>` : '';
+  el.innerHTML = `<div class="repo mono"><span>${c.repo}</span><span>${c.agent}</span></div>
+                  <h3 class="title">${c.title}</h3>${live}${ask}`;
+  return el;
+}
+
+const board = document.getElementById('board');
+const lists = Object.fromEntries([...board.querySelectorAll('.col')].map(s => [s.dataset.col, s.querySelector('.col-list')]));
+
+function render() {
+  for (const l of Object.values(lists)) l.replaceChildren();
+  for (const c of cards) lists[c.col].appendChild(cardEl(c));
+  for (const [col, l] of Object.entries(lists)) {
+    const n = l.children.length;
+    l.parentElement.querySelector('.n').textContent = n || '';
+    if (!n) l.innerHTML = '<div class="empty mono">—</div>';
+    l.parentElement.classList.toggle('lit', col === 'needs' && n > 0);
+  }
+  const needs = cards.filter(c => c.col === 'needs').length;
+  const btn = document.getElementById('attention');
+  btn.classList.toggle('calm', needs === 0);
+  btn.innerHTML = needs ? `${needs} need${needs === 1 ? 's' : ''} you <kbd>⌘J</kbd>` : 'Nobody needs you';
+  document.getElementById('sum-sessions').textContent = cards.length;
+  document.getElementById('sum-working').textContent = cards.filter(c => c.col === 'working').length;
+}
+
+// ---------- FLIP with a critically damped spring (damping 1.0, response 0.4s) ----------
+// Starts from the live on-screen position, so a move interrupted mid-flight never jumps.
+const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+function springFrames(dx, dy, response = 0.4) {
+  const w = 2 * Math.PI / response, frames = [], steps = 40, dur = response * 1.6;
+  for (let i = 0; i <= steps; i++) {
+    const t = (i / steps) * dur, k = (1 + w * t) * Math.exp(-w * t);
+    frames.push({ transform: `translate(${dx * k}px, ${dy * k}px)` });
+  }
+  frames[steps] = { transform: 'none' };
+  return { frames, duration: dur * 1000 };
+}
+function move(mutate) {
+  const before = new Map([...board.querySelectorAll('.card')].map(el => [el.dataset.id, el.getBoundingClientRect()]));
+  mutate(); render();
+  for (const el of board.querySelectorAll('.card')) {
+    const a = before.get(el.dataset.id); if (!a) continue;
+    const b = el.getBoundingClientRect(), dx = a.left - b.left, dy = a.top - b.top;
+    if (!dx && !dy) continue;
+    if (reduce.matches) { el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200 }); continue; }
+    const { frames, duration } = springFrames(dx, dy);
+    el.animate(frames, { duration, easing: 'linear' });
+  }
+}
+
+// ---------- Simulation ----------
+document.getElementById('sim-turn').onclick = () => {
+  const c = cards.find(c => c.col === 'working' && c.ask);
+  if (c) move(() => { c.col = 'needs'; c.t = 0; });
+};
+function answer(id) {
+  const c = cards.find(c => c.id === id) || cards.find(c => c.col === 'needs');
+  if (c) move(() => { c.col = 'working'; c.t = 0; c.live = 'resuming…'; });
+}
+document.getElementById('sim-answer').onclick = () => answer();
+board.addEventListener('click', e => {
+  const b = e.target.closest('button[data-act]'); if (!b) return;
+  answer(b.closest('.card').dataset.id);
+});
+document.getElementById('sim-quota').onclick = () => {
+  const p = document.getElementById('pool-codex'), low = !p.classList.contains('low');
+  p.classList.toggle('low', low);
+  p.querySelector('.pool-left').textContent = low ? '6% left' : '86% left';
+  p.querySelector('.bar i').style.width = low ? '6%' : '86%';
+  document.getElementById('verdict').innerHTML = low
+    ? '<b>Don’t start Codex work</b>Codex week runs out before reset. Route to Claude.'
+    : '<b>Safe to start another session</b>Claude 5h has headroom.';
+};
+document.getElementById('sim-theme').onclick = () => {
+  const r = document.documentElement, dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const cur = r.dataset.theme || (dark ? 'dark' : 'light');
+  r.dataset.theme = cur === 'dark' ? 'light' : 'dark';
+};
+// Live clocks tick once a minute — motion that informs, not motion that decorates.
+setInterval(() => { for (const c of cards) if (c.t != null && c.col !== 'done') c.t++; render(); }, 60000);
+
+const p = new URLSearchParams(location.search);
+if (p.get('calm') === '1') cards.find(c => c.id === 'f').col = 'working';
+if (p.get('theme')) document.documentElement.dataset.theme = p.get('theme');
+render();
+</script>
+</body>
+</html>

@@ -200,7 +200,7 @@ final class ArchiveRow: NSView {
         if let projectDir = record.projectDir {
             meta.addArrangedSubview(label(
                 BoardTheme.shortPath(projectDir), font: BoardTheme.monoSmall,
-                color: BoardTheme.repoColor(projectDir)))
+                color: BoardTheme.textFaint))
         }
         if let archivedAt = record.archivedAt {
             meta.addArrangedSubview(label(

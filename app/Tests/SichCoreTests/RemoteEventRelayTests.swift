@@ -24,7 +24,9 @@ struct RemoteEventRelayTests {
             "/usr/bin/ssh",
             "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
             "build-box",
-            "tail -n 200 -F \"$HOME\"/'.sich/events.jsonl'",
+            "trap '' PIPE; tail -n 200 -F \"$HOME\"/'.sich/events.jsonl' & t=$!; "
+                + "while kill -0 $t 2>/dev/null && echo >&2; do sleep 15; done; "
+                + "kill $t 2>/dev/null",
         ])
         #expect(try PoolFirewall.classify(argv) == .interactive)
     }
@@ -42,7 +44,7 @@ struct RemoteEventRelayTests {
         #expect(argv[identity - 1] == "-i")
         #expect(argv[argv.count - 2] == "roman@10.0.0.5")
         // The remote command is a constant: no field of the spec reaches it.
-        #expect(argv.last == "tail -n 200 -F \"$HOME\"/'.sich/events.jsonl'")
+        #expect(argv.last == RemoteTmuxCommand.relayCommand)
     }
 
     @Test("AC-5: an option-shaped destination is refused before any relay starts")
@@ -66,13 +68,18 @@ struct RemoteEventRelayTests {
         for forbidden in ["-R", "-L", "-D", "-t", "-N", "-W"] {
             #expect(!argv.contains(forbidden), "relay argv must not carry \(forbidden)")
         }
-        // The far side runs one tool, and it is a reader. Nothing is installed.
+        // The far side runs one reader (`tail`) plus the heartbeat's shell builtins and
+        // `sleep`. Nothing is installed, and nothing is written anywhere but stderr.
         let command = try #require(argv.last)
-        let tools = command.split(whereSeparator: { " \t;|&".contains($0) })
+        let words = command.split(whereSeparator: { " \t;|&".contains($0) })
             .map(String.init)
             .filter { !$0.hasPrefix("-") && !$0.hasPrefix("\"") && !$0.hasPrefix("'") }
-            .filter { Int($0) == nil }
-        #expect(tools == ["tail"])
+            .filter { Int($0) == nil && !$0.hasPrefix("$") && !$0.hasPrefix("t=") }
+            .filter { !["2>/dev/null", ">"].contains($0) }
+        #expect(Set(words) == ["trap", "PIPE", "tail", "while", "kill", "echo", "do", "sleep", "done"])
+        let redirections = command.split(separator: " ").filter { $0.contains(">") }
+            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: ";")) }
+        #expect(Set(redirections) == ["2>/dev/null", ">&2"])
     }
 
     // MARK: - TC-INT-001..003: a real `tail -F` against a real file
@@ -252,7 +259,7 @@ struct RemoteEventRelayTests {
         #expect(SSHLineTransport.spawningEnabled == false)
         #expect(SSHLineTransport().start(
             argv: try RemoteTmuxCommand.relayArgv(for: RemoteTmuxSpec(host: "far.invalid")),
-            onLines: { _ in }, onExit: { _ in }) == nil)
+            onLines: { _ in }, onHeartbeat: {}, onExit: { _ in }) == nil)
 
         let transport = ScriptedTransport(refuseToStart: true)
         let relay = try RemoteEventRelay(
@@ -264,6 +271,68 @@ struct RemoteEventRelayTests {
         try await Task.sleep(nanoseconds: 200_000_000)
         #expect(transport.startCount == 1)
         #expect(relay.health == .unreachable)
+    }
+}
+
+// MARK: - Stalled session watchdog
+
+/// 2026-11-02: a remote tailscaled restart left the relay's ssh ESTABLISHED for an
+/// hour with no `tail` behind it. ssh never exited, so the relay never redialled and
+/// every card on that host sat in BACKLOG as `unreachable` while its agent worked.
+@Suite("Remote relay stall watchdog")
+struct RemoteRelayStallTests {
+
+    @Test("a child that goes silent — no line, no beat — is killed and redialled")
+    func silentChildIsRecycled() async throws {
+        let transport = ScriptedTransport()
+        let relay = try RemoteEventRelay(
+            spec: RemoteTmuxSpec(host: "build-box"), transport: transport,
+            reconnectDelay: 0.02, stallTimeout: 0.2, sink: { _ in })
+        relay.start()
+        defer { relay.stop() }
+
+        transport.emit(["{\"hook_event_name\":\"Stop\"}"])
+        #expect(relay.health == .streaming)
+
+        #expect(await waitUntil { transport.cancelCount >= 1 && transport.startCount >= 2 })
+        #expect(relay.health == .unreachable)
+
+        transport.emit(["{\"hook_event_name\":\"PreToolUse\"}"])
+        #expect(relay.health == .streaming)
+    }
+
+    @Test("heartbeats alone keep a quiet host's relay alive")
+    func heartbeatsKeepQuietHostAlive() async throws {
+        let transport = ScriptedTransport()
+        let relay = try RemoteEventRelay(
+            spec: RemoteTmuxSpec(host: "build-box"), transport: transport,
+            reconnectDelay: 0.02, stallTimeout: 0.3, sink: { _ in })
+        relay.start()
+        defer { relay.stop() }
+
+        for _ in 0..<8 {
+            transport.beat()
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        #expect(transport.startCount == 1)
+        #expect(transport.cancelCount == 0)
+        #expect(relay.health == .streaming)
+    }
+
+    @Test("the shipped relay command beats on stderr even when the log is empty")
+    func shippedCommandBeatsOnStderr() async throws {
+        let host = try RelayHost()
+        defer { host.tearDown() }
+        try host.write([])
+        let (relay, lines) = try host.relay()
+        relay.start()
+        defer { relay.stop() }
+
+        for _ in 0..<50 where relay.health != .streaming {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        #expect(relay.health == .streaming)   // from the beat: tail had nothing to say
+        #expect(lines.all.isEmpty)            // and the beat never becomes a line
     }
 }
 
@@ -324,13 +393,14 @@ struct FixtureRelayTransport: RemoteLineTransport {
     func start(
         argv: [String],
         onLines: @escaping @Sendable ([Data]) -> Void,
+        onHeartbeat: @escaping @Sendable () -> Void,
         onExit: @escaping @Sendable (Int32) -> Void
     ) -> RemoteLineStream? {
         guard let command = argv.last else { return nil }
         return ProcessLineStream(
             executable: "/bin/sh", arguments: ["-c", command],
             environment: ["HOME": home.path, "PATH": "/usr/bin:/bin"],
-            onLines: onLines, onExit: onExit)
+            onLines: onLines, onHeartbeat: onHeartbeat, onExit: onExit)
     }
 }
 
@@ -339,6 +409,7 @@ struct FixtureRelayTransport: RemoteLineTransport {
 final class ScriptedTransport: RemoteLineTransport, @unchecked Sendable {
     private let lock = NSLock()
     private var onLines: (@Sendable ([Data]) -> Void)?
+    private var onHeartbeat: (@Sendable () -> Void)?
     private var onExit: (@Sendable (Int32) -> Void)?
     private var starts = 0
     private var cancels = 0
@@ -357,6 +428,7 @@ final class ScriptedTransport: RemoteLineTransport, @unchecked Sendable {
     func start(
         argv: [String],
         onLines: @escaping @Sendable ([Data]) -> Void,
+        onHeartbeat: @escaping @Sendable () -> Void,
         onExit: @escaping @Sendable (Int32) -> Void
     ) -> RemoteLineStream? {
         lock.lock()
@@ -365,6 +437,7 @@ final class ScriptedTransport: RemoteLineTransport, @unchecked Sendable {
         guard !refuseToStart else { return nil }
         lock.lock()
         self.onLines = onLines
+        self.onHeartbeat = onHeartbeat
         self.onExit = onExit
         lock.unlock()
         return Stream { [weak self] in
@@ -399,6 +472,13 @@ final class ScriptedTransport: RemoteLineTransport, @unchecked Sendable {
         let handler = onExit
         lock.unlock()
         handler?(code)
+    }
+
+    func beat() {
+        lock.lock()
+        let handler = onHeartbeat
+        lock.unlock()
+        handler?()
     }
 }
 

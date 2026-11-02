@@ -140,7 +140,7 @@ struct RemoteCardReviveTests {
         // REAL spawn path: ssh to the reserved `.invalid` TLD fails its lookup and
         // exits — exactly what a dropped link looks like to the reconcile loop.
         let card = try #require(shell.createRemoteTmuxSession(spec: spec))
-        reconcileUntilProcessed(shell)
+        shell.reconcileUntilReaped(card.id)
 
         // tmux still holds the far side: the task is NOT over, only the link is.
         let kept = try #require(shell.cards.first { $0.id == card.id })
@@ -153,14 +153,6 @@ struct RemoteCardReviveTests {
         shell.drill(into: kept)
         #expect(box.argv == (try RemoteTmuxCommand.argv(for: spec, cardID: card.id.uuidString)))
         #expect(shell.ptyForTesting(card.id) != nil)
-    }
-
-    /// Poll the reconcile pass until the exited child is reaped (bounded).
-    private func reconcileUntilProcessed(_ shell: BoardShell) {
-        for _ in 0..<500 {
-            if !shell.reconcileDeadSessions().isEmpty { return }
-            usleep(10_000)
-        }
     }
 }
 

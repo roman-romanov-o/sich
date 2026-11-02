@@ -54,7 +54,7 @@ struct HarnessBadgeTests {
         }
     }
 
-    @Test("a board card's header carries the badge instead of a textual agent name")
+    @Test("a board card's footer carries the badge instead of a textual agent name")
     func sessionCardHeaderCarriesBadge() throws {
         let card = BoardCard(
             sessionID: "s-1", title: "Fix login", projectDir: "/tmp/p",
@@ -145,27 +145,22 @@ struct HarnessBadgeTests {
         #expect(SessionCard.formatDuration((2 * 24 + 3) * 3_600) == "2d 3h")
     }
 
-    @Test("resting and working cards are fill-only; outlines belong to attention, blocked and focus")
+    @Test("one signal: only a NEEDS YOU card carries a tint and an edge; focus adds its ring")
     func cardEdgesAreSemantic() {
         let neutral = sessionCard(state: .idle)
         #expect(neutral.layer?.borderWidth == 0)
         #expect((neutral.layer?.shadowOpacity ?? 0) > 0)
 
-        let working = sessionCard(state: .running)
-        #expect(working.layer?.borderWidth == 0)
-        #expect(working.themedBackground == BoardTheme.workingCard)
-
-        let done = sessionCard(state: .done)
-        #expect(done.layer?.borderWidth == 0)
-        #expect(done.themedBackground == BoardTheme.doneCard)
+        for state in [CardState.running, .done, .blocked, .parked, .unreachable] {
+            let plain = sessionCard(state: state)
+            #expect(plain.layer?.borderWidth == 0, "\(state) sits on the plain card surface")
+            #expect(plain.themedBackground == BoardTheme.cardFill, "\(state) carries no tint of its own")
+        }
 
         let waiting = sessionCard(state: .waitingForInput)
         #expect(waiting.layer?.borderWidth == 1)
         #expect(waiting.layer?.borderColor != nil)
-
-        let blocked = sessionCard(state: .blocked)
-        #expect(blocked.layer?.borderWidth == 1)
-        #expect(blocked.layer?.borderColor != nil)
+        #expect(waiting.themedBackground == BoardTheme.needsYouCard)
 
         neutral.setKeyboardFocus(true)
         #expect(neutral.layer?.borderWidth == 2)

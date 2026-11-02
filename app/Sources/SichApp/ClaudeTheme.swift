@@ -70,8 +70,15 @@ enum ClaudeTheme {
                 "planMode": hue(6),
                 "success": hue(2),
                 "error": hue(1),
-                "warning": hue(3),
-                "warningShimmer": hue(11),
+                // `warning` is also what the footer's "auto mode on" badge is drawn
+                // in (Claude has no token of its own for it). Auto mode is the board's
+                // normal operating mode, so the badge must sit back like inactive text;
+                // the cost is that genuine warnings recede the same way.
+                "warning": token(BoardTheme.textDim),
+                "warningShimmer": token(BoardTheme.textFaint),
+                // The user's prompts sit on a vivid band so they stand out in scrollback.
+                "userMessageBackground": token(BoardTheme.promptBand),
+                "userMessageBackgroundHover": token(BoardTheme.promptBand),
             ],
         ]
     }

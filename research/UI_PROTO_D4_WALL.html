@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sich — status wall</title>
+<style>
+/* ============================================================================
+   Sich "WALL" — a design artifact, not shipping code.
+
+   An ambient status wall for a second monitor, read from two metres away like
+   a departures board or an ops-room display. Nothing here is meant to be
+   clicked; the few buttons exist for the keyboard (Y / N / ↵).
+
+   Typography is the whole design. One display-size number — how many
+   sessions need you — is the fact the wall exists to show. Under it, quieter
+   secondary counts. Then one row per session, big enough to read across the
+   room, sorted so that whatever needs you is at the top. Quota pools are big
+   percentages with a one-word status, not bars; a bar is unreadable at
+   distance, a number is not.
+
+   Colour rule: monochrome, warm white on near-black (dark is the natural wall
+   theme; light works too). One accent, and it appears only on a session that
+   needs you and on a quota pool about to run dry. A calm wall has no colour.
+
+   Motion rule: elapsed clocks tick every second so the wall reads as alive.
+   Nothing else moves unless the data changes — then rows re-sort with a
+   critically damped spring from their live on-screen position, and the big
+   number cross-fades and slides 4px.
+   ========================================================================== */
+:root {
+  --canvas:   #F6F4F0;
+  --ink:      #1A1917;
+  --ink-2:    rgba(26,25,23,0.64);
+  --ink-3:    rgba(26,25,23,0.42);
+  --ink-4:    rgba(26,25,23,0.14);
+  --hairline: rgba(26,25,23,0.10);
+  --chrome:   rgba(246,244,240,0.72);
+  --signal:      #D4500B;
+  --signal-ink:  #FFFFFF;
+  --signal-wash: rgba(212,80,11,0.08);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --canvas: #0C0C0B; --ink: #F3EFE8;
+    --ink-2: rgba(243,239,232,0.62); --ink-3: rgba(243,239,232,0.40); --ink-4: rgba(243,239,232,0.14);
+    --hairline: rgba(243,239,232,0.10); --chrome: rgba(12,12,11,0.72);
+    --signal: #FF8A3D; --signal-ink: #1A0D04; --signal-wash: rgba(255,138,61,0.10);
+  }
+}
+:root[data-theme="dark"] {
+  --canvas: #0C0C0B; --ink: #F3EFE8;
+  --ink-2: rgba(243,239,232,0.62); --ink-3: rgba(243,239,232,0.40); --ink-4: rgba(243,239,232,0.14);
+  --hairline: rgba(243,239,232,0.10); --chrome: rgba(12,12,11,0.72);
+  --signal: #FF8A3D; --signal-ink: #1A0D04; --signal-wash: rgba(255,138,61,0.10);
+}
+
+* { box-sizing: border-box; margin: 0; }
+html { -webkit-font-smoothing: antialiased; }
+body {
+  background: var(--canvas); color: var(--ink);
+  font: 15px/1.5 system-ui, -apple-system, "SF Pro Text", sans-serif;
+  font-optical-sizing: auto;
+  min-height: 100vh; display: flex; flex-direction: column;
+}
+.num { font-variant-numeric: tabular-nums; }
+.meta { font-size: 13px; line-height: 1.5; color: var(--ink-3); }
+
+/* ---------- Top bar: minimal, translucent ---------- */
+.topbar {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: center; gap: 12px;
+  height: 44px; padding: 0 32px;
+  background: var(--chrome);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-bottom: 0.5px solid var(--hairline);
+  font-size: 13px; color: var(--ink-3);
+}
+.topbar .wordmark { color: var(--ink); font-weight: 600; }
+.topbar .spacer { flex: 1; }
+
+/* ---------- Layout: wall + quota rail ---------- */
+.wall { flex: 1; display: grid; grid-template-columns: 1fr 272px; gap: 0 48px; padding: 32px 32px 48px; }
+
+/* ---------- Headline ---------- */
+.headline { display: flex; align-items: baseline; gap: 20px; }
+.big {
+  font-size: 128px; line-height: 1.0; font-weight: 600;
+  letter-spacing: -0.03em; font-variant-numeric: tabular-nums;
+  position: relative; min-width: 1ch;
+}
+.big.changing { animation: bump 320ms ease-out; }
+@keyframes bump { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.big-label { font-size: 32px; line-height: 1.1; font-weight: 500; letter-spacing: -0.02em; color: var(--ink-2); }
+.lit .big, .lit .big-label { color: var(--signal); }
+.counts { display: flex; gap: 28px; margin-top: 20px; font-size: 17px; color: var(--ink-3); }
+.counts b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; margin-right: 6px; }
+
+/* ---------- Session table ---------- */
+.rows { margin-top: 36px; border-top: 1px solid var(--ink); }
+.row {
+  display: grid; grid-template-columns: 28px 1.5fr 0.9fr 72px 1.4fr 88px;
+  align-items: center; gap: 16px;
+  min-height: 56px; padding: 8px 0;
+  border-bottom: 0.5px solid var(--hairline);
+  will-change: transform;
+}
+.row .glyph { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--ink-3); justify-self: start; }
+.row[data-state="working"] .glyph { background: var(--ink); border-color: var(--ink); }
+.row[data-state="done"] .glyph { border-color: var(--ink-4); }
+.row[data-state="needs"] .glyph { background: var(--signal); border-color: var(--signal); box-shadow: 0 0 0 4px var(--signal-wash); }
+.row .title { font-weight: 600; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .repo, .row .agent, .row .live { color: var(--ink-3); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row[data-state="working"] .live { color: var(--ink-2); }
+.row .elapsed { text-align: right; font-size: 15px; font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.row[data-state="done"] .title, .row[data-state="done"] .elapsed { color: var(--ink-3); font-weight: 500; }
+.row[data-state="parked"] .title { color: var(--ink-2); font-weight: 500; }
+
+/* Needs you: the question lives in the "live" slot, in the accent. */
+.row[data-state="needs"] { grid-template-columns: 28px 1.3fr 0.7fr 72px 1.9fr 88px; }
+.row[data-state="needs"] .live { color: var(--signal); font-weight: 500; font-size: 15px; display: flex; align-items: center; gap: 12px; white-space: nowrap; overflow: visible; }
+.row[data-state="needs"] .live .q { overflow: hidden; text-overflow: ellipsis; }
+.row[data-state="needs"] .live code { font: 500 13px ui-monospace, "SF Mono", Menlo, monospace; }
+.row[data-state="needs"] .elapsed { color: var(--signal); }
+.ask { display: inline-flex; gap: 4px; flex: none; }
+.ask button {
+  font: 500 13px system-ui, -apple-system, sans-serif;
+  height: 26px; padding: 0 10px; border-radius: 6px; cursor: pointer;
+  border: 0.5px solid var(--ink-4); background: transparent; color: var(--ink);
+  transition: transform 100ms ease-out;
+}
+.ask button:active { transform: scale(0.97); }
+.ask button.primary { background: var(--ink); color: var(--canvas); border-color: transparent; }
+.ask kbd { font: inherit; opacity: 0.5; margin-left: 4px; }
+
+/* ---------- Quota rail ---------- */
+.rail { padding-top: 10px; }
+.rail-head { font-size: 13px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-3); padding-bottom: 10px; border-bottom: 1px solid var(--ink); }
+.pool { padding: 18px 0 16px; border-bottom: 0.5px solid var(--hairline); }
+.pool .pct { font-size: 56px; line-height: 1.0; font-weight: 600; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+.pool .pct small { font-size: 24px; letter-spacing: -0.01em; color: var(--ink-3); font-weight: 500; margin-left: 2px; }
+.pool .name { margin-top: 8px; font-weight: 500; display: flex; justify-content: space-between; gap: 8px; }
+.pool .name .word { color: var(--ink-3); font-weight: 400; }
+.pool .sub { font-size: 13px; color: var(--ink-3); }
+.pool.low .pct, .pool.low .name .word { color: var(--signal); }
+.pool.low .name .word { font-weight: 600; }
+.verdict { margin-top: 20px; font-size: 15px; color: var(--ink-2); line-height: 1.4; }
+.verdict b { display: block; color: var(--ink); font-weight: 600; }
+.verdict.warn b { color: var(--signal); }
+
+/* ---------- Demo controls (not part of the design) ---------- */
+.sim {
+  position: fixed; right: 16px; bottom: 16px; display: flex; gap: 6px; z-index: 6;
+  padding: 6px; border-radius: 10px;
+  background: var(--chrome); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 0 0 0.5px var(--hairline), 0 8px 24px rgba(0,0,0,0.12);
+}
+.sim button {
+  font: 500 12px system-ui, -apple-system, sans-serif; color: var(--ink-2);
+  border: none; background: transparent; height: 26px; padding: 0 10px; border-radius: 6px; cursor: pointer;
+  transition: transform 100ms ease-out;
+}
+.sim button:hover { background: var(--ink-4); color: var(--ink); }
+.sim button:active { transform: scale(0.97); }
+.sim .label { align-self: center; padding: 0 6px; color: var(--ink-3); font-size: 12px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .big.changing { animation: fade 200ms ease; }
+  @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+  .ask button, .sim button { transition: none; }
+  .ask button:active, .sim button:active { transform: none; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .topbar, .sim { background: var(--canvas); backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
+
+/* ---------- Narrow: rail drops below, rows fold to two lines ---------- */
+@media (max-width: 960px) {
+  .wall { grid-template-columns: 1fr; gap: 32px; padding: 24px 16px 96px; }
+  .big { font-size: 96px; }
+  .big-label { font-size: 24px; }
+  .counts { flex-wrap: wrap; gap: 16px 20px; font-size: 15px; }
+  .row { grid-template-columns: 20px 1fr 72px; grid-template-rows: auto auto; gap: 2px 12px; padding: 10px 0; }
+  .row .glyph { grid-row: 1 / span 2; align-self: center; }
+  .row .title { grid-column: 2; grid-row: 1; white-space: normal; }
+  .row .elapsed { grid-column: 3; grid-row: 1; }
+  .row .repo { grid-column: 2; grid-row: 2; }
+  .row .agent { display: none; }
+  .row .live { grid-column: 2 / span 2; grid-row: 3; white-space: normal; }
+  .row[data-state="needs"] .live { flex-wrap: wrap; }
+  .rail { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; }
+  .rail-head, .verdict { grid-column: 1 / -1; }
+  .pool .pct { font-size: 44px; }
+  .sim { right: 8px; bottom: 8px; left: 8px; justify-content: center; }
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <span class="wordmark">Sich</span>
+  <span>wall</span>
+  <span class="spacer"></span>
+  <span class="num" id="clock"></span>
+</header>
+
+<main class="wall">
+  <section>
+    <div class="headline">
+      <div class="big num" id="big">0</div>
+      <div class="big-label" id="big-label">need you</div>
+    </div>
+    <div class="counts" id="counts"></div>
+    <div class="rows" id="rows"></div>
+  </section>
+
+  <aside class="rail">
+    <div class="rail-head">Capacity</div>
+    <div class="pool">
+      <div class="pct">64<small>%</small></div>
+      <div class="name">Claude · 5h <span class="word">left</span></div>
+      <div class="sub">interactive · resets 2h 14m</div>
+    </div>
+    <div class="pool">
+      <div class="pct">41<small>%</small></div>
+      <div class="name">Claude · week <span class="word">left</span></div>
+      <div class="sub">interactive · resets 3d</div>
+    </div>
+    <div class="pool" id="pool-codex">
+      <div class="pct"><span class="v">86</span><small>%</small></div>
+      <div class="name">Codex · week <span class="word">left</span></div>
+      <div class="sub">plus · resets 5d</div>
+    </div>
+    <div class="pool">
+      <div class="pct">0<small>%</small></div>
+      <div class="name">API credits <span class="word">spent</span></div>
+      <div class="sub">firewalled · no headless runs</div>
+    </div>
+    <p class="verdict" id="verdict"><b>Clear to launch</b>Claude 5h has headroom.</p>
+  </aside>
+</main>
+
+<div class="sim" aria-label="Demo controls">
+  <span class="label">Simulate</span>
+  <button id="sim-turn">Agent asks</button>
+  <button id="sim-answer">Answer</button>
+  <button id="sim-quota">Quota low</button>
+  <button id="sim-theme">Theme</button>
+</div>
+
+<script>
+// Synthetic demo data. `t` is minutes since the state was entered; the wall
+// keeps a per-card second offset so the clocks tick.
+const cards = [
+  { id: 'a', col: 'queue',   repo: 'sich',          agent: 'claude', title: 'Homebrew cask for the signed DMG' },
+  { id: 'b', col: 'parked',  repo: 'infra@hetzner', agent: 'claude', title: 'Rotate the deploy key on the build box', live: 'host unreachable' },
+  { id: 'c', col: 'working', repo: 'sich',          agent: 'claude', title: 'Stall guard for silent sessions', live: 'editing StallGuard.swift', t: 12 },
+  { id: 'd', col: 'working', repo: 'sahaidachny',   agent: 'codex',  title: 'Write progress.yaml back after each iteration', live: 'pytest · 34/40', t: 4 },
+  { id: 'e', col: 'working', repo: 'payments-api',  agent: 'claude', title: 'Idempotency keys on the refund endpoint', live: 'reading refunds.py', t: 2,
+    ask: { q: 'Run <code>alembic upgrade head</code>?', yes: 'Allow', no: 'Deny' } },
+  { id: 'f', col: 'needs',   repo: 'sahaidachny',   agent: 'claude', title: 'LikeC4 story pane',
+    ask: { q: 'Allow write to <code>schema.sql</code>?', yes: 'Allow', no: 'Deny' }, t: 4 },
+  { id: 'g', col: 'blocked', repo: 'sich',          agent: 'claude', title: 'Sign release provenance', live: 'PR #4 · awaiting review', t: 95 },
+  { id: 'h', col: 'done',    repo: 'sich',          agent: 'claude', title: 'Pin Periphery 3.8.0 in CI', live: 'merged', t: 180 },
+];
+const now0 = Date.now();
+for (const c of cards) c.since = c.t != null ? now0 - c.t * 60000 - Math.floor(Math.random() * 60000) : null;
+
+const order = { needs: 0, working: 1, blocked: 2, queue: 3, parked: 4, done: 5 };
+const sorted = () => [...cards].sort((a, b) =>
+  order[a.col] - order[b.col] || ((a.since ?? Infinity) - (b.since ?? Infinity)));
+
+function elapsed(c) {
+  if (c.since == null || c.col === 'done') return '';
+  const s = Math.max(0, Math.floor((Date.now() - c.since) / 1000));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  const mm = String(m).padStart(2, '0'), ss = String(sec).padStart(2, '0');
+  return h ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
+}
+
+function rowEl(c) {
+  const el = document.createElement('div');
+  el.className = 'row'; el.dataset.id = c.id; el.dataset.state = c.col;
+  const live = c.col === 'needs'
+    ? `<div class="live"><span class="q">${c.ask.q}</span><span class="ask">
+         <button class="primary" data-act="yes">${c.ask.yes}<kbd>Y</kbd></button>
+         <button data-act="no">${c.ask.no}<kbd>N</kbd></button></span></div>`
+    : `<div class="live">${c.live || ''}</div>`;
+  el.innerHTML = `<span class="glyph"></span>
+    <div class="title">${c.title}</div>
+    <div class="repo">${c.repo}</div>
+    <div class="agent">${c.agent}</div>
+    ${live}
+    <div class="elapsed">${elapsed(c)}</div>`;
+  return el;
+}
+
+const rows = document.getElementById('rows');
+const big = document.getElementById('big');
+let lastBig = null;
+
+function render() {
+  rows.replaceChildren(...sorted().map(rowEl));
+  const needs = cards.filter(c => c.col === 'needs').length;
+  document.body.classList.toggle('lit', needs > 0);
+  if (String(needs) !== lastBig) {
+    big.textContent = needs;
+    if (lastBig !== null) { big.classList.remove('changing'); void big.offsetWidth; big.classList.add('changing'); }
+    lastBig = String(needs);
+  }
+  document.getElementById('big-label').textContent = needs === 1 ? 'needs you' : 'need you';
+  const n = col => cards.filter(c => c.col === col).length;
+  document.getElementById('counts').innerHTML =
+    `<span><b>${n('working')}</b>working</span><span><b>${n('blocked')}</b>blocked</span>` +
+    `<span><b>${n('queue') + n('parked')}</b>queued</span><span><b>${n('done')}</b>done</span>`;
+}
+
+// ---------- FLIP with a critically damped spring (damping 1.0, response 0.4s) ----------
+// Starts from the live on-screen position, so a move interrupted mid-flight never jumps.
+// Rows are large, so they go semi-transparent while travelling and settle back to opaque.
+const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+function springFrames(dx, dy, response = 0.4) {
+  const w = 2 * Math.PI / response, frames = [], steps = 40, dur = response * 1.6;
+  for (let i = 0; i <= steps; i++) {
+    const t = (i / steps) * dur, k = (1 + w * t) * Math.exp(-w * t);
+    frames.push({ transform: `translate(${dx * k}px, ${dy * k}px)`, opacity: 1 - 0.45 * Math.sin(Math.PI * i / steps) });
+  }
+  frames[steps] = { transform: 'none', opacity: 1 };
+  return { frames, duration: dur * 1000 };
+}
+function move(mutate) {
+  const before = new Map([...rows.querySelectorAll('.row')].map(el => [el.dataset.id, el.getBoundingClientRect()]));
+  mutate(); render();
+  for (const el of rows.querySelectorAll('.row')) {
+    const a = before.get(el.dataset.id); if (!a) continue;
+    const b = el.getBoundingClientRect(), dx = a.left - b.left, dy = a.top - b.top;
+    if (!dx && !dy) continue;
+    if (reduce.matches) { el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 200 }); continue; }
+    const { frames, duration } = springFrames(dx, dy);
+    el.animate(frames, { duration, easing: 'linear' });
+  }
+}
+
+// ---------- Simulation ----------
+document.getElementById('sim-turn').onclick = () => {
+  const c = cards.find(c => c.col === 'working' && c.ask);
+  if (c) move(() => { c.col = 'needs'; c.since = Date.now(); });
+};
+function answer(id) {
+  const c = cards.find(c => c.id === id) || cards.find(c => c.col === 'needs');
+  if (c) move(() => { c.col = 'working'; c.since = Date.now(); c.live = 'resuming…'; });
+}
+document.getElementById('sim-answer').onclick = () => answer();
+rows.addEventListener('click', e => {
+  const b = e.target.closest('button[data-act]'); if (!b) return;
+  answer(b.closest('.row').dataset.id);
+});
+document.getElementById('sim-quota').onclick = () => {
+  const p = document.getElementById('pool-codex'), low = !p.classList.contains('low');
+  p.classList.toggle('low', low);
+  p.querySelector('.v').textContent = low ? '6' : '86';
+  p.querySelector('.word').textContent = low ? 'low' : 'left';
+  const v = document.getElementById('verdict');
+  v.classList.toggle('warn', low);
+  v.innerHTML = low
+    ? '<b>Hold Codex work</b>Codex week runs out before reset. Route to Claude.'
+    : '<b>Clear to launch</b>Claude 5h has headroom.';
+};
+document.getElementById('sim-theme').onclick = () => {
+  const r = document.documentElement, dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const cur = r.dataset.theme || (dark ? 'dark' : 'light');
+  r.dataset.theme = cur === 'dark' ? 'light' : 'dark';
+};
+
+// The only continuous motion on the wall: clocks. Elapsed cells and the wall
+// clock update in place every second; nothing is re-laid out.
+function tick() {
+  for (const el of rows.querySelectorAll('.row')) {
+    const c = cards.find(c => c.id === el.dataset.id);
+    el.querySelector('.elapsed').textContent = elapsed(c);
+  }
+  document.getElementById('clock').textContent =
+    new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+setInterval(tick, 1000);
+
+const p = new URLSearchParams(location.search);
+if (p.get('calm') === '1') cards.find(c => c.id === 'f').col = 'working';
+if (p.get('theme')) document.documentElement.dataset.theme = p.get('theme');
+render(); tick();
+</script>
+</body>
+</html>

@@ -78,6 +78,8 @@ fi
 # that compiled it, which is a fatalError on anyone else's Mac (see
 # BoardTheme.markURL). Copying them here keeps a shared bundle self-contained.
 cp Sources/SichApp/Resources/*.pdf "$RESOURCES/"
+# The title face rides along the same way (OFL licence beside it).
+cp Sources/SichApp/Resources/JetBrainsMono-*.ttf Sources/SichApp/Resources/JetBrainsMono-OFL.txt "$RESOURCES/"
 
 echo "▸ Rendering icon …"
 ICONSET="$BUILD_DIR/$APP_NAME.iconset"

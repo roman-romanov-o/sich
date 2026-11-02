@@ -1,12 +1,13 @@
 import AppKit
 import SichCore
 
-/// A Mission Control v5 board card (US-003 AC#2): project line with the
-/// harness badge top-right, then the task title; cards with active work add a
-/// quiet minute-level duration in the bottom-right corner. Done
-/// cards collapse to a compact ✓ row. Single responsibility: present one
-/// ``BoardCard``, report clicks for drill-in (US-002 AC#1), and act as the drag
-/// source for a manual column move. Board logic stays in `SichCore`.
+/// A board card (US-003 AC#2): the task title first and full-width, then one
+/// quiet footer row — the small harness mark, any chips, and on a WORKING card
+/// the live interval at the right. The project is read off the group header
+/// above the card, not the card itself. Done cards collapse to a compact ✓ row.
+/// Single responsibility: present one ``BoardCard``, report clicks for drill-in
+/// (US-002 AC#1), and act as the drag source for a manual column move. Board
+/// logic stays in `SichCore`.
 /// Options the card context menu offers for moving a task to another account
 /// or harness without losing task context.
 struct CardSwitchMenu: Equatable, Sendable {
@@ -21,10 +22,18 @@ struct CardSwitchMenu: Equatable, Sendable {
 }
 
 @MainActor
-final class SessionCard: NSView, NSDraggingSource {
+final class SessionCard: NSView, NSDraggingSource, ThemeReapplying {
     let card: BoardCard
     let quotaBlock: CardQuotaBlock
     let switchMenu: CardSwitchMenu
+    /// Position within its project cluster — staggers the WORKING sheen so a
+    /// column shimmers out of phase instead of in lockstep.
+    var sheenPhase = 0 {
+        didSet { restartSheen() }
+    }
+    /// A departed card's view left behind to close up in its old lane: inert to
+    /// the mouse and invisible to keyboard focus.
+    private(set) var isGhost = false
     /// Invoked on click — the board wires this to drill into the session (US-002).
     var onSelect: ((BoardCard) -> Void)?
     /// Invoked from the right-click "Rename Task…" item — the board bubbles this
@@ -80,6 +89,7 @@ final class SessionCard: NSView, NSDraggingSource {
         configureLayer()
         buildContent()
         buildAgingBar()
+        buildSheen()
         toolTip = workTooltip
     }
 
@@ -87,6 +97,9 @@ final class SessionCard: NSView, NSDraggingSource {
 
     // MARK: - Appearance
 
+    /// One signal: a NEEDS YOU card carries the red fill, edge and glow; every
+    /// other card — blocked, parked, dead link, spent pool, working, done — sits
+    /// on the plain card surface. Its lane says what it is; chips say the rest.
     private func configureLayer() {
         layer?.cornerRadius = 10
         layer?.borderWidth = 0
@@ -96,44 +109,84 @@ final class SessionCard: NSView, NSDraggingSource {
         layer?.shadowRadius = 3
         layer?.shadowOpacity = 0.12
         layer?.shadowOffset = NSSize(width: 0, height: -1)
-        switch card.state {
-        case .waitingForInput:
-            // The freshest attention style: warm fill, full amber edge + soft ring.
-            themedBackground = BoardTheme.needsYouCard
-            themedBorder = BoardTheme.attention
-            layer?.borderWidth = 1
-            themedShadow = BoardTheme.attention
-            layer?.shadowRadius = 4
-            layer?.shadowOpacity = 0.25
-            layer?.shadowOffset = .zero
-        case .blocked:
-            themedBackground = BoardTheme.blockedCard
-            themedBorder = BoardTheme.stateColor(.blocked)
-            layer?.borderWidth = 1
-        case .parked:
-            themedBackground = BoardTheme.parkedCard
-        case .unreachable:
-            // The calm fill of a card that is NOT asking for you, edged in alert red
-            // so a dead link still reads at a glance. Deliberately not the warm
-            // `needsYouCard` fill: that ink belongs to the attention signal (US-007 AC-4).
+        guard card.state == .waitingForInput else {
             themedBackground = BoardTheme.cardFill
-            themedBorder = BoardTheme.stateColor(.unreachable)
-            layer?.borderWidth = 1
-        case .running, .runningTests:
-            // The column's meaning on the card itself: a cool tint. No edge — an
-            // outline is reserved for states that ask something of the operator
-            // (needs you, blocked, dead link, spent pool, keyboard focus), so a
-            // coloured edge always means "look here".
-            themedBackground = BoardTheme.workingCard
-        case .done:
-            themedBackground = BoardTheme.doneCard
-        case .idle, .unknown:
-            themedBackground = BoardTheme.cardFill
-            if quotaBlock.isBlocked {
-                themedBorder = BoardTheme.quotaBlocked
-                layer?.borderWidth = 1
-            }
+            return
         }
+        themedBackground = BoardTheme.needsYouCard
+        themedBorder = BoardTheme.needs
+        layer?.borderWidth = 1
+        themedShadow = BoardTheme.needs
+        layer?.shadowRadius = 4
+        layer?.shadowOpacity = 0.25
+        layer?.shadowOffset = .zero
+    }
+
+    /// Leave this view behind as the closing ghost of a card that moved lanes.
+    func becomeGhost() {
+        isGhost = true
+        setKeyboardFocus(false)
+        setLifted(false)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        isGhost ? nil : super.hitTest(point)
+    }
+
+    // MARK: - WORKING ambience
+
+    /// A faint sheen drifts across a working card every nine seconds, staggered per
+    /// card — "the agents are busy" felt at the edge of vision, never read.
+    /// Composite-only (a gradient layer translating inside a clipping layer).
+    private let sheenClip = CALayer()
+    private let sheen = CAGradientLayer()
+
+    /// Whether this card carries a sheen at all. Under Reduce Motion the band is
+    /// not built — a band that cannot drift is a stuck smear on the card, not
+    /// a gentler version of the effect.
+    private var sheenWanted: Bool { card.state.isWorking && BoardView.motionAllowed }
+
+    private func buildSheen() {
+        guard sheenWanted, let layer else { return }
+        sheenClip.masksToBounds = true
+        sheenClip.cornerRadius = 10
+        sheen.startPoint = CGPoint(x: 0, y: 0)
+        sheen.endPoint = CGPoint(x: 1, y: 1)
+        sheen.locations = [0, 0.5, 1]
+        sheenClip.addSublayer(sheen)
+        layer.addSublayer(sheenClip)
+        applySheenColors(under: effectiveAppearance)
+    }
+
+    func reapplyTheme(under appearance: NSAppearance) { applySheenColors(under: appearance) }
+
+    private func applySheenColors(under appearance: NSAppearance) {
+        guard sheenWanted else { return }
+        appearance.performAsCurrentDrawingAppearance {
+            let ink = BoardTheme.textPrimary.withAlphaComponent(0.045).cgColor
+            sheen.colors = [NSColor.clear.cgColor, ink, NSColor.clear.cgColor]
+        }
+    }
+
+    private func layoutSheen() {
+        guard sheenWanted else { return }
+        let widthChanged = sheenClip.frame.width != bounds.width
+        sheenClip.frame = bounds
+        sheen.frame = NSRect(x: 0, y: 0, width: bounds.width * 0.3, height: bounds.height)
+        if widthChanged { restartSheen() }
+    }
+
+    private func restartSheen() {
+        guard sheenWanted, bounds.width > 0 else { return }
+        let band = bounds.width * 0.3
+        let drift = CAKeyframeAnimation(keyPath: "transform.translation.x")
+        drift.values = [-1.6 * band, 4 * band, 4 * band]
+        drift.keyTimes = [0, 0.3, 1]
+        drift.duration = 9
+        drift.repeatCount = .infinity
+        drift.timingFunctions = [CAMediaTimingFunction(name: .easeInEaseOut), CAMediaTimingFunction(name: .linear)]
+        drift.beginTime = CACurrentMediaTime() - Double(sheenPhase) * 3
+        sheen.add(drift, forKey: "sheen")
     }
 
     /// Keyboard-focus ring (arrow-key board navigation): a brand-coloured 2pt
@@ -155,11 +208,16 @@ final class SessionCard: NSView, NSDraggingSource {
         stack.spacing = 4
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
+        // The bottom edge yields: while a card collapses or expands between lanes
+        // its height is pinned below the content's, and the content must slide
+        // under the clip instead of fighting the pin.
+        let bottom = stack.bottomAnchor.constraint(equalTo: bottomAnchor)
+        bottom.priority = .defaultHigh
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             stack.topAnchor.constraint(equalTo: topAnchor),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            bottom,
         ])
         if card.state == .done {
             buildDoneRow()
@@ -168,27 +226,21 @@ final class SessionCard: NSView, NSDraggingSource {
         }
     }
 
-    /// The full card face: project + harness badge → title → live interval (WORKING).
+    /// The full card face: title → footer (harness mark, chips, live interval).
     private func buildFullCard() {
         stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
-        let header = headerRow()
-        stack.addArrangedSubview(header)
-        header.widthAnchor.constraint(
-            equalTo: stack.widthAnchor, constant: -28).isActive = true
         let title = titleRow()
         stack.addArrangedSubview(title)
         title.widthAnchor.constraint(
             equalTo: stack.widthAnchor, constant: -28).isActive = true
-        if shouldShowDuration {
-            let duration = durationRow()
-            stack.addArrangedSubview(duration)
-            duration.widthAnchor.constraint(
-                equalTo: stack.widthAnchor, constant: -28).isActive = true
-        }
+        let footer = footerRow()
+        stack.addArrangedSubview(footer)
+        footer.widthAnchor.constraint(
+            equalTo: stack.widthAnchor, constant: -28).isActive = true
         if card.state.isWorking { startDurationTimer() }
     }
 
-    /// A DONE card is a compact row: ✓ + title over project (total work on hover).
+    /// A DONE card is a compact row: ✓ + title (total work on hover).
     private func buildDoneRow() {
         stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
         let row = NSStackView()
@@ -198,10 +250,6 @@ final class SessionCard: NSView, NSDraggingSource {
         mark.wantsLayer = true
         doneMark = mark
         row.addArrangedSubview(mark)
-        let text = NSStackView()
-        text.orientation = .vertical
-        text.alignment = .leading
-        text.spacing = 2
         let doneTitle = label(
             card.title ?? BoardTheme.shortPath(card.projectDir),
             font: BoardTheme.doneTitle, color: BoardTheme.textMuted)
@@ -212,11 +260,7 @@ final class SessionCard: NSView, NSDraggingSource {
         doneTitle.cell?.wraps = true
         doneTitle.cell?.truncatesLastVisibleLine = true
         doneTitle.yieldWidthToWindow(.defaultLow)   // longest text squeezes first
-        text.addArrangedSubview(doneTitle)
-        if card.title != nil {
-            text.addArrangedSubview(repoText(font: BoardTheme.sansTiny))
-        }
-        row.addArrangedSubview(text)
+        row.addArrangedSubview(doneTitle)
         row.addArrangedSubview(NSView())   // flexible spacer
         stack.addArrangedSubview(row)
         row.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28).isActive = true
@@ -243,12 +287,20 @@ final class SessionCard: NSView, NSDraggingSource {
         return row
     }
 
-    /// A deliberately quiet footer anchored to the free bottom-right corner.
-    private func durationRow() -> NSView {
+    /// One quiet footer row: the small harness mark, any chips, and — on a WORKING
+    /// card — the live interval at the right.
+    private func footerRow() -> NSView {
         let row = NSStackView()
+        row.spacing = 6
         row.alignment = .centerY
-        row.addArrangedSubview(NSView())   // flexible spacer → bottom-right
-        row.addArrangedSubview(durationReadout())
+        row.heightAnchor.constraint(equalToConstant: 14).isActive = true
+        row.addArrangedSubview(HarnessBadge(agent: card.agent, pointSize: 12, alpha: 0.75))
+        if card.state == .unreachable { row.addArrangedSubview(LinkChip()) }
+        if quotaBlock.isBlocked { row.addArrangedSubview(QuotaChip(block: quotaBlock, now: now)) }
+        if let place = Self.remotePlace(of: card) { row.addArrangedSubview(remotePlaceLabel(place)) }
+        if let status = hostChipStatus() { row.addArrangedSubview(hostChip(status)) }
+        row.addArrangedSubview(NSView())   // flexible spacer → the interval sits right
+        if shouldShowDuration { row.addArrangedSubview(durationReadout()) }
         return row
     }
 
@@ -304,9 +356,21 @@ final class SessionCard: NSView, NSDraggingSource {
         return "Worked \(Self.formatDuration(total)) in total"
     }
 
+    /// Reduce Motion is not "no feedback": the glyph drops the scale beat (the part
+    /// that moves) and keeps a slow opacity breathe, so a working card still reads as
+    /// alive at the edge of vision without anything travelling or growing.
     private func startWorkingPulse(on icon: NSImageView) {
-        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
         icon.wantsLayer = true
+        guard BoardView.motionAllowed else {
+            let breathe = CAKeyframeAnimation(keyPath: "opacity")
+            breathe.values = [1.0, 0.55, 1.0]
+            breathe.keyTimes = [0, 0.5, 1]
+            breathe.duration = 2.4
+            breathe.repeatCount = .infinity
+            breathe.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            icon.layer?.add(breathe, forKey: "working-breathe")
+            return
+        }
 
         let beat = CAKeyframeAnimation(keyPath: "transform.scale")
         beat.values = [1.0, 1.2, 0.96, 1.1, 1.0]
@@ -344,21 +408,6 @@ final class SessionCard: NSView, NSDraggingSource {
             : "Total working time: \(text)"
     }
 
-    /// The top line: project identity left, harness badge in the top-right
-    /// corner.
-    private func headerRow() -> NSView {
-        let row = NSStackView()
-        row.spacing = 6
-        row.alignment = .centerY
-        row.addArrangedSubview(repoChip())
-        if card.state == .unreachable { row.addArrangedSubview(LinkChip()) }
-        if quotaBlock.isBlocked { row.addArrangedSubview(QuotaChip(block: quotaBlock, now: now)) }
-        if let status = hostChipStatus() { row.addArrangedSubview(hostChip(status)) }
-        row.addArrangedSubview(NSView())   // flexible spacer
-        row.addArrangedSubview(HarnessBadge(agent: card.agent))
-        return row
-    }
-
     /// Whole-minute display used by the footer. Beyond a day, minute precision
     /// stops being useful and the compact form becomes `2d 3h`.
     static func formatDuration(_ interval: TimeInterval) -> String {
@@ -381,28 +430,6 @@ final class SessionCard: NSView, NSDraggingSource {
         field.isEditable = false
         field.lineBreakMode = .byTruncatingTail
         field.yieldWidthToWindow()
-        return field
-    }
-
-    private func repoText(font: NSFont) -> NSTextField {
-        projectField(font: font)
-    }
-
-    /// The project line — colour alone carries the project identity (one coding
-    /// channel; the old fill+stroke+colour pill triple-coded it and made the
-    /// queue read as a wall of badges before any title).
-    private func repoChip() -> NSTextField {
-        projectField(font: BoardTheme.chip)
-    }
-
-    /// Project names usually differ at the END (`agentic-coding-kanban` vs
-    /// `agentic-coding-docs`), so they truncate in the middle and keep both ends;
-    /// the full name rides on the tooltip.
-    private func projectField(font: NSFont) -> NSTextField {
-        let name = BoardTheme.projectLabel(card.projectDir)
-        let field = label(name, font: font, color: BoardTheme.repoColor(for: card))
-        field.lineBreakMode = .byTruncatingMiddle
-        field.toolTip = name
         return field
     }
 
@@ -433,10 +460,25 @@ final class SessionCard: NSView, NSDraggingSource {
         return card.state == .unknown ? .notStartedBySich : nil
     }
 
-    /// A remote card carries its ssh destination as the project label, tagged by a
-    /// `remote/<host>/<session>` session id.
     static func remoteDestination(of card: BoardCard) -> String? {
-        card.sessionID.hasPrefix("remote/") ? card.projectDir : nil
+        card.remoteDestination
+    }
+
+    /// Where a remote card's work is: `host:leaf` once the far side's folder is
+    /// known, the bare destination until then. The project header above the card
+    /// now names the repo (shared with local checkouts), so this is what says the
+    /// card is remote and which folder it sits in over there.
+    static func remotePlace(of card: BoardCard) -> String? {
+        guard let destination = card.remoteDestination.map(BoardTheme.shortDestination) else { return nil }
+        guard let dir = card.remoteDir else { return destination }
+        return "\(destination):\(BoardTheme.shortPath(dir))"
+    }
+
+    private func remotePlaceLabel(_ text: String) -> NSTextField {
+        let field = label(text, font: BoardTheme.chip, color: BoardTheme.textFaint)
+        field.identifier = NSUserInterfaceItemIdentifier("remote-place")
+        field.toolTip = card.remoteDir.map { "\(card.projectDir):\($0)" } ?? card.projectDir
+        return field
     }
 
     /// Built the same way ``ChipLabel`` is — the label IS the chip and paints its
@@ -472,6 +514,7 @@ final class SessionCard: NSView, NSDraggingSource {
     override func layout() {
         super.layout()
         updateAgingBar()
+        layoutSheen()
     }
 
     private func updateAgingBar() {
@@ -492,12 +535,12 @@ final class SessionCard: NSView, NSDraggingSource {
         min(1, max(0, age / (3 * 3600)))
     }
 
-    /// The bar's ink warms with age: it starts as a translucent attention amber
-    /// and ends as full-strength alert red at the three-hour mark.
+    /// The bar's ink deepens with age: it starts as a translucent NEEDS YOU red
+    /// and ends as the full-strength deeper red at the three-hour mark.
     static func agingColor(_ age: TimeInterval) -> NSColor {
         let f = agingFraction(age)
-        let warmed = BoardTheme.attention.blended(withFraction: f, of: BoardTheme.alert)
-        return (warmed ?? BoardTheme.alert).withAlphaComponent(0.35 + 0.65 * f)
+        let warmed = BoardTheme.needs.blended(withFraction: f, of: BoardTheme.needsStroke)
+        return (warmed ?? BoardTheme.needsStroke).withAlphaComponent(0.35 + 0.65 * f)
     }
 
     /// Test seam: the bar view, if this card carries one.
@@ -589,28 +632,20 @@ final class SessionCard: NSView, NSDraggingSource {
 
     // MARK: - Arrival
 
-    /// A card that just moved into its lane drops in instead of teleporting: 6pt
-    /// from above + fade, 200ms on the board's strong ease-out. It happens tens of
-    /// times a day and is system-driven, so it stays fast and small; Reduce Motion
-    /// keeps the fade and drops the movement. A card arriving in DONE also pops its
-    /// ✓ once — completion is the one moment on the board that earns a bounce.
+    /// A card that just moved into its lane fades in over the 320ms its lane
+    /// spends opening a slot for it (``BoardView`` grows the card from a closed
+    /// line). It happens tens of times a day and is system-driven, so it stays
+    /// small; Reduce Motion keeps the fade alone. A card arriving in DONE also pops
+    /// its ✓ once — completion is the one moment on the board that earns a bounce.
     func animateArrival() {
         guard let layer else { return }
-        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        let ease = CAMediaTimingFunction(controlPoints: 0.23, 1, 0.32, 1)
         let fade = CABasicAnimation(keyPath: "opacity")
         fade.fromValue = 0
         fade.toValue = 1
-        fade.duration = 0.2
-        fade.timingFunction = ease
+        fade.duration = 0.32
+        fade.timingFunction = CAMediaTimingFunction(controlPoints: 0.23, 1, 0.32, 1)
         layer.add(fade, forKey: "arrival-fade")
-        guard !reduceMotion else { return }
-        let drop = CABasicAnimation(keyPath: "transform")
-        drop.fromValue = CATransform3DMakeTranslation(0, 6, 0)   // unflipped: +y is up
-        drop.toValue = CATransform3DIdentity
-        drop.duration = 0.2
-        drop.timingFunction = ease
-        layer.add(drop, forKey: "arrival-drop")
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
         if card.state == .done { popDoneMark() }
     }
 
@@ -784,15 +819,17 @@ final class QuotaChip: ChipLabel {
         super.init(text: block.chipText)
         identifier = NSUserInterfaceItemIdentifier("quota-chip")
         font = BoardTheme.chip
-        let color: NSColor = switch block {
-        case .exhausted: BoardTheme.quotaBlocked
-        case .low: BoardTheme.attention
-        case .none: BoardTheme.textDim
+        // A spent pool keeps its violet (the one chip that explains why a card
+        // cannot start); a merely low pool is said in words, not colour.
+        let (ink, fill): (NSColor, NSColor) = switch block {
+        case .exhausted: (BoardTheme.quotaBlocked, BoardTheme.quotaBlocked)
+        case .low: (BoardTheme.textMuted, BoardTheme.textFaint)
+        case .none: (BoardTheme.textDim, BoardTheme.textDim)
         }
-        textColor = color
+        textColor = ink
         toolTip = block.toolTip(now: now())
         wantsLayer = true
-        themedBackground = color.withAlphaComponent(0.16)
+        themedBackground = fill.withAlphaComponent(0.16)
         layer?.cornerRadius = 3
     }
 
@@ -893,7 +930,7 @@ final class HostChip: ChipLabel {
         super.init(text: status.shortText)
         identifier = NSUserInterfaceItemIdentifier("host-chip")
         font = BoardTheme.chip
-        textColor = status.isActionable ? BoardTheme.attention : BoardTheme.textDim
+        textColor = status.isActionable ? BoardTheme.textMuted : BoardTheme.textDim
         // The face is a marker; the tooltip says what it means and, when a click
         // can fix it, which host the click installs onto.
         let install = status.isActionable
@@ -906,7 +943,7 @@ final class HostChip: ChipLabel {
         // stays as quiet as the repo chip beside it.
         guard status.isActionable else { return }
         wantsLayer = true
-        themedBackground = BoardTheme.attention.withAlphaComponent(0.16)
+        themedBackground = BoardTheme.textFaint.withAlphaComponent(0.16)
         layer?.cornerRadius = 3
     }
 

@@ -37,8 +37,16 @@ public final class TerminalSurface: NSView {
     /// A dim end-of-session banner appended once the session terminates, so a
     /// finished window reads as *ended* rather than *hung*. `nil` while live.
     private var endBanner: String?
+    /// Selection ends in whole-screen coordinates: `row` counts from the top of
+    /// scrollback, so a selection stays on its text while the viewport scrolls.
+    /// Output is held while one exists, so those rows cannot shift underneath.
     private var selectionAnchor: GridPoint?
     private var selectionFocus: GridPoint?
+    /// Where the button-down pointer last was, in view coords, while a drag
+    /// selection is in progress. A wheel scroll mid-drag re-aims the focus here.
+    private var selectionDragPoint: NSPoint?
+    /// Whole-screen row of `grid`'s first row (history rows above the viewport).
+    private var gridTop = 0
     private var refreshQueue = TerminalRefreshQueue()
     /// Whether the scrollback pill was on screen at the last repaint — a flip
     /// is the one case the row damage-diff cannot express, so it forces a full one.
@@ -325,7 +333,12 @@ public final class TerminalSurface: NSView {
         let snap = applyPendingScroll()
         guard snap.rows > 0 else { return }   // never blank a good screen on a failed read
         let old = grid
+        let oldTop = gridTop
         grid = snap
+        gridTop = session.terminal.viewportOffset
+        if let dragPoint = selectionDragPoint, gridTop != oldTop {
+            selectionFocus = selectionPoint(at: dragPoint)   // wheel mid-drag extends it
+        }
         rowBelow = scrollFraction > 0 ? fetchRowBelow(snap) : nil
         let badgeFlipped = badgeWasVisible != isViewingScrollback
         badgeWasVisible = isViewingScrollback
@@ -338,7 +351,7 @@ public final class TerminalSurface: NSView {
             && old.rows == snap.rows && old.cols == snap.cols
         syncRowLayers(changedFrom: incremental ? old : nil)
         if reason != .output { prefetchArmed = true }
-        if !incremental || badgeFlipped || old.cursor != snap.cursor
+        if !incremental || badgeFlipped || gridTop != oldTop || old.cursor != snap.cursor
             || snap.cursor.map({ rowChanged(old, snap, $0.y) }) == true {
             overlay.needsDisplay = true
         }
@@ -438,6 +451,9 @@ public final class TerminalSurface: NSView {
             cellHeight: cellSize.height)
         guard delta != 0 else { return }
         if session.terminal.alternateScreenActive || childTracksMouse(event) {
+            // The child repaints in place, so a held selection would freeze the
+            // screen and then sit on stale text. Drop it, as Terminal.app does.
+            clearSelection()
             // The child consumes whole ticks; sub-row motion carries over.
             let rows = scrollAccumulator.rows(adding: delta)
             guard rows != 0 else { return }
@@ -503,22 +519,26 @@ public final class TerminalSurface: NSView {
         // (child stays unblocked) and flushes when the selection clears.
         session.holdOutput = true
         let point = convert(event.locationInWindow, from: nil)
-        let cell = gridPoint(at: point)
+        let cell = selectionPoint(at: point)
         selectionAnchor = cell
         selectionFocus = cell
+        selectionDragPoint = point
         overlay.needsDisplay = true
     }
 
     public override func mouseDragged(with event: NSEvent) {
         guard selectionAnchor != nil else { return }
-        selectionFocus = gridPoint(at: convert(event.locationInWindow, from: nil))
+        let point = convert(event.locationInWindow, from: nil)
+        selectionFocus = selectionPoint(at: point)
+        selectionDragPoint = point
         overlay.needsDisplay = true
         autoscrollSelectionIfNeeded(event)
     }
 
     public override func mouseUp(with event: NSEvent) {
+        selectionDragPoint = nil
         guard selectionAnchor != nil else { return }
-        selectionFocus = gridPoint(at: convert(event.locationInWindow, from: nil))
+        selectionFocus = selectionPoint(at: convert(event.locationInWindow, from: nil))
         if selectionText().isEmpty {
             clearSelection()   // plain click: nothing selected, resume the stream
         }
@@ -537,7 +557,22 @@ public final class TerminalSurface: NSView {
         // child (Claude Code's Esc / Esc-Esc) works. "Back to board" lives on ⌘[,
         // handled in `performKeyEquivalent`, not here.
         session.send(KeyEncoder.bytes(for: input))
+        if input == .enter, Self.isShellEscapeLine(unsentInput) { onShellEscapeSubmit?() }
+        if input == .enter, hasUnsentInput { onSubmit?() }
         trackUnsent(input)
+    }
+
+    /// Fired when Enter sends a non-empty typed line — the reply a held pomodoro
+    /// break is waiting for.
+    var onSubmit: (() -> Void)?
+
+    /// Fired when Enter submits a `!command` line — Claude Code's bash mode, which
+    /// runs without any prompt-submit hook, so the board learns of it only here.
+    var onShellEscapeSubmit: (() -> Void)?
+
+    /// `!` followed by a command. A lone `!` is just the mode switch, not a submit.
+    nonisolated static func isShellEscapeLine(_ line: String) -> Bool {
+        line.hasPrefix("!") && !line.dropFirst().trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     /// Mirror a real keystroke into the local input-line model so a suggest-only host
@@ -845,17 +880,21 @@ public final class TerminalSurface: NSView {
         return true
     }
 
-    /// A URL opens as-is; a file span sheds its `:line[:col]` suffix, expands `~`,
-    /// resolves relative against the card's project dir, and only opens if it
-    /// actually exists here (the screen may be showing another machine's paths).
+    /// A URL opens as-is. A file span expands `~`, resolves relative against the
+    /// card's project dir, and only opens if it actually exists here (the screen
+    /// may be showing another machine's paths) — as a `zed://file/<path>:line:col`
+    /// link, so ⌘-click lands in Zed at the quoted line instead of whatever app
+    /// Launch Services pairs with the extension.
     static func resolve(_ link: TerminalLink, against workingDirectory: String?) -> URL? {
         switch link.kind {
         case .url:
             return URL(string: link.text)
         case .file:
             var path = link.text
-            // `Sources/App/File.swift:12:5` → the path part only.
+            var position = ""
+            // `Sources/App/File.swift:12:5` → the path part, position kept for Zed.
             if let match = path.range(of: #":\d+(:\d+)?$"#, options: .regularExpression) {
+                position = String(path[match])
                 path.removeSubrange(match)
             }
             path = (path as NSString).expandingTildeInPath
@@ -864,7 +903,11 @@ public final class TerminalSurface: NSView {
                 path = (base as NSString).appendingPathComponent(path)
             }
             guard FileManager.default.fileExists(atPath: path) else { return nil }
-            return URL(fileURLWithPath: path)
+            var zed = URLComponents()
+            zed.scheme = "zed"
+            zed.host = "file"
+            zed.path = path + position   // percent-encoded; Zed decodes and parses :line:col
+            return zed.url
         }
     }
 
@@ -877,11 +920,57 @@ public final class TerminalSurface: NSView {
             NSRect(x: x, y: 0, width: CGFloat(run.count) * cellSize.width, height: cellSize.height).fill()
         }
         guard !cell.style.invisible else { return }
-        let text = Self.text(of: run)
-        guard text.contains(where: { $0 != " " }) else { return }   // blank run: bg only
-        (text as NSString).draw(
-            at: NSPoint(x: x, y: 0),
-            withAttributes: glyphAttrs(fg: colors.fg, bg: colors.bg, style: cell.style))
+        let attrs = glyphAttrs(fg: colors.fg, bg: colors.bg, style: cell.style)
+        // The run is one string only where every glyph is the primary font's: a
+        // fallback glyph (`⎿`, `⏺`) has its own advance and would drag the rest of
+        // the run off the grid. Those cells, and the line/block characters drawn as
+        // geometry, are blanked out of the string and placed one by one instead.
+        var text = ""
+        text.reserveCapacity(run.count)
+        var loose: [(offset: Int, scalar: Unicode.Scalar)] = []
+        for (offset, cell) in run.enumerated() {
+            guard let scalar = cell.scalar else { text.append(" "); continue }
+            if Self.drawsAsGeometry(scalar) || !fontCovers(scalar) {
+                loose.append((offset, scalar))
+                text.append(" ")
+            } else {
+                text.unicodeScalars.append(scalar)
+            }
+        }
+        if text.contains(where: { $0 != " " }) {
+            (text as NSString).draw(at: NSPoint(x: x, y: 0), withAttributes: attrs)
+        }
+        for (offset, scalar) in loose {
+            let cellX = x + CGFloat(offset) * cellSize.width
+            let rect = CGRect(x: cellX, y: 0, width: cellSize.width, height: cellSize.height)
+            if let path = BoxDrawing.path(for: scalar, in: rect, light: boxLineWidth),
+               let context = NSGraphicsContext.current?.cgContext,
+               let color = attrs[.foregroundColor] as? NSColor {
+                context.setFillColor(color.cgColor)
+                context.addPath(path)
+                context.fillPath()
+            } else {
+                (String(scalar) as NSString).draw(at: NSPoint(x: cellX, y: 0), withAttributes: attrs)
+            }
+        }
+    }
+
+    private static func drawsAsGeometry(_ scalar: Unicode.Scalar) -> Bool {
+        (0x2500...0x259F).contains(scalar.value)
+    }
+
+    /// Light box-line stroke: about a twentieth of the row, never under a point.
+    private var boxLineWidth: CGFloat { max(1, (cellSize.height / 20).rounded()) }
+
+    /// Whether the primary font has a glyph for `scalar` (ASCII always does).
+    private func fontCovers(_ scalar: Unicode.Scalar) -> Bool {
+        if scalar.isASCII { return true }
+        if let known = fontCoverage[scalar.value] { return known }
+        let units = Array(String(scalar).utf16)
+        var glyphs = [CGGlyph](repeating: 0, count: units.count)
+        let covered = CTFontGetGlyphsForCharacters(font as CTFont, units, &glyphs, units.count)
+        fontCoverage[scalar.value] = covered
+        return covered
     }
 
     private func effectiveColors(for cell: TerminalCell) -> (fg: RGB?, bg: RGB?) {
@@ -1025,6 +1114,8 @@ public final class TerminalSurface: NSView {
         let style: TerminalCellStyle
     }
     private var glyphAttrsCache: [GlyphKey: [NSAttributedString.Key: Any]] = [:]
+    /// Per-scalar answer to "does the primary font draw this?" — see ``drawRun``.
+    private var fontCoverage: [UInt32: Bool] = [:]
     private var cachedTerminalBackground: RGB?
 
     private func glyphAttrs(
@@ -1114,6 +1205,8 @@ public final class TerminalSurface: NSView {
     var rowHostForTesting: TerminalRowLayerHost { rowHost }
     // periphery:ignore - test-only seam (scan runs with exclude_tests)
     var scrollFractionForTesting: CGFloat { scrollFraction }
+    // periphery:ignore - test-only seam (scan runs with exclude_tests)
+    var selectedTextForTesting: String { selectionText() }
     /// Run one display-link frame by hand (headless tests have no link).
     // periphery:ignore - test-only seam (scan runs with exclude_tests)
     @discardableResult
@@ -1144,6 +1237,13 @@ public final class TerminalSurface: NSView {
         return GridPoint(row: row, col: col)
     }
 
+    /// The selection cell under `point`: a viewport cell lifted to whole-screen rows.
+    private func selectionPoint(at point: NSPoint) -> GridPoint {
+        var cell = gridPoint(at: point)
+        cell.row += gridTop
+        return cell
+    }
+
     private func orderedSelection() -> (start: GridPoint, end: GridPoint)? {
         guard let a = selectionAnchor, let b = selectionFocus, a != b else { return nil }
         if a.row < b.row || (a.row == b.row && a.col <= b.col) { return (a, b) }
@@ -1156,13 +1256,17 @@ public final class TerminalSurface: NSView {
         defer { NSGraphicsContext.restoreGraphicsState() }
         rowHost.frame.clip()   // a shifted selection row must not bleed into the padding
         BoardTheme.brand.withAlphaComponent(0.32).setFill()
-        for row in range.start.row...range.end.row {
+        // Only the rows on screen: the viewport plus the row sliding in below it.
+        let first = max(range.start.row, gridTop)
+        let last = min(range.end.row, gridTop + grid.rows)
+        guard first <= last else { return }
+        for row in first...last {
             let startCol = row == range.start.row ? range.start.col : 0
             let endCol = row == range.end.row ? range.end.col : grid.cols - 1
             guard endCol >= startCol else { continue }
             NSRect(
                 x: inset + CGFloat(startCol) * cellSize.width,
-                y: rowTop(row),
+                y: rowTop(row - gridTop),
                 width: CGFloat(endCol - startCol + 1) * cellSize.width,
                 height: cellSize.height
             ).fill()
@@ -1177,12 +1281,14 @@ public final class TerminalSurface: NSView {
     private func selectionText() -> String {
         guard let range = orderedSelection(), grid.rows > 0, grid.cols > 0 else { return "" }
         var lines: [String] = []
-        for row in range.start.row...range.end.row {
+        for (row, cells) in zip(range.start.row...range.end.row,
+                                screenRows(range.start.row...range.end.row)) {
             let startCol = row == range.start.row ? range.start.col : 0
-            let endCol = row == range.end.row ? range.end.col : grid.cols - 1
+            let endCol = min(row == range.end.row ? range.end.col : cells.count - 1, cells.count - 1)
+            guard endCol >= startCol else { lines.append(""); continue }
             var line = ""
             for col in startCol...endCol {
-                if let scalar = grid.cell(col: col, row: row).scalar {
+                if let scalar = cells[col].scalar {
                     line.unicodeScalars.append(scalar)
                 } else {
                     line.append(" ")
@@ -1193,8 +1299,42 @@ public final class TerminalSurface: NSView {
         return lines.joined(separator: "\n")
     }
 
+    /// The cells of whole-screen rows `range`, which may reach past the viewport
+    /// into history. Off-screen rows are read by walking the emulator's viewport
+    /// and putting it back exactly — the bottom when it started live, else the
+    /// offset it started at. Held output keeps the rows still meanwhile.
+    private func screenRows(_ range: ClosedRange<Int>) -> [[TerminalCell]] {
+        let terminal = session.terminal
+        let start = terminal.viewportOffset
+        let startedLive = start >= terminal.scrollbackRows
+        var snap = grid
+        var top = gridTop
+        var moved = false
+        var rows: [[TerminalCell]] = []
+        for row in range {
+            if !(top..<top + snap.rows).contains(row) {
+                terminal.scrollViewport(delta: row - terminal.viewportOffset)
+                snap = terminal.snapshot()
+                top = terminal.viewportOffset
+                moved = true
+                guard snap.cols > 0, (top..<top + snap.rows).contains(row) else { break }
+            }
+            let i = row - top
+            rows.append(Array(snap.cells[(i * snap.cols)..<((i + 1) * snap.cols)]))
+        }
+        if moved {
+            if startedLive {
+                terminal.scrollViewportToBottom()
+            } else {
+                terminal.scrollViewport(delta: start - terminal.viewportOffset)
+            }
+        }
+        return rows
+    }
+
     private func clearSelection() {
         session.holdOutput = false   // resume the live stream (flushes held bytes)
+        selectionDragPoint = nil
         guard selectionAnchor != nil || selectionFocus != nil else { return }
         selectionAnchor = nil
         selectionFocus = nil

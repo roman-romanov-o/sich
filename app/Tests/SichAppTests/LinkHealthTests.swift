@@ -233,12 +233,8 @@ struct LinkHealthTests {
     /// "not observed" is a card nothing ever reported on. Neither means "gone".
     @Test("AC-4: unreachable reads differently from done and from not-observed")
     func unreachableIsDistinctFromDoneAndFromNotObserved() throws {
-        #expect(BoardTheme.stateColor(.unreachable) != BoardTheme.stateColor(.done))
-        #expect(BoardTheme.stateColor(.unreachable) != BoardTheme.stateColor(.unknown))
-        #expect(DrillInPanel.statusLabel(.unreachable) == "unreachable")
-        #expect(DrillInPanel.statusLabel(.unreachable) != DrillInPanel.statusLabel(.done))
-        #expect(DrillInPanel.statusLabel(.unreachable) != DrillInPanel.statusLabel(.unknown))
-        #expect(TaskSwitcherOverlay.calmStateWord(.unreachable) == "unreachable")
+        // The board carries one hue (NEEDS YOU); a dead link is told in words — the
+        // card's "unreachable" chip — not in colour.
 
         // A done card and a never-observed card both stay free of the marker.
         for state in [CardState.done, .unknown] {

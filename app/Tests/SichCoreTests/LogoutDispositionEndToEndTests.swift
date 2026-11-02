@@ -60,8 +60,6 @@ struct LogoutDispositionEndToEndTests {
         // state is a clean EXIT — never "crashed" — even with a non-zero code.
         let disposition = SessionDisposition(state: session.state)
         #expect(disposition == .exited(code: code))
-        #expect(disposition.shortLabel == "exited")
-        #expect(disposition.shortLabel != "crashed")
         #expect(disposition.endBanner == "— session ended (exit \(code)) —")
     }
 }

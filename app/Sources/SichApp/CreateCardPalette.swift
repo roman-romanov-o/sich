@@ -81,6 +81,9 @@ struct RecentFolderStore {
 /// enough for every row the stages use.
 final class PaletteRow: NSView {
     var onClick: (() -> Void)?
+    /// A click on the trailing meta text, when the row offers a second action there
+    /// (the folder list's "⇥ open" steps into the folder instead of using it).
+    var onMeta: (() -> Void)?
     var isSelected = false { didSet { restyle() } }
 
     private let glyph = makeMono(9)
@@ -101,6 +104,9 @@ final class PaletteRow: NSView {
         self.glyph.stringValue = glyph
         self.title.stringValue = title
         self.title.textColor = titleColor ?? BoardTheme.textPrimary
+        self.title.lineBreakMode = .byTruncatingTail
+        self.subtitle.lineBreakMode = .byTruncatingMiddle
+        self.subtitle.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         idChip.map { self.idChip.stringValue = $0 }
         subtitle.map { self.subtitle.stringValue = $0 }
         meta.map { self.meta.stringValue = $0 }
@@ -112,7 +118,23 @@ final class PaletteRow: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? {
         bounds.contains(convert(point, from: superview)) ? self : nil
     }
-    override func mouseDown(with event: NSEvent) { onClick?() }
+    /// Retarget a row the list is reusing — the same views, new words. Keeps a
+    /// keystroke from building sixty rows of labels and constraints from scratch.
+    func set(title: String, subtitle: String, meta: String) {
+        self.title.stringValue = title
+        self.subtitle.stringValue = subtitle
+        self.meta.stringValue = meta
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if let onMeta, let head = meta.superview,
+           head.convert(meta.frame, to: self).insetBy(dx: -12, dy: -12)
+               .contains(convert(event.locationInWindow, from: nil)) {
+            onMeta()
+        } else {
+            onClick?()
+        }
+    }
     /// What this row actually says on screen — read by tests so an assertion is about
     /// the rendered row rather than the array that produced it.
     // periphery:ignore - test-only entry (scan runs with exclude_tests)
@@ -256,6 +278,10 @@ final class PaletteFieldBox: NSView {
         super.init(frame: .zero)
         field.placeholderString = placeholder
         field.font = .systemFont(ofSize: 13)
+        // One line that scrolls: a long path slides under the edge, never wraps.
+        field.usesSingleLineMode = true
+        field.cell?.wraps = false
+        field.cell?.isScrollable = true
         field.textColor = BoardTheme.textPrimary
         field.drawsBackground = false
         field.isBordered = false
@@ -374,7 +400,13 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     var confirmRemote: ((
         _ title: String, _ destination: String, _ dir: String, _ windows: Bool
     ) -> String?)?
-    var browse: (() -> String?)?
+    /// Where the folder field's completions come from (US-009 + inline completion):
+    /// this Mac's disk or one ssh listing per far-side folder. The shell injects the
+    /// production source; the default never dials out under `swift test`.
+    var folderSource: any FolderSuggestionSource = PaletteFolderSource(remoteRunner: SSHCommandRunner())
+    /// What a bare name in the local folder field is relative to. A test points it at
+    /// a scratch tree; the app never changes it.
+    var home = NSHomeDirectory()
     var onCancel: (() -> Void)?
 
     // Test seams — the real gestures the integration tests dispatch.
@@ -382,6 +414,9 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     let nameField = NSTextField()
     /// Hand entry for a host the recents have never seen, and for a folder on it.
     let hostField = NSTextField()
+    /// The one folder field, local and remote alike. Typing lists the folders that
+    /// complete the path right under it — ⇥ fills one in, ↑↓ picks, ↵ uses it — so
+    /// a folder the recents never saw is reachable without leaving the keyboard.
     let dirField = NSTextField()
     private(set) var fieldBoxes: [PaletteFieldBox] = []
     let errorLabel = makeMono(11)
@@ -413,7 +448,42 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     var windowsToggleForTesting: PaletteToggle? { windowsToggle }
     /// Hosts the board remembers as Windows — the shell injects these at wiring time.
     var windowsHosts: Set<String> = []
+    /// The highlighted nav row; `-1` while the folder field holds text and nothing has
+    /// been arrowed to yet — ↵ then means "the path as typed", like a shell prompt.
     private var selected = 0
+
+    /// One far-side (or local) listing per folder, kept for the palette's lifetime so
+    /// typing inside a folder filters instantly and only a new folder costs a round
+    /// trip. Keyed by host + parent; a host's listing never answers for another's.
+    private enum FolderListing { case pending, unreadable, folders([String]) }
+    private var folderListings: [String: FolderListing] = [:]
+    /// True only for the duration of a source call, so an answer that lands
+    /// synchronously (this Mac) is stored for the render already in progress rather
+    /// than painting the list a second time from inside it.
+    private var awaitingSynchronousListing = false
+    /// The folder-stage list under the field — rebuilt on every keystroke while the
+    /// field itself (and its focus) stays put. It lives in a scroll pane so a folder
+    /// with a hundred children is browsable, not truncated: every subfolder is a row,
+    /// ↑↓ keep the highlight in view, ⇥/→ step in.
+    private let folderList = NSStackView()
+    private let folderScroll = NSScrollView()
+    /// The list's fixed parts: one heading, up to ``maxFolderRows`` reusable rows,
+    /// one "more" line. A render retargets and shows/hides; it never rebuilds.
+    let folderHeading = makeMono(9)
+    private var folderRows: [PaletteRow] = []
+    private let folderMore = makeMono(10)
+    /// About eight rows; past that the pane scrolls.
+    static let folderListMaxHeight: CGFloat = 420
+    // periphery:ignore - test-only seam (scan runs with exclude_tests)
+    var folderScrollForTesting: NSScrollView { folderScroll }
+    /// The folders currently offered under the field, in row order, each as the text
+    /// the field gets when it is taken — a child of the typed folder, or, for a bare
+    /// name, a match from one of the folders your recent projects live in.
+    private(set) var folderSuggestions: [String] = []
+    /// Rows are real views, rebuilt per keystroke; past this many the list says how
+    /// many more there are and typing narrows it. Nobody arrows through 2,000 rows,
+    /// and 2,000 AppKit views per keystroke would be felt.
+    static let maxFolderRows = 60
 
     private let card = NSView()
     private let body = NSStackView()
@@ -428,10 +498,46 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         super.init(frame: .zero)
         if let first = selectableAccounts.first?.id { selectedAgentAccountID = first }
         buildChrome()
+        buildFolderPane()
         renderStage()
     }
 
     required init?(coder: NSCoder) { nil }
+
+    /// The scroll pane the folder list lives in, built once: the stage only mounts
+    /// it, so the document and its width binding survive every re-render.
+    private func buildFolderPane() {
+        folderList.orientation = .vertical
+        folderList.alignment = .leading
+        folderList.spacing = 2
+        let document = FolderListDocument()
+        pin(folderList, to: document)
+        folderHeading.font = .monospacedSystemFont(ofSize: 9, weight: .semibold)
+        folderHeading.textColor = BoardTheme.textFaint
+        folderHeading.lineBreakMode = .byTruncatingMiddle
+        folderHeading.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        addFolderLabel(inset(folderHeading, leading: 10, top: 6, bottom: 3))
+        folderMore.textColor = BoardTheme.textDim
+        addFolderLabel(inset(folderMore, leading: 34, top: 6, bottom: 6))
+        folderMore.superview?.isHidden = true
+        folderScroll.documentView = document
+        folderScroll.drawsBackground = false
+        folderScroll.hasVerticalScroller = true
+        folderScroll.autohidesScrollers = true
+        folderScroll.verticalScrollElasticity = .allowed
+        folderScroll.horizontalScrollElasticity = .none
+        document.translatesAutoresizingMaskIntoConstraints = false
+        document.widthAnchor.constraint(equalTo: folderScroll.contentView.widthAnchor).isActive = true
+        // The pane is as tall as its list up to the cap, solved by the one layout pass
+        // the keystroke already pays for — no `fittingSize` (a second, private solve
+        // of every row, which cost more than everything else in the keystroke).
+        let hug = folderScroll.heightAnchor.constraint(equalTo: document.heightAnchor)
+        // Below the rows' own content priority (750): the list is as tall as its rows,
+        // and the pane follows it, never the other way round.
+        hug.priority = NSLayoutConstraint.Priority(499)
+        hug.isActive = true
+        folderScroll.heightAnchor.constraint(lessThanOrEqualToConstant: Self.folderListMaxHeight).isActive = true
+    }
 
     override var acceptsFirstResponder: Bool { true }
 
@@ -498,6 +604,8 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         l.stringValue = text
         l.font = .monospacedSystemFont(ofSize: 9, weight: .semibold)
         l.textColor = BoardTheme.textFaint   // AA-legible eyebrow (textDim was 2.4:1)
+        l.lineBreakMode = .byTruncatingMiddle
+        l.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let wrap = NSView()
         l.translatesAutoresizingMaskIntoConstraints = false
         wrap.addSubview(l)
@@ -505,7 +613,7 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
             l.leadingAnchor.constraint(equalTo: wrap.leadingAnchor, constant: 10),
             l.topAnchor.constraint(equalTo: wrap.topAnchor, constant: 6),
             l.bottomAnchor.constraint(equalTo: wrap.bottomAnchor, constant: -3),
-            l.trailingAnchor.constraint(lessThanOrEqualTo: wrap.trailingAnchor),
+            l.trailingAnchor.constraint(lessThanOrEqualTo: wrap.trailingAnchor, constant: -10),
         ])
         return wrap
     }
@@ -558,7 +666,7 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     private var focusTarget: NSResponder {
         switch stage {
         case .destination: return hostField
-        case .project: return destination == .local ? self : dirField
+        case .project: return dirField
         case .harness: return self
         case .agentAccount: return self
         case .task: return nameField
@@ -645,61 +753,318 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
 
     // MARK: stage 2 — folder
 
+    /// US-009 AC-2 + inline completion: the field is the stage. Empty, it shows this
+    /// destination's own recents (never another box's, never a local path on a remote
+    /// host); with text in it, the folders that complete the path. An unused host, or a
+    /// folder nothing can list, is still one ↵ away — the list is a shortcut past
+    /// typing, never a gate on it.
     private func renderProject() {
-        switch destination {
-        case .local: renderLocalProject()
-        case let .remote(host): renderRemoteProject(host: host)
+        let host = destination.host
+        addHeader(stageChip(host == nil ? "project" : "folder"), completed: [host ?? "This Mac"])
+        addField(PaletteFieldBox(
+            field: dirField,
+            placeholder: host == nil
+                ? "Type a project name or path — kanban, ~/Projects/…  ·  tab completes"
+                : "Path on \(host!) — ~/project or /srv/app  ·  blank = login folder"))
+        add(folderScroll)
+        if host != nil {
+            // A Windows box speaks psmux, not tmux, and (password auth) serves no
+            // headless channel — the operator marks it once here, and the board
+            // remembers per host so the toggle comes pre-checked next time.
+            add(sectionLabel("HOST TYPE"))
+            let toggle = PaletteToggle(
+                title: "Windows host (psmux)",
+                subtitle: "attach via psmux · terminal-only (no hooks/relay)",
+                isOn: remoteWindows)
+            toggle.onToggle = { [weak self] on in
+                self?.remoteWindows = on
+                self?.renderFolderList()
+            }
+            windowsToggle = toggle
+            add(toggle)
+        }
+        renderFolderList()
+        setFooter(["↑↓ pick", "tab/→ open", host == nil ? "↵ next: harness" : "↵ next: name",
+                   "← back", "esc cancel"])
+    }
+
+    /// This destination's recents, in row order, for the empty-field list.
+    private var folderRecents: [PaletteProject] {
+        destination.host.map(recents(on:)) ?? localRecents
+    }
+
+    private var typedFolder: String {
+        dirField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// A local path reads with `~`; a far-side one is shown exactly as typed, since
+    /// only that host knows what its home is.
+    private func displayFolder(_ path: String) -> String {
+        destination.host == nil ? FolderCompletion.abbreviated(localAbsolute(path), home: home) : path
+    }
+
+    private func localAbsolute(_ typed: String) -> String {
+        FolderCompletion.localDirectory(for: typed, home: home)
+    }
+
+    /// The folders your recent local projects live in (as typed-form parents, `~/…/`),
+    /// the home folder excluded since the field already lists it. A bare name is looked
+    /// up in these too, so a project is found by name without remembering where it
+    /// was cloned.
+    private var projectRoots: [String] {
+        var seen: Set<String> = []
+        return localRecents.compactMap { project in
+            let dir = (project.path as NSString).deletingLastPathComponent
+            guard dir != home, !dir.isEmpty, seen.insert(dir).inserted else { return nil }
+            return displayFolder(dir) + "/"
         }
     }
 
-    /// US-009 AC-2 + the no-recents edge case: this host's OWN folders (never another
-    /// box's, never a local path), plus hand entry — which is the whole stage on a box
-    /// used for the first time. An empty list is a prompt, not a dead end.
-    private func renderRemoteProject(host: String) {
-        addHeader(stageChip("folder"), completed: [host])
-        let folders = recents(on: host)
-        add(sectionLabel(folders.isEmpty
-            ? "NO FOLDERS USED ON THIS HOST YET — TYPE ONE"
-            : "RECENT FOLDERS ON THIS HOST"))
-        for folder in folders {
-            addNav(PaletteRow(glyph: "", title: folder.leaf, subtitle: folder.path))
-        }
-        addField(PaletteFieldBox(field: dirField,
-                                 placeholder: "/home/you/project   (blank = the host's default)"))
-        // A Windows box speaks psmux, not tmux, and (password auth) serves no
-        // headless channel — the operator marks it once here, and the board
-        // remembers per host so the toggle comes pre-checked next time.
-        add(sectionLabel("HOST TYPE"))
-        let toggle = PaletteToggle(
-            title: "Windows host (psmux)",
-            subtitle: "attach via psmux · terminal-only (no hooks/relay)",
-            isOn: remoteWindows)
-        toggle.onToggle = { [weak self] on in self?.remoteWindows = on }
-        windowsToggle = toggle
-        add(toggle)
-        setFooter(["↵ next: name", "↑↓ folder", "← back", "esc cancel"])
+    private func listingKey(_ parent: String) -> String {
+        "\(destination.host ?? "")\u{0}\(parent)"
     }
 
-    private func renderLocalProject() {
-        addHeader(stageChip("project"), completed: ["This Mac"])
-        add(sectionLabel("RECENT PROJECTS"))
-        for p in localRecents {
-            // Fixed two-part template every row, incl. the zero case, so the scanned
+    /// Rebuild only the list under the field. Rows are plain subviews, not the
+    /// stage's `add`, so the field above keeps its editor and its focus.
+    private func renderFolderList() {
+        guard stage == .project else { return }
+        navRows = []
+        folderSuggestions = []
+        folderMore.superview?.isHidden = true
+        let typed = typedFolder
+        if typed.isEmpty {
+            renderFolderRecents()
+        } else {
+            renderFolderMatches(for: typed)
+        }
+        for row in folderRows.dropFirst(navRows.count) { row.isHidden = true }
+        highlight()
+        folderScroll.contentView.scroll(to: .zero)
+        folderScroll.reflectScrolledClipView(folderScroll.contentView)
+    }
+
+    private func renderFolderRecents() {
+        let list = folderRecents
+        let local = destination.host == nil
+        folderHeading.stringValue = list.isEmpty
+            ? (local ? "NO RECENT PROJECTS — TYPE A PATH" : "NO FOLDERS USED ON THIS HOST YET — TYPE ONE")
+            : (local ? "RECENT PROJECTS" : "RECENT FOLDERS ON THIS HOST")
+        for p in list {
+            // Fixed two-part template every local row, incl. the zero case, so the scanned
             // list has even info density (a bare path next to a "· N active" one snags the eye).
-            let tail = p.activeCards == 0
-                ? "no active cards"
-                : "\(p.activeCards) active card\(p.activeCards == 1 ? "" : "s")"
-            let sub = "\(p.display) · \(tail)"
-            addNav(PaletteRow(glyph: "", title: p.leaf, subtitle: sub))
+            let sub: String
+            if local {
+                let tail = p.activeCards == 0
+                    ? "no active cards"
+                    : "\(p.activeCards) active card\(p.activeCards == 1 ? "" : "s")"
+                sub = "\(p.display) · \(tail)"
+            } else {
+                sub = p.path
+            }
+            showFolderRow(title: p.leaf, subtitle: sub, meta: "", stepIn: nil)
         }
-        // An action, not a project-pick: neutral title + leading glyph, amber-on-select
-        // like every other row. (Was system-blue — the one accent breaking the palette.)
-        let browseRow = PaletteRow(glyph: "+", title: "Browse folder…", meta: "",
-                                   titleColor: BoardTheme.textMuted)
-        browseRow.onClick = { [weak self] in self?.doBrowse() }
-        navRows.append(browseRow)   // navigable, but not a project-pick
-        add(browseRow)
-        setFooter(["↵ next: harness", "↑↓ navigate", "esc cancel"])
+        if selected < 0 || selected >= navRows.count { selected = 0 }
+    }
+
+    private func renderFolderMatches(for typed: String) {
+        selected = -1
+        let (parent, leaf) = FolderCompletion.split(typed)
+        let shown = parent.isEmpty ? "~/" : displayFolder(parent)
+        if remoteWindows {
+            folderHeading.stringValue = "WINDOWS HOST — ↵ USES THE PATH AS TYPED"
+            return
+        }
+        let primary = listing(of: parent)
+        if case .pending = primary {
+            folderHeading.stringValue = "LISTING \(shown) …"
+            return
+        }
+        // Best matches first across every folder searched: a prefix on the home folder
+        // and a prefix in a project root both beat a loose match in either.
+        var tiers: [[(text: String, name: String)]] = [[], [], []]
+        func offer(_ children: [String], under base: String) {
+            for name in FolderCompletion.matches(children: children, leaf: leaf) {
+                tiers[FolderCompletion.rank(name, against: leaf) ?? 2].append((base + name, name))
+            }
+        }
+        if case let .folders(children) = primary { offer(children, under: parent) }
+        var searchedRoots = false
+        if parent.isEmpty, destination.host == nil {
+            for root in projectRoots {
+                guard case let .folders(children) = listing(of: root) else { continue }
+                searchedRoots = true
+                offer(children, under: root)
+            }
+        }
+        let matches = tiers.flatMap { $0 }
+        guard !matches.isEmpty else {
+            if case .unreadable = primary {
+                folderHeading.stringValue = destination.host == nil
+                    ? "NO FOLDER \(shown)"
+                    : "CAN'T LIST \(shown) ON \(destination.host!) — ↵ USES THE PATH AS TYPED"
+            } else {
+                folderHeading.stringValue = "NO FOLDERS IN \(shown) MATCH"
+            }
+            return
+        }
+        folderHeading.stringValue = "FOLDERS IN \(shown)"
+            + (searchedRoots ? " + YOUR PROJECT FOLDERS" : "")
+            + " · \(matches.count)" + (leaf.isEmpty ? "" : " MATCHING")
+        let offered = matches.prefix(Self.maxFolderRows)
+        folderSuggestions = offered.map(\.text)
+        for (i, match) in offered.enumerated() {
+            showFolderRow(title: match.name, subtitle: displayFolder(match.text), meta: "→ open",
+                          stepIn: { [weak self] in self?.stepInto(i) })
+        }
+        let hidden = matches.count - offered.count
+        if hidden > 0 {
+            folderMore.stringValue = "+\(hidden) more — type to narrow"
+            folderMore.superview?.isHidden = false
+        }
+    }
+
+    private func inset(_ label: NSTextField, leading: CGFloat, top: CGFloat, bottom: CGFloat) -> NSView {
+        let wrap = NSView()
+        label.translatesAutoresizingMaskIntoConstraints = false
+        wrap.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: wrap.leadingAnchor, constant: leading),
+            label.topAnchor.constraint(equalTo: wrap.topAnchor, constant: top),
+            label.bottomAnchor.constraint(equalTo: wrap.bottomAnchor, constant: -bottom),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: wrap.trailingAnchor, constant: -10),
+        ])
+        return wrap
+    }
+
+    /// A label spans the list's width so a long folder truncates inside the card.
+    private func addFolderLabel(_ v: NSView) {
+        v.translatesAutoresizingMaskIntoConstraints = false
+        folderList.addArrangedSubview(v)
+        v.widthAnchor.constraint(equalTo: folderList.widthAnchor).isActive = true
+    }
+
+    /// The next pooled row, built on first use and retargeted after; it sits in the
+    /// stack just above the "more" line, in the order the list reads.
+    private func showFolderRow(title: String, subtitle: String, meta: String,
+                               stepIn: (() -> Void)?) {
+        let idx = navRows.count
+        let row: PaletteRow
+        if idx < folderRows.count {
+            row = folderRows[idx]
+            row.set(title: title, subtitle: subtitle, meta: meta)
+        } else {
+            row = PaletteRow(glyph: "/", title: title, subtitle: subtitle, meta: meta)
+            row.translatesAutoresizingMaskIntoConstraints = false
+            folderList.insertArrangedSubview(row, at: folderList.arrangedSubviews.count - 1)
+            row.widthAnchor.constraint(equalTo: folderList.widthAnchor).isActive = true
+            folderRows.append(row)
+        }
+        row.isHidden = false
+        row.onClick = { [weak self] in self?.activate(idx) }
+        row.onMeta = stepIn
+        navRows.append(row)
+    }
+
+    /// The cached listing for `parent`, requesting it on first sight. A local answer
+    /// lands synchronously inside the request (and re-renders from its callback), so
+    /// the caller only ever paints `.pending` for a listing still crossing the wire.
+    private func listing(of parent: String) -> FolderListing {
+        let key = listingKey(parent)
+        if let known = folderListings[key] { return known }
+        folderListings[key] = .pending
+        let host = destination.host
+        awaitingSynchronousListing = true
+        let listed = host == nil ? localAbsolute(parent) : parent
+        folderSource.subdirectories(of: listed, on: host) { [weak self] tree in
+            guard let self else { return }
+            self.folderListings[key] = tree.map { .folders(FolderCompletion.ordered($0.children)) } ?? .unreadable
+            // A source that looked a level further has already answered the next
+            // step-in; a listing we hold is never overwritten by a stale prefetch.
+            for (child, names) in tree?.grandchildren ?? [:] {
+                let childKey = self.listingKey(parent + child + "/")
+                if self.folderListings[childKey] == nil {
+                    self.folderListings[childKey] = .folders(FolderCompletion.ordered(names))
+                }
+            }
+            // Only a listing that crossed the wire repaints — and only when the field
+            // is still looking at that folder on that host.
+            if !self.awaitingSynchronousListing, self.stage == .project,
+               self.destination.host == host,
+               FolderCompletion.split(self.typedFolder).parent == parent {
+                self.renderFolderList()
+            }
+        }
+        awaitingSynchronousListing = false
+        return folderListings[key] ?? .pending
+    }
+
+    /// ⇥ in the folder field, shell-style: fill the highlighted (or only) match and
+    /// step into it; otherwise extend to what every match shares, when that continues
+    /// what was typed; and when it gains nothing (or the matches came from elsewhere,
+    /// as a bare name's do), highlight the first match so the next ⇥ or ↵ takes it.
+    private func completeFolder() {
+        let typed = typedFolder
+        guard !typed.isEmpty, !folderSuggestions.isEmpty else { return }
+        if selected >= 0 && selected < folderSuggestions.count {
+            stepInto(selected)
+        } else if folderSuggestions.count == 1 {
+            stepInto(0)
+        } else {
+            let shared = FolderCompletion.commonPrefix(folderSuggestions)
+            if shared.count > typed.count, shared.hasPrefix(typed) {
+                setFolderText(shared)
+            } else {
+                selected = 0
+                highlight()
+            }
+        }
+    }
+
+    /// Put suggestion `idx` in the field with a trailing `/`, listing its children —
+    /// one level down the tree, no name needed. Browsing is this, repeated.
+    private func stepInto(_ idx: Int) {
+        guard !typedFolder.isEmpty, idx >= 0, idx < folderSuggestions.count else { return }
+        setFolderText(folderSuggestions[idx] + "/")
+    }
+
+    private func setFolderText(_ text: String) {
+        dirField.stringValue = text
+        dirField.currentEditor()?.selectedRange = NSRange(location: (text as NSString).length, length: 0)
+        renderFolderList()
+    }
+
+    /// ↵ in the folder field. A highlighted suggestion wins; else the path as typed;
+    /// else the highlighted recent. A blank remote field is legitimate — tmux then
+    /// opens the login directory, so an unused host still creates a card. Locally a
+    /// folder must exist: the shell cannot start in one that does not.
+    private func commitFolder() {
+        let typed = typedFolder
+        var path: String
+        if !typed.isEmpty, selected >= 0, selected < folderSuggestions.count {
+            path = folderSuggestions[selected]
+        } else if !typed.isEmpty {
+            path = typed
+        } else if selected >= 0, selected < folderRecents.count {
+            path = folderRecents[selected].path
+        } else {
+            path = ""
+        }
+        if case .remote = destination {
+            remoteDir = path
+            stage = .task
+            renderStage()
+            return
+        }
+        guard !path.isEmpty else { showError("Type a folder, or pick a recent one."); return }
+        path = (localAbsolute(path) as NSString).standardizingPath
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else {
+            showError("No folder at \(displayFolder(path))")
+            return
+        }
+        projectDir = path
+        stage = .harness
+        renderStage()
     }
 
     // MARK: stage 3 — harness (local only)
@@ -798,6 +1163,15 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     func controlTextDidBeginEditing(_ obj: Notification) { setFieldFocus(obj, true) }
     func controlTextDidEndEditing(_ obj: Notification) { setFieldFocus(obj, false) }
 
+    /// Every keystroke in the folder field re-lists — the response is the feedback, so
+    /// there is no debounce: a local listing is instant and a remote one is cached per
+    /// folder, so only stepping into a new far-side folder costs a round trip.
+    func controlTextDidChange(_ obj: Notification) {
+        guard (obj.object as? NSTextField) === dirField else { return }
+        errorLabel.isHidden = true
+        renderFolderList()
+    }
+
     private func setFieldFocus(_ note: Notification, _ focused: Bool) {
         guard let field = note.object as? NSTextField else { return }
         fieldBoxes.first { $0.field === field }?.setFocused(focused)
@@ -824,12 +1198,22 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
 
     private func move(_ delta: Int) {
         guard !navRows.isEmpty else { return }
-        selected = (selected + delta + navRows.count) % navRows.count
+        if selected < 0 {
+            // Nothing arrowed to yet: ↓ takes the first row, ↑ the last.
+            selected = delta > 0 ? 0 : navRows.count - 1
+        } else {
+            selected = (selected + delta + navRows.count) % navRows.count
+        }
         highlight()
+        if stage == .project {
+            folderScroll.layoutSubtreeIfNeeded()
+            navRows[selected].scrollToVisible(navRows[selected].bounds)
+        }
     }
 
     /// Enter / click on nav row `idx`.
     private func activate(_ idx: Int) {
+        guard idx >= 0 else { return }
         selected = idx
         highlight()
         switch stage {
@@ -872,18 +1256,10 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         pickDestinationRow(min(selected, knownHosts.count))
     }
 
+    /// A folder row — recent or suggested — taken by ↵ or a click: commit it.
     private func activateProjectRow(_ idx: Int) {
-        if case let .remote(host) = destination {
-            let list = recents(on: host)
-            guard idx < list.count else { return }
-            remoteDir = list[idx].path
-            stage = .task; renderStage()
-            return
-        }
-        if idx == navRows.count - 1 { doBrowse(); return }   // last = Browse…
-        projectDir = localRecents[idx].path
-        stage = .harness
-        renderStage()
+        guard idx < navRows.count else { return }
+        commitFolder()
     }
 
     private func advanceFromHarness() {
@@ -914,21 +1290,6 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         renderStage()
     }
 
-    /// Return in the far-side folder field. A blank field is legitimate — with no
-    /// recents on this host there is nothing to fall back to, and tmux then opens the
-    /// login directory — so an unused host still creates a card.
-    private func commitRemoteFolder() {
-        let typed = dirField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        let list = recents(on: destination.host ?? "")
-        if !typed.isEmpty {
-            remoteDir = typed
-        } else {
-            remoteDir = selected < list.count ? list[selected].path : ""
-        }
-        stage = .task
-        renderStage()
-    }
-
     private func confirmTask() {
         let title = nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if case let .remote(host) = destination {
@@ -937,13 +1298,6 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         }
         let profileID = harness.supportsAccountPicker ? selectedAgentAccountID : nil
         confirmInteractive?(title, projectDir, harness, inWorktree, profileID)
-    }
-
-    private func doBrowse() {
-        guard let path = browse?(), !path.isEmpty else { return }
-        projectDir = path
-        stage = .harness
-        renderStage()
     }
 
     private func showError(_ text: String) {
@@ -988,6 +1342,12 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
                  doCommandBy selector: Selector) -> Bool {
         switch selector {
         case #selector(NSResponder.insertNewline(_:)): commit(from: control); return true
+        case #selector(NSResponder.insertTab(_:)):
+            guard control === dirField else { return false }
+            completeFolder(); return true
+        case #selector(NSResponder.moveRight(_:)):
+            guard control === dirField, selected >= 0, selected < folderSuggestions.count else { return false }
+            stepInto(selected); return true
         case #selector(NSResponder.cancelOperation(_:)): onCancel?(); return true
         case #selector(NSResponder.moveDown(_:)): move(1); return true
         case #selector(NSResponder.moveUp(_:)): move(-1); return true
@@ -1000,7 +1360,7 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
 
     private func commit(from control: NSControl) {
         if control === hostField { commitDestination() }
-        else if control === dirField { commitRemoteFolder() }
+        else if control === dirField { commitFolder() }
         else { confirmTask() }
     }
 
@@ -1032,4 +1392,10 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         self.stage = .harness
         renderStage()
     }
+}
+
+/// The folder pane's document: flipped so the list grows downward from the top the
+/// way a scrolling list reads, and `scrollToVisible` means what it says.
+private final class FolderListDocument: NSView {
+    override var isFlipped: Bool { true }
 }

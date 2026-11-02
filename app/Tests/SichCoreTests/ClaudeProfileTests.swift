@@ -9,15 +9,13 @@ struct ClaudeProfileTests {
         let profile = ClaudeProfile.defaultProfile
         #expect(profile.poolPrefix == "interactive")
         #expect(profile.pool5h == "interactive_5h")
-        #expect(profile.quotaLabel == "claude")
         #expect(profile.isDefault)
     }
 
-    @Test("named profile gets distinct pool prefix and quota label")
+    @Test("named profile gets a distinct pool prefix")
     func namedProfilePools() {
         let profile = ClaudeProfile(name: "Work", configDir: "~/.claude-work")
         #expect(profile.poolPrefix == "interactive_work")
-        #expect(profile.quotaLabel == "claude · Work")
     }
 
     @Test("config dir export is empty for default and set for alternate dirs")

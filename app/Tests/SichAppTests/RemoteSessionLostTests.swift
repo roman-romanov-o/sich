@@ -154,10 +154,7 @@ struct RemoteSessionLostTests {
         // The link is already gone; the reconcile pass is where the card learns it —
         // and the moment the hints used to be discarded, because `sessionRef` has
         // nothing to join once the session leaves the registry.
-        for _ in 0..<500 {
-            if !shell.reconcileDeadSessions().isEmpty { break }
-            usleep(10_000)
-        }
+        shell.reconcileUntilReaped(card.id)
         #expect(shell.ptyForTesting(card.id) == nil, "the link really did drop")
 
         let record = try #require(

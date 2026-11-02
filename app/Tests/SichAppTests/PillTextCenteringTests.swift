@@ -101,20 +101,6 @@ struct PillTextCenteringTests {
     func backPillIsCentered() {
         expectPaddingSpentEvenly(BackPill(), "BackPill")
     }
-
-    @Test("the status pill's label sits in the middle of its 22pt frame")
-    func statusPillIsCentered() {
-        let pill = StatusPill()
-        pill.show(text: "unknown", color: BoardTheme.textDim, pulsing: false)
-        expectPaddingSpentEvenly(pill, "StatusPill")
-    }
-
-    @Test("the worktree pill's label sits in the middle of its 20pt frame")
-    func worktreePillIsCentered() {
-        let pill = WorktreePill()
-        pill.stringValue = "worktree"
-        expectPaddingSpentEvenly(pill, "WorktreePill")
-    }
 }
 
 /// A label styled like a pill but WITHOUT the centring cell — the unfixed render path,
