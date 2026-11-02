@@ -57,34 +57,26 @@ struct WindowResizeTests {
         #expect(window.frame.height == 500)
     }
 
-    /// Drill-in header quota readout is a single long label — without truncation it
-    /// pins the window wider than a laptop screen and the terminal reads cut off.
-    @Test func drilledInWithLongQuotaHeaderStaysShrunk() throws {
+    /// The titlebar's task plate holds a single long title — it must truncate, not
+    /// pin the window wider than a laptop screen.
+    @Test func drilledInWithLongTaskTitleStaysShrunk() throws {
         let shell = BoardShell(seeds: [
             BoardSeed(sessionID: "demo/one", projectDir: "~/demo",
                       agent: .claude, state: .running, scrollback: "ready"),
         ])
         let root = shell.buildContentForTesting()
-        let card = try #require(shell.cards.first)
-        shell.drill(into: card)
-        shell.drillIn.updateQuota([
-            QuotaGauge(provider: "anthropic", pool: "interactive",
-                       state: .active, confidence: .measured, remainingFraction: 0.83),
-            QuotaGauge(provider: "anthropic", pool: "interactive_weekly",
-                       state: .active, confidence: .measured, remainingFraction: 0.90),
-            QuotaGauge(provider: "antigravity", pool: "antigravity",
-                       state: .active, confidence: .measured, remainingFraction: 1.0),
-            QuotaGauge(provider: "codex", pool: "codex",
-                       state: .active, confidence: .measured, remainingFraction: 0.55),
-            QuotaGauge(provider: "cursor", pool: "cursor",
-                       state: .active, confidence: .measured, remainingFraction: 0.72),
-        ])
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1400, height: 860),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered, defer: false
         )
         window.contentView = root
+        shell.titlebar.install(on: window)
+        let card = try #require(shell.cards.first)
+        shell.drill(into: card)
+        shell.titlebar.show(
+            title: String(repeating: "Aggregate quota across every pool and account ", count: 6),
+            directory: "~/" + String(repeating: "very-long-folder/", count: 12) + "leaf")
         window.layoutIfNeeded()
 
         window.setFrame(NSRect(x: 0, y: 0, width: 700, height: 500), display: true)

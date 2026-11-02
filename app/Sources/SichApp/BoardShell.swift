@@ -29,6 +29,8 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// "DONE column need to be archived time to time").
     let archivePage = ArchivePage()
     let drillIn = DrillInPanel()
+    /// The window's titlebar while a card is open: "‹ Board" and the task, centred.
+    let titlebar = TaskTitlebar()
     private(set) var createPalette: CreateCardPalette?
     // The quota panel folded in as a right-side region — one assembled window
     // shows the board AND the four never-netted gauges (no separate binary).
@@ -66,6 +68,13 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// at open so live status changes can't reshuffle it under the operator's fingers
     /// mid-scroll; an empty snapshot means the switcher is closed.
     let taskSwitcher = TaskSwitcherOverlay()
+    /// The operator's pomodoro: engine + clock + disk, rendered into the quota
+    /// panel's dock, the rest overlay and the drill-in header.
+    let pomodoro = PomodoroController()
+    /// The blurred rest screen over the whole window during a break.
+    let restOverlay = PomodoroRestOverlay()
+    /// Which cards the last render drew dimmed — a change re-renders the board.
+    private var lastHeldCardIDs: Set<UUID> = []
     private(set) var switcherSnapshot: [BoardCard] = []
     private(set) var switcherIndex = 0
     var switcherIsOpen: Bool { !switcherSnapshot.isEmpty }
@@ -191,7 +200,9 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             // guard that keeps tests/E2E out of the operator's Application Support
             // keeps them out of the operator's UserDefaults.
             drillIn.teachesGeometry = true
+            pomodoro.attach(store: PomodoroStore.applicationSupport())
         }
+        pomodoro.startTicking()
         // US-003: reload + re-open the pre-quit session tree before the fresh seed lands.
         restorePreviousSessions()
         seedSessions()
@@ -228,7 +239,11 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
               let window else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
             guard let self else { return }
-            E2EHarness(shell: self, window: window).run()
+            if ProcessInfo.processInfo.environment["SICH_PROMO"] != nil {
+                PromoRecorder(shell: self, window: window).run()
+            } else {
+                E2EHarness(shell: self, window: window).run()
+            }
         }
     }
 
@@ -237,6 +252,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// shells we forked so a run doesn't leak login shells.
     func e2eTeardown() {
         stopSessionPump()
+        pomodoro.stopTicking()
         quotaPoller?.stop()
         sessionsPoller?.stop()
         for pty in ptyByCard.values { pty.terminate() }
@@ -262,6 +278,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
 
     public func applicationWillTerminate(_ notification: Notification) {
         stopSessionPump()
+        pomodoro.stopTicking()
         quotaPoller?.stop()
         sessionsPoller?.stop()
         // Capture the still-running interval in the durable task total before the
@@ -494,6 +511,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         deadCardIDs.remove(cardID)
         if demoteDeadRemoteCard(cardID) { return }
         cards.removeAll { $0.id == cardID }
+        pomodoro.forget(cardID: cardID)
         refresh()
     }
 
@@ -625,7 +643,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             claudeProfileID: record.claudeProfileID,
             needsYouDeferredUntil: record.needsYouDeferredUntil
         )
-        BoardTheme.linkProject(card: record.id, toDirectory: record.remote?.spec.remoteDir)
         if state == .done { manuallyDoneCardIDs.insert(record.id) }
         if state == .blocked || state == .parked { operatorHeldCardIDs.insert(record.id) }
         if let index = cards.firstIndex(where: { $0.id == record.id }) {
@@ -859,7 +876,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         ptyByCard[card.id] = session.pty
         if let spec = pane.snapshot.remote?.spec {
             adoptRestoredRemote(spec, on: session)
-            BoardTheme.linkProject(card: card.id, toDirectory: spec.remoteDir)
         }
     }
 
@@ -933,13 +949,17 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         "\(launcher.claudeExecutable) --session-id \(sessionID.uuidString.lowercased())\n"
     }
 
-    /// The keystrokes that RESUME the conversation `sessionID` on a restored pane. Falls
-    /// back to a fresh `claude` if the transcript is gone (resume exits non-zero), so a
-    /// restore never lands the operator on a dead shell; stderr is dropped so the expected
-    /// "no conversation" note doesn't flash before the fallback.
+    /// The keystrokes that RESUME the conversation `sessionID` on a restored pane. When
+    /// there is no transcript to resume (the card left play before anyone typed into it —
+    /// Claude writes nothing until the first message), the fallback starts a fresh
+    /// conversation pinned to the SAME id, so the card's resume token stays true. A bare
+    /// `claude` there minted an id the card never learned, and every later resume asked
+    /// for a conversation that never existed. The last bare `claude` only runs if the id
+    /// is taken yet unresumable, so a restore never lands the operator on a dead shell.
     static func resumeClaudeCommand(sessionID: UUID, via launcher: HarnessLauncher) -> String {
         let claude = launcher.claudeExecutable
-        return "\(claude) --resume \(sessionID.uuidString.lowercased()) 2>/dev/null || \(claude)\n"
+        let id = sessionID.uuidString.lowercased()
+        return "\(claude) --resume \(id) 2>/dev/null || \(claude) --session-id \(id) 2>/dev/null || \(claude)\n"
     }
 
     /// Prefer the explicit pinned Claude conversation id. For snapshots written before
@@ -1303,6 +1323,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         // surface, whose live-flip hook keys off appearance changes — from ever
         // resolving light. Following the system flips the whole app, terminal included.
         window.appearance = nil
+        titlebar.install(on: window)
         window.contentMinSize = Self.minContentSize
         window.contentView = makeContentView(in: window.frame.size)
         window.center()
@@ -1390,6 +1411,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         layoutFullWindow(backlogPage, in: root)
         archivePage.isHidden = true
         layoutFullWindow(archivePage, in: root)
+        layoutFullWindow(restOverlay, in: root)    // over every mode, under the switcher
         layoutFullWindow(taskSwitcher, in: root)   // last = topmost: floats over any mode
         return root
     }
@@ -1476,6 +1498,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     // MARK: - Interactions
 
     private func wireInteractions() {
+        wirePomodoro()
         boardView.onSelect = { [weak self] in self?.drill(into: $0) }
         boardView.onCreate = { [weak self] in self?.promptAndCreateSession() }
         boardView.onMove = { [weak self] id, column in self?.move(cardID: id, to: column) }
@@ -1500,6 +1523,10 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             self?.reviveArchivedTask(id: record.id)
         }
         drillIn.onClose = { [weak self] in self?.returnToBoard() }
+        titlebar.onBack = { [weak self] in self?.drillIn.goBack() }
+        drillIn.onShellEscapeSubmit = { [weak self] in
+            self?.sessionsPoller?.noteOperatorSubmit(cardID: $0)
+        }
     }
 
     private func changeBoardFont(by delta: CGFloat) {
@@ -1562,7 +1589,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     func openCreatePalette() {
         let palette = CreateCardPalette(
             recents: paletteRecents(), agentAccounts: agentAccountStore.accounts)
-        palette.browse = { [weak self] in Self.chooseFolder(relativeTo: self?.window) }
+        palette.folderSource = PaletteFolderSource(remoteRunner: remoteSessionRunner)
         palette.onCancel = { [weak self] in self?.dismissCreatePalette() }
         palette.addAgentAccount = { [weak self] agent in
             self?.promptAddAgentAccount(agent: agent, from: palette)
@@ -1816,18 +1843,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         return local + recentFolders.load().filter { $0.host != nil }
     }
 
-    /// The native macOS folder chooser, run as a nested modal over the palette.
-    /// ponytail: nested modal is fine for a one-shot picker; AppKit stacks them.
-    private static func chooseFolder(relativeTo window: NSWindow?) -> String? {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Use folder"
-        panel.message = "Choose the project folder for this task"
-        return panel.runModal() == .OK ? panel.url?.path : nil
-    }
-
     /// Recently-used project dirs, most-recent first, with the repo root guaranteed
     /// present as a fallback. Persisted in UserDefaults so the list survives relaunch.
     private func recentProjectDirs() -> [String] {
@@ -1972,9 +1987,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         // rebuilds the same attach from (US-006). It lives on the card's meta too,
         // so the every-mutation task book carries it even if the session dies.
         taskMetaByCard[card.id] = CardTaskMeta(remote: spec)
-        // Same project, other machine: the remote dir's trailing name links this
-        // card's hue to the local checkout of the same project.
-        BoardTheme.linkProject(card: card.id, toDirectory: spec.remoteDir)
         session.recordRemoteSpec(spec)
         // The card attaches in tmux CONTROL MODE: the bridge decodes the wire
         // protocol into pane bytes (local scrollback, smooth wheel, prompt jumps)
@@ -2363,6 +2375,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         }
         _ = worktreeProvisioner.remove(worktreeAt: (card.projectDir as NSString).expandingTildeInPath)
         cards.removeAll { $0.id == cardID }
+        pomodoro.forget(cardID: cardID)
         deadCardIDs.remove(cardID)
         idleHoldUntil.removeValue(forKey: cardID)
         codexChoiceWaitingCardIDs.remove(cardID)
@@ -2391,7 +2404,14 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         quota.isHidden = true
         drillIn.isHidden = false
         drillIn.focus(card: card, pty: pty, terminalFontSize: terminalFontSize)
-        drillIn.updateQuota(QuotaProjection.gauges(from: quotaSources))
+        showTitlebar(for: card)
+        pomodoro.noteDrilledIn(card.id)
+    }
+
+    /// The open task takes the titlebar.
+    private func showTitlebar(for card: BoardCard) {
+        titlebar.show(title: card.title ?? BoardTheme.shortPath(card.projectDir),
+                      directory: TaskTitlebar.directory(of: card))
     }
 
     /// A session-less card — the task book outlived its shell (crash, upgrade, or a
@@ -2542,6 +2562,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         archivePage.isHidden = true
         quota.isHidden = false
         drillIn.isHidden = true
+        titlebar.hide()
         refresh()
         window?.makeFirstResponder(boardView)   // keyboard nav resumes on the board
     }
@@ -2620,12 +2641,16 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         let gauges = QuotaProjection.gauges(from: quotaSources)
         let quotaBlocks = quotaBlocks(for: shown, gauges: gauges)
         let switchMenus = switchMenus(for: shown, gauges: gauges)
-        alertIfAttentionRose(to: Attention.count(shown))
         notifyNewlyDone()
+        // Cards a pomodoro holds wait their turn: dimmed, and not an alarm.
+        let held = Set(pomodoro.state.held)
+        lastHeldCardIDs = held
+        alertIfAttentionRose(to: Attention.count(shown.filter { !held.contains($0.id) }))
         boardView.render(
             cards: shown,
             quotaBlocks: quotaBlocks,
-            switchMenus: switchMenus)
+            switchMenus: switchMenus,
+            held: held)
         if !backlogPage.isHidden { backlogPage.render(backlogTasks) }
         if !archivePage.isHidden { archivePage.render(archivedTasks) }
         if includeQuota {
@@ -2634,10 +2659,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
                 claudeProfiles: agentAccountStore.profiles,
                 claudeProfileByCard: claudeProfileByCardMap())
         }
-        // Keep the drill-in's status pill / waiting banner tracking the live state.
-        if let id = drilledInCardID, let card = shown.first(where: { $0.id == id }) {
-            drillIn.update(state: card.state)
-        }
+        renderPomodoroViews(gauges: gauges)
     }
 
     /// Per-card quota block derived from harness + account + live gauges.
@@ -3000,13 +3022,16 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// change it, so a dead link (e.g. the host lives on a tailnet you are not on
     /// right now) must not drag finished work back into PARKED.
     func displayCards() -> [BoardCard] {
-        guard let sessionsPoller else { return cards }
-        return cards.map { card in
-            guard card.state != .done,
-                  let host = card.host ?? Self.relayHost(of: card),
+        cards.map { card in
+            // A remote card learns its far-side folder here, at render time, so the
+            // project header follows the cwd the far side last reported.
+            let placed = card.remoteDestination == nil
+                ? card : card.with(remoteDir: remoteWorkingDir(for: card))
+            guard let sessionsPoller, placed.state != .done,
+                  let host = placed.host ?? Self.relayHost(of: placed),
                   sessionsPoller.relayHealth(for: host) == .unreachable
-            else { return card }
-            return card.with(state: .unreachable)
+            else { return placed }
+            return placed.with(state: .unreachable)
         }
     }
 
@@ -3045,6 +3070,10 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             } else {
                 workLog?.noteAppeared(card)
             }
+            // A card that starts (or stops) needing you mid-pomodoro is held
+            // (released) by the pomodoro — the same sweep, the same edge. A card
+            // first seen already waiting (a relaunch mid-pomodoro) is held too.
+            if previous != card.state { pomodoro.noteCardState(card.id, state: card.state) }
             guard card.state == .done, previous != nil, previous != .done else { continue }
             guard !NSApp.isActive else { continue }
             SystemNotifier.notifyDone(taskName: card.title ?? BoardTheme.shortPath(card.projectDir))
@@ -3053,6 +3082,92 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         let live = Set(cards.map(\.id))
         lastCardStates = lastCardStates.filter { live.contains($0.key) }
         AttentionClock.shared.retain(live)
+    }
+
+    // MARK: - Pomodoro
+
+    private func wirePomodoro() {
+        pomodoro.onChange = { [weak self] in self?.pomodoroChanged() }
+        pomodoro.onPhaseCompleted = { [weak self] finished, next in
+            self?.pomodoroPhaseCompleted(finished: finished, next: next)
+        }
+        pomodoro.holdForReply = { [weak self] in
+            guard let self, drilledInCardID != nil else { return false }
+            return drillIn.hasUnsentInput
+        }
+        quota.onPomodoroToggle = { [weak self] in self?.pomodoroRingClicked() }
+        quota.onPomodoroRestNow = { [weak self] in self?.pomodoro.restNow() }
+        quota.onPomodoroHint = { [weak self] _ in self?.pomodoro.restNow() }
+        restOverlay.onEndBreak = { [weak self] in self?.pomodoro.endBreak() }
+        restOverlay.onPickCard = { [weak self] in self?.startPomodoroOnHeldCard($0) }
+        drillIn.onSubmit = { [weak self] _ in
+            guard let self, pomodoro.state.awaitingReply else { return }
+            pomodoro.releaseHold()
+        }
+    }
+
+    /// The ring: idle → start on the card you're in (none from the board: drilling
+    /// in tags it); break over → back to the board; otherwise pause / resume.
+    func pomodoroRingClicked() {
+        let state = pomodoro.state
+        if state.phase == .idle {
+            pomodoro.start(cardID: drilledInCardID)
+        } else if state.breakOver {
+            pomodoro.endBreak()
+        } else {
+            pomodoro.toggle()
+        }
+    }
+
+    /// A tray row on the break-over screen: answer that card now, and let the next
+    /// pomodoro count toward it.
+    func startPomodoroOnHeldCard(_ cardID: UUID) {
+        guard let card = cards.first(where: { $0.id == cardID }) else { return }
+        pomodoro.endBreak()
+        drill(into: card)
+        pomodoro.start(cardID: card.id)
+    }
+
+    /// A control or tick moved the state. A change in which cards are held re-renders
+    /// the board (their dimming lives on the card faces); anything else only
+    /// repaints the pomodoro's own views.
+    private func pomodoroChanged() {
+        if Set(pomodoro.state.held) != lastHeldCardIDs {
+            refresh()
+        } else {
+            renderPomodoroViews(gauges: QuotaProjection.gauges(from: quotaSources))
+        }
+    }
+
+    private func pomodoroPhaseCompleted(finished: PomodoroPhase, next: PomodoroPhase) {
+        // Leaving a break (ended early, from the tray, or over): the board is yours
+        // again — the keyboard goes back to where you were, and a standup that
+        // waited for this boundary may run now.
+        guard finished.isBreak, next == .idle, !pomodoro.state.breakOver else { return }
+        if drilledInCardID != nil { drillIn.reclaimKeyboard() } else { window?.makeFirstResponder(boardView) }
+        DispatchQueue.main.async { [weak self] in self?.presentNeedsYouStandupIfNeeded() }
+    }
+
+    /// Repaint the dock, the rest overlay and the drill-in readout from the current
+    /// pomodoro state. Called at the end of every board render and on every tick.
+    private func renderPomodoroViews(gauges: [QuotaGauge]) {
+        let state = pomodoro.state
+        let tagged = state.cardID.flatMap { id in cards.first { $0.id == id } }
+        let hint = PomodoroHint.compute(
+            state: state, gauges: gauges, cards: cards,
+            drilledIn: drilledInCardID != nil, now: pomodoro.now())
+        quota.renderPomodoro(
+            state: state,
+            cardTitle: tagged.map { $0.title ?? BoardTheme.shortPath($0.projectDir) },
+            hint: hint)
+        let rows = state.held.compactMap { id -> PomodoroRestOverlay.TrayRow? in
+            guard let card = cards.first(where: { $0.id == id }) else { return nil }
+            return PomodoroRestOverlay.TrayRow(
+                cardID: id, project: BoardTheme.projectLabel(for: card),
+                title: card.title ?? BoardTheme.shortPath(card.projectDir),
+                waiting: AttentionClock.shared.waitingSince(id).map { pomodoro.now().timeIntervalSince($0) })
+        }
+        restOverlay.render(state: state, held: rows, working: cards.filter(\.state.isWorking).count)
     }
 
     // MARK: - Rule 1: NEEDS YOU standup (docs/OPERATING-RULES.md)
@@ -3080,6 +3195,9 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         guard !needsYouStandupOpen else { return }
         guard drilledInCardID == nil, backlogPage.isHidden,
               archivePage.isHidden, createPalette == nil else { return }
+        // Rule: a standup never interrupts a pomodoro or its break — it waits for
+        // the phase boundary (the break-over tray is that moment's standup).
+        guard pomodoro.allowsStandup else { return }
         let stale = NeedsYouStandup.staleCards(
             among: cards,
             waitingSince: { AttentionClock.shared.waitingSince($0) },
@@ -3126,7 +3244,6 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             gauges: gauges, cards: cards,
             claudeProfiles: agentAccountStore.profiles,
             claudeProfileByCard: claudeProfileByCardMap())
-        drillIn.updateQuota(gauges)   // keep the drill-in header readout live too
     }
 
     /// Merge the live observed-session snapshot onto the board (the event-file tail

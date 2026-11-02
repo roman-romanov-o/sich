@@ -56,21 +56,25 @@ struct TerminalLinkTests {
 
     // MARK: - Resolution
 
-    @Test("file spans resolve: ~ expands, :line strips, relative joins the card dir, ghosts stay dead")
+    @Test("file spans resolve to Zed links: ~ expands, :line:col rides along, relative joins the card dir, ghosts stay dead")
     func fileResolution() throws {
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("sich-links-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("sich links \(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let file = dir.appendingPathComponent("main.swift")
         try Data("x".utf8).write(to: file)
+        let encodedFile = file.path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)!
 
         let absolute = TerminalLink(kind: .file, text: "\(file.path):12:5", columns: 0..<1)
-        #expect(TerminalSurface.resolve(absolute, against: nil)?.path == file.path,
-                "absolute path opens with the :line:col suffix shed")
+        let absoluteURL = TerminalSurface.resolve(absolute, against: nil)
+        #expect(absoluteURL?.absoluteString == "zed://file\(encodedFile):12:5",
+                "absolute path opens in Zed at the quoted line:col, path percent-encoded")
+        #expect(absoluteURL?.scheme == "zed")
 
         let relative = TerminalLink(kind: .file, text: "main.swift:12", columns: 0..<1)
-        #expect(TerminalSurface.resolve(relative, against: dir.path)?.path == file.path,
+        #expect(TerminalSurface.resolve(relative, against: dir.path)?.absoluteString
+                    == "zed://file\(encodedFile):12",
                 "relative path joins the card's project dir")
         #expect(TerminalSurface.resolve(relative, against: nil) == nil,
                 "a relative path with no anchor dir cannot open")

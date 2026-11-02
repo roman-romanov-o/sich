@@ -26,8 +26,7 @@ struct BoardThemeTests {
     /// proof the palette follows the system theme rather than being a fixed dark hex.
     @Test("surface + text tokens differ between light and dark appearance", arguments: [
         "canvas", "cardFill", "cardStroke", "hairline",
-        "needsYouColumn", "needsYouCard",
-        "workingCard", "doneCard",
+        "needsYouColumn", "needsYouCard", "focusColumn", "focusInk",
         "textPrimary", "textMuted", "textFaint", "textDim",
         "termBg", "termFg",
     ])
@@ -41,7 +40,7 @@ struct BoardThemeTests {
     /// A shared accent must resolve IDENTICALLY
     /// in both modes — a regression guard that we didn't accidentally split them.
     @Test("shared accents are identical across appearances", arguments: [
-        "brand", "attention", "alert", ])
+        "brand", "attention", "alert", "needs", ])
     func accentIsStable(_ name: String) throws {
         let token = try #require(Self.tokens[name], "unknown token \(name)")
         let dark = try #require(rgb(token, in: .darkAqua))
@@ -71,7 +70,7 @@ struct BoardThemeTests {
 
         #expect(contrast(fg, card) >= 4.5, "\(name) is too faint on cardFill")
         #expect(contrast(fg, canvas) >= 4.5, "\(name) is too faint on canvas")
-        for (surface, token) in [("workingCard", BoardTheme.workingCard), ("doneCard", BoardTheme.doneCard)] {
+        for (surface, token) in [("focusColumn", BoardTheme.focusColumn), ("needsYouColumn", BoardTheme.needsYouColumn)] {
             let fill = try #require(rgb(token, in: .aqua))
             #expect(contrast(fg, fill) >= 4.5, "\(name) is too faint on \(surface)")
         }
@@ -82,13 +81,12 @@ struct BoardThemeTests {
         "cardStroke": BoardTheme.cardStroke,
         "hairline": BoardTheme.hairline, "needsYouColumn": BoardTheme.needsYouColumn,
         "needsYouCard": BoardTheme.needsYouCard,
-        "workingCard": BoardTheme.workingCard,
-        "doneCard": BoardTheme.doneCard,
+        "focusColumn": BoardTheme.focusColumn, "focusInk": BoardTheme.focusInk,
         "textPrimary": BoardTheme.textPrimary, "textMuted": BoardTheme.textMuted,
         "textFaint": BoardTheme.textFaint,
         "textDim": BoardTheme.textDim, "termBg": BoardTheme.termBg, "termFg": BoardTheme.termFg,
         "brand": BoardTheme.brand, "attention": BoardTheme.attention,
-        "alert": BoardTheme.alert,
+        "alert": BoardTheme.alert, "needs": BoardTheme.needs,
     ]
 
     private func contrast(
@@ -109,37 +107,42 @@ struct BoardThemeTests {
 }
 
 /// Card-title typography policy: ONE font for every title (slug or prose) so a
-/// column scans as a uniform list, with tightened leading for the multi-line
-/// wrap. The attributes are pure logic worth pinning — the pixels stay a visual AC.
+/// column scans as a uniform list — a monospace at medium weight, with the
+/// leading pinned a touch looser than the font default so a wrapped title stays
+/// readable. The attributes are pure logic worth pinning — the pixels stay a visual AC.
 @MainActor
 @Suite("Card title typography")
 struct CardTitleTextTests {
 
-    @Test("every title sets in the same sans anchor", arguments: [
+    @Test("every title sets in the same mono anchor", arguments: [
         "Work on Fonts and Style", "task-06-generations-per-link", "/",
     ])
     func uniformFont(_ title: String) throws {
         let text = BoardTheme.cardTitleText(title, color: .white)
         let font = try #require(text.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
         #expect(font == BoardTheme.cardTitle, "no per-title font forks — uniformity won")
+        #expect(font.isFixedPitch, "titles are task slugs in a terminal tool — they set in mono")
     }
 
-    @Test("the title anchors by size at regular weight, never by emphasis")
-    func regularWeight() throws {
-        let traits = BoardTheme.cardTitle.fontDescriptor.object(forKey: .traits) as? [NSFontDescriptor.TraitKey: Any]
-        let weight = traits?[.weight] as? CGFloat ?? 0
-        #expect(weight == NSFont.Weight.regular.rawValue, "card title drifted back to a heavier weight")
+    /// The bundled title face is what actually draws — not the SF Mono stand-in that
+    /// would silently take over if the TTFs failed to register.
+    @Test("titles, project headers and done rows set in the bundled JetBrains Mono")
+    func bundledTitleFace() {
+        #expect(BoardTheme.cardTitle.fontName == "JetBrainsMono-Medium",
+                "card title drifted off the bundled medium face")
+        #expect(BoardTheme.doneTitle.fontName == "JetBrainsMono-Regular")
+        #expect(BoardTheme.projectHeader.fontName == "JetBrainsMono-SemiBold")
     }
 
-    @Test("titles carry tightened line height for the multi-line wrap")
-    func tightLeading() throws {
+    @Test("titles carry pinned, slightly loosened line height for the multi-line wrap")
+    func pinnedLeading() throws {
         let text = BoardTheme.cardTitleText("Work on Fonts and Style", color: .white)
         let style = try #require(
             text.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)
         let font = try #require(text.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
         #expect(style.maximumLineHeight > 0, "leading must be pinned, not default")
-        #expect(style.maximumLineHeight < font.ascender - font.descender + font.leading,
-                "pinned leading tightens vs the font default")
+        #expect(style.maximumLineHeight == style.minimumLineHeight, "one line height, not a range")
+        #expect(style.maximumLineHeight == (font.pointSize * 1.3).rounded(), "1.3× the size")
         #expect(style.lineBreakMode == .byWordWrapping, "wrapping must survive the paragraph style")
     }
 }

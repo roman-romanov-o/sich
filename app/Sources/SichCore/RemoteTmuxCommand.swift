@@ -433,6 +433,26 @@ public enum RemoteTmuxCommand {
             for: spec, command: "cat \(remoteHome(relativePath)) 2>/dev/null; exit 0")
     }
 
+    /// List the subdirectories of one remote folder — and their subdirectories — for
+    /// the palette's inline completion: two levels per handshake, so stepping into a
+    /// listed folder shows its children with no further round trip, bounded by
+    /// ``FolderCompletion/remoteLineCap`` lines so a far-side `node_modules` cannot
+    /// flood the link.
+    /// The folder comes in on **stdin**, never as a remote shell word: it is free text the
+    /// operator is mid-typing, so interpolating it would hand the far-side shell whatever
+    /// they typed. `read -r` takes the bytes verbatim; only a leading `~` is expanded, by
+    /// us, so the field accepts the same spelling a shell prompt would. A folder that
+    /// cannot be entered exits 3 — distinct from ssh's own 255 — and a listed one exits 0
+    /// even when `ls` had nothing to say.
+    public static func listFoldersArgv(for spec: RemoteTmuxSpec) throws -> [String] {
+        try channelArgv(for: spec, command: listFoldersCommand)
+    }
+
+    static let listFoldersCommand =
+        #"IFS= read -r d; case "$d" in "") d="$HOME";; "~") d="$HOME";; "~/"*) d="$HOME/${d#\~/}";; esac; "#
+        + #"cd -- "$d" 2>/dev/null || exit 3; "#
+        + "find -L . -mindepth 1 -maxdepth 2 -type d 2>/dev/null | head -n \(FolderCompletion.remoteLineCap); exit 0"
+
     private static func isSafeHomeRelative(_ path: String) -> Bool {
         !path.isEmpty && !path.contains("..")
             && path.unicodeScalars.allSatisfy {
@@ -477,8 +497,23 @@ public enum RemoteTmuxCommand {
     /// to. A fixed literal, never a caller-supplied path.
     static let remoteEventLog = ".sich/events.jsonl"
 
+    /// Seconds between the far side's liveness beats (see ``relayCommand``).
+    static let relayHeartbeatSeconds = 15
+
+    /// `tail -F` on the event log, plus a heartbeat: one empty line on STDERR every
+    /// ``relayHeartbeatSeconds`` while `tail` is alive.
+    ///
+    /// The beat is what lets the relay tell "quiet host" from "dead session". ssh's
+    /// keepalive only proves the TRANSPORT answers; on 2026-11-02 a remote tailscaled
+    /// restart left a relay ssh ESTABLISHED for an hour with no `tail` behind it, so
+    /// nothing exited and nothing reconnected. The beat rides stderr, a separate ssh
+    /// channel, so it can never land inside a multi-MB event line on stdout.
+    /// `trap '' PIPE` turns a closed channel into a failing `echo` (instead of a
+    /// silent shell death), which ends the loop and takes `tail` down with it.
     static var relayCommand: String {
-        "tail -n \(relayReplayLines) -F \(remoteHome(remoteEventLog))"
+        "trap '' PIPE; tail -n \(relayReplayLines) -F \(remoteHome(remoteEventLog)) & t=$!; "
+            + "while kill -0 $t 2>/dev/null && echo >&2; do sleep \(relayHeartbeatSeconds); done; "
+            + "kill $t 2>/dev/null"
     }
 
     /// ~45s worst case before a wedged link is declared dead (DD-001).

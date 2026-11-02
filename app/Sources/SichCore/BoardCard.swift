@@ -127,6 +127,11 @@ public struct BoardCard: Identifiable, Sendable, Equatable {
     /// session id in the same project dir, and only this keeps them apart
     /// (US-004 AC-3).
     public let host: String?
+    /// The far-side working directory of a remote card — the spec's start folder, or
+    /// the cwd the far side last reported — so the board can file it under the same
+    /// project as a local checkout of the same repo. `nil` for a local card, and for
+    /// a remote card whose folder nothing has told us yet.
+    public let remoteDir: String?
 
     public init(
         id: UUID = UUID(),
@@ -139,7 +144,8 @@ public struct BoardCard: Identifiable, Sendable, Equatable {
         accumulatedWorkingTime: TimeInterval = 0,
         updatedAt: Date = .distantPast,
         boundCardID: String? = nil,
-        host: String? = nil
+        host: String? = nil,
+        remoteDir: String? = nil
     ) {
         self.id = id
         self.sessionID = sessionID
@@ -152,6 +158,14 @@ public struct BoardCard: Identifiable, Sendable, Equatable {
         self.updatedAt = updatedAt
         self.boundCardID = boundCardID
         self.host = host
+        self.remoteDir = remoteDir
+    }
+
+    /// The ssh destination a remote card runs on — a remote card carries it as its
+    /// `projectDir`, tagged by a `remote/<host>/<session>` session id. `nil` for a
+    /// local card.
+    public var remoteDestination: String? {
+        RemoteSessionKey.parse(sessionID: sessionID) == nil ? nil : projectDir
     }
 
     /// The same card in a new lifecycle state — identity, title, dir, and agent
@@ -173,7 +187,7 @@ public struct BoardCard: Identifiable, Sendable, Equatable {
             id: id, sessionID: sessionID, title: title, projectDir: projectDir,
             agent: agent, state: newState, workingSince: nextWorkingSince,
             accumulatedWorkingTime: nextAccumulated, updatedAt: updatedAt,
-            boundCardID: boundCardID, host: host
+            boundCardID: boundCardID, host: host, remoteDir: remoteDir
         )
     }
 
@@ -195,7 +209,7 @@ public struct BoardCard: Identifiable, Sendable, Equatable {
             id: id, sessionID: sessionID, title: title, projectDir: projectDir,
             agent: agent, state: state, workingSince: workingSince,
             accumulatedWorkingTime: duration, updatedAt: updatedAt,
-            boundCardID: boundCardID, host: host
+            boundCardID: boundCardID, host: host, remoteDir: remoteDir
         )
     }
 
@@ -205,7 +219,7 @@ public struct BoardCard: Identifiable, Sendable, Equatable {
             id: id, sessionID: sessionID, title: title, projectDir: projectDir,
             agent: newAgent, state: state, workingSince: workingSince,
             accumulatedWorkingTime: accumulatedWorkingTime, updatedAt: updatedAt,
-            boundCardID: boundCardID, host: host
+            boundCardID: boundCardID, host: host, remoteDir: remoteDir
         )
     }
 
@@ -220,7 +234,17 @@ public struct BoardCard: Identifiable, Sendable, Equatable {
             projectDir: projectDir, agent: agent, state: state,
             workingSince: workingSince, accumulatedWorkingTime: accumulatedWorkingTime,
             updatedAt: updatedAt,
-            boundCardID: boundCardID, host: host
+            boundCardID: boundCardID, host: host, remoteDir: remoteDir
+        )
+    }
+
+    /// The same card with the far side's working directory learned (or refreshed).
+    public func with(remoteDir newDir: String?) -> BoardCard {
+        BoardCard(
+            id: id, sessionID: sessionID, title: title, projectDir: projectDir,
+            agent: agent, state: state, workingSince: workingSince,
+            accumulatedWorkingTime: accumulatedWorkingTime, updatedAt: updatedAt,
+            boundCardID: boundCardID, host: host, remoteDir: newDir
         )
     }
 }

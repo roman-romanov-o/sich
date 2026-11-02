@@ -340,13 +340,14 @@ struct FixtureRelayTransport: RemoteLineTransport {
     func start(
         argv: [String],
         onLines: @escaping @Sendable ([Data]) -> Void,
+        onHeartbeat: @escaping @Sendable () -> Void,
         onExit: @escaping @Sendable (Int32) -> Void
     ) -> RemoteLineStream? {
         guard let command = argv.last else { return nil }
         return ProcessLineStream(
             executable: "/bin/sh", arguments: ["-c", command],
             environment: ["HOME": home.path, "PATH": "/usr/bin:/bin"],
-            onLines: onLines, onExit: onExit)
+            onLines: onLines, onHeartbeat: onHeartbeat, onExit: onExit)
     }
 }
 

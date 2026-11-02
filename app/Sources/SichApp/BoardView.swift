@@ -1,13 +1,16 @@
 import AppKit
 import SichCore
 
-/// The mission-control board surface (US-003), in the Mission Control v5 layout:
-/// six live columns — QUEUE / PARKED / WORKING / NEEDS YOU / BLOCKED / DONE —
-/// instead of raw state columns × flow swimlanes. DONE can be folded into a
-/// narrow rail (``DoneRail``) so a laptop-width board spends its width on the
-/// three live columns; the fold persists across launches. Flow is card
-/// metadata now (the harness badge + an "auto" marker on autonomous
-/// cards only), not a lane.
+/// The mission-control board surface (US-003): six lanes, left→right —
+/// BACKLOG / QUEUE / WORKING / NEEDS YOU / BLOCKED / DONE. DONE can be folded
+/// into a narrow rail (``DoneRail``) so a laptop-width board spends its width on
+/// the live lanes; the fold persists across launches. Flow is card metadata (the
+/// harness mark on the card footer), not a lane.
+///
+/// One signal: NEEDS YOU is the only lane with a hue of its own. Beyond it the
+/// board lights exactly one lane — the *focus* — where the operator should look
+/// next (``focus(for:)``). Cards fall under their project inside a lane, so the
+/// repo is read once per cluster and the card face spends its rows on the title.
 ///
 /// It is a projection of a `[BoardCard]` snapshot: ``render(cards:)`` lays the
 /// cards out by attention group. Live column moves come from the host re-calling
@@ -36,9 +39,9 @@ final class BoardView: NSView {
     /// The archive icon beside DONE was tapped — the host opens the archive page.
     var onShowArchive: (() -> Void)?
 
-    /// The v5 column groups, left→right.
+    /// The column groups, left→right.
     enum ColumnGroup: CaseIterable {
-        case queue, parked, working, needsYou, blocked, done
+        case parked, queue, working, needsYou, blocked, done
 
         /// Every `CardState` lands in exactly one group — total, so no card can
         /// silently vanish from the board (the `.unknown` regression).
@@ -58,8 +61,8 @@ final class BoardView: NSView {
 
         var title: String {
             switch self {
+            case .parked: return "BACKLOG"
             case .queue: return "QUEUE"
-            case .parked: return "PARKED"
             case .working: return "WORKING"
             case .needsYou: return "NEEDS YOU"
             case .blocked: return "BLOCKED"
@@ -79,16 +82,18 @@ final class BoardView: NSView {
             case .done: return .done
             }
         }
+    }
 
-        /// The pulsing status dot next to the header — only the live columns get one.
-        @MainActor var dotColor: NSColor? {
-            switch self {
-            case .needsYou: return BoardTheme.attention
-            case .working: return BoardTheme.stateColor(.running)
-            case .blocked: return BoardTheme.stateColor(.blocked)
-            case .queue, .parked, .done: return nil
-            }
-        }
+    /// Where the operator's attention should go next: NEEDS YOU whenever it holds
+    /// a card; otherwise — everything is working or at rest, nothing will ask for
+    /// you in the next minutes — back to QUEUE to pull or create the next task;
+    /// with an empty QUEUE, to BACKLOG to promote one. With nothing anywhere the
+    /// + beside QUEUE is the only move left.
+    static func focus(for counts: [ColumnGroup: Int]) -> ColumnGroup {
+        if counts[.needsYou, default: 0] > 0 { return .needsYou }
+        if counts[.queue, default: 0] > 0 { return .queue }
+        if counts[.parked, default: 0] > 0 { return .parked }
+        return .queue
     }
 
     /// Where the DONE fold choice lives; tests hand in a throwaway suite.
@@ -97,7 +102,7 @@ final class BoardView: NSView {
     /// Width of the DONE column while collapsed — just the header chrome, stacked.
     static let doneRailWidth: CGFloat = 44
 
-    /// DONE folded into a narrow rail so the three live columns get its width.
+    /// DONE folded into a narrow rail so the live columns get its width.
     /// Finished cards are still counted there; expand to read or drop onto them.
     private(set) var isDoneCollapsed: Bool
 
@@ -116,25 +121,23 @@ final class BoardView: NSView {
 
     private let groups = ColumnGroup.allCases
     private var cells: [ColumnGroup: BoardCell] = [:]
-    /// Cards in render order (QUEUE column top→bottom, then WORKING, …) — the
+    /// Cards in render order (BACKLOG column top→bottom, then QUEUE, …) — the
     /// linear path arrow keys walk. Rebuilt on every render; focus re-found by id.
     private var orderedCards: [SessionCard] = []
     private var focusedCardID: UUID?
     /// Per-column count captions, updated on every render.
     private var countLabels: [ColumnGroup: NSTextField] = [:]
-    /// What a lane's emptiness toggles: its column surface, caps title and dot.
-    private var laneViews: [ColumnGroup: (column: NSView, title: NSTextField, dot: NSView?)] = [:]
-    /// Every column view, folded DONE rail included, in board order.
-    private var columnViews: [ColumnGroup: NSView] = [:]
-    /// Each lane's header row — its width is what an empty lane shrinks to.
-    private var laneHeaders: [ColumnGroup: NSView] = [:]
-    /// The lanes currently drawn at header width, and the width constraints that
-    /// put them there. Re-solved only when the set of empty lanes changes.
-    private var compactLanes: Set<ColumnGroup>?
-    private var laneWidthConstraints: [NSLayoutConstraint] = []
+    /// What a lane's tone touches: its column surface and caps title.
+    private var laneViews: [ColumnGroup: (column: NSView, title: NSTextField)] = [:]
+    /// The + beside QUEUE — brand blue only while QUEUE is the lit lane.
+    private weak var createControl: NSButton?
+    /// The lit lane after the last render; `nil` before the first one, so launch
+    /// does not animate and a lane only breathes when the focus actually moves.
+    private var lastFocus: ColumnGroup?
     private var lastCards: [BoardCard] = []
     private var lastQuotaBlocks: [UUID: CardQuotaBlock] = [:]
     private var lastSwitchMenus: [UUID: CardSwitchMenu] = [:]
+    /// Cards a running pomodoro / break is holding — drawn dimmed.
     /// What each cell was last populated from — the render diff's memory. Cleared
     /// whenever the scaffold (and thus every cell) is rebuilt.
     private var columnFaces: [ColumnGroup: [CardFace]] = [:]
@@ -148,22 +151,20 @@ final class BoardView: NSView {
 
     required init?(coder: NSCoder) { nil }
 
-    // MARK: - Scaffold (built once): four equal columns filling the surface
+    // MARK: - Scaffold (built once): equal columns filling the surface
 
+    /// Lanes keep a fixed, equal width (DONE at ``narrowDoneRatio`` in a portrait
+    /// window), so the only thing that ever moves on the board is a card.
     private func buildScaffold() {
         subviews.forEach { $0.removeFromSuperview() }
         constraints.forEach { $0.isActive = false }
         cells = [:]
         countLabels = [:]
         laneViews = [:]
-        columnViews = [:]
-        laneHeaders = [:]
-        compactLanes = nil
-        laneWidthConstraints = []
         columnFaces = [:]
+        lastFocus = nil
         var previous: NSView?
-        // QUEUE → PARKED → WORKING → NEEDS YOU → BLOCKED → DONE. The unfinished
-        // backlog UI stays out of this live-work surface.
+        var anchor: NSView?
         for group in groups {
             let collapsed = group == .done && isDoneCollapsed
             let column = collapsed ? makeDoneRail() : makeColumn(group)
@@ -177,50 +178,20 @@ final class BoardView: NSView {
             ])
             if collapsed {
                 column.widthAnchor.constraint(equalToConstant: Self.doneRailWidth).isActive = true
-            }
-            columnViews[group] = column
-            previous = column
-        }
-        previous?.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
-        applyLaneWidths(compact: [])
-    }
-
-    /// Lane widths. A lane with cards shares the free width equally with the other
-    /// occupied lanes (DONE at ``narrowDoneRatio`` in a portrait window); an EMPTY
-    /// lane shrinks to its header, so an idle NEEDS YOU no longer costs a busy
-    /// QUEUE its width — the wrapping and truncation on real boards came from that.
-    /// A board with every lane empty keeps the even split (nothing to favour).
-    private func applyLaneWidths(compact requested: Set<ColumnGroup>) {
-        let live = groups.filter { !(isDoneCollapsed && $0 == .done) }
-        let compact = requested.count >= live.count ? [] : requested
-        guard compact != compactLanes else { return }
-        compactLanes = compact
-        NSLayoutConstraint.deactivate(laneWidthConstraints)
-        laneWidthConstraints = []
-        var anchor: NSView?
-        for group in live {
-            guard let column = columnViews[group] else { continue }
-            if compact.contains(group), let header = laneHeaders[group] {
-                let gutter: CGFloat = group == .done && isDoneNarrow ? 10 : 20
-                let width = ceil(header.fittingSize.width) + gutter * 2
-                laneWidthConstraints.append(column.widthAnchor.constraint(equalToConstant: width))
             } else if let anchor {
                 let ratio = group == .done && isDoneNarrow ? Self.narrowDoneRatio : 1
-                laneWidthConstraints.append(column.widthAnchor.constraint(
-                    equalTo: anchor.widthAnchor, multiplier: ratio))
+                column.widthAnchor.constraint(equalTo: anchor.widthAnchor, multiplier: ratio).isActive = true
             } else {
                 anchor = column
             }
+            previous = column
         }
-        NSLayoutConstraint.activate(laneWidthConstraints)
+        previous?.trailingAnchor.constraint(equalTo: trailingAnchor).isActive = true
     }
 
     private func makeColumn(_ group: ColumnGroup) -> NSView {
         let column = NSView()
         column.wantsLayer = true
-        // NEEDS YOU / BLOCKED take their tint from ``applyLaneTone`` once their
-        // count is known; PARKED is always the quiet sunken shelf.
-        if group == .parked { column.themedBackground = BoardTheme.parkedColumn }
         if group != .done { addRightHairline(to: column) }
 
         // A narrow DONE spends its little width on the cards, not the gutters.
@@ -305,9 +276,9 @@ final class BoardView: NSView {
         render(cards: lastCards)
     }
 
-    /// Centered lane signage: dot + TITLE + count travel as one cluster (a
-    /// centered title with the count still glued to the right edge would read
-    /// as two disconnected floats). Equal-width spacers do the centering.
+    /// Centered lane signage: TITLE + count travel as one cluster (a centered
+    /// title with the count still glued to the right edge would read as two
+    /// disconnected floats). Equal-width spacers do the centering.
     private func columnHeader(_ group: ColumnGroup, column: NSView) -> NSView {
         let row = NSStackView()
         row.spacing = 8
@@ -317,17 +288,18 @@ final class BoardView: NSView {
         let lead = NSView()
         let trail = NSView()
         row.addArrangedSubview(lead)
-        let dot = group.dotColor.map { stateDot($0, pulses: group == .needsYou) }
-        if let dot { row.addArrangedSubview(dot) }
         let title = label(group.title, font: BoardTheme.columnTitle, color: BoardTheme.textMuted)
         row.addArrangedSubview(title)
-        laneViews[group] = (column, title, dot)
-        laneHeaders[group] = row
-        applyLaneTone(group, count: 0)
-        let count = label("", font: BoardTheme.numeric, color: BoardTheme.textFaint)
+        laneViews[group] = (column, title)
+        let count = label("0", font: BoardTheme.laneCount, color: BoardTheme.textMuted)
         countLabels[group] = count
         row.addArrangedSubview(count)
-        if group == .queue { row.addArrangedSubview(createButton()) }
+        applyLaneTone(group, count: 0, focused: false)
+        if group == .queue {
+            let create = createButton()
+            createControl = create
+            row.addArrangedSubview(create)
+        }
         if group == .done {
             row.addArrangedSubview(archiveButton())
             row.addArrangedSubview(doneToggleButton())
@@ -341,36 +313,13 @@ final class BoardView: NSView {
         return row
     }
 
-    /// The lane dot. Only NEEDS YOU breathes — it is the one header that asks
-    /// for the operator; WORKING's cards already carry their own live pulse and
-    /// BLOCKED is static by definition, so motion there was just noise.
-    private func stateDot(_ color: NSColor, pulses: Bool) -> NSView {
-        let dot = NSView()
-        dot.themedBackground = color
-        dot.layer?.cornerRadius = 3.5
-        dot.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            dot.widthAnchor.constraint(equalToConstant: 7),
-            dot.heightAnchor.constraint(equalToConstant: 7),
-        ])
-        guard pulses, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return dot }
-        let pulse = CABasicAnimation(keyPath: "opacity")
-        pulse.fromValue = 1.0
-        pulse.toValue = 0.35
-        pulse.duration = 1.2
-        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        pulse.autoreverses = true
-        pulse.repeatCount = .infinity
-        dot.layer?.add(pulse, forKey: "pulse")
-        return dot
-    }
-
     /// A large, familiar add symbol beside QUEUE: new work enters the board here.
+    /// Quiet by default; it takes the brand blue only while QUEUE is the lit lane.
     /// The tooltip and accessibility label preserve the text cue without spending
     /// a second row on visible helper copy.
     private func createButton() -> NSButton {
         BoardSymbolButton.make(
-            symbol: "plus.circle.fill", pointSize: 17, tint: BoardTheme.brand,
+            symbol: "plus.circle.fill", pointSize: 17, tint: BoardTheme.textFaint,
             identifier: "add-task", description: "Add task",
             target: self, action: #selector(createTapped))
     }
@@ -430,7 +379,8 @@ final class BoardView: NSView {
     func render(
         cards: [BoardCard],
         quotaBlocks: [UUID: CardQuotaBlock] = [:],
-        switchMenus: [UUID: CardSwitchMenu] = [:]
+        switchMenus: [UUID: CardSwitchMenu] = [:],
+        held: Set<UUID> = []
     ) {
         lastCards = cards
         lastQuotaBlocks = quotaBlocks
@@ -439,13 +389,23 @@ final class BoardView: NSView {
         for card in cards {
             byGroup[ColumnGroup.group(for: card.state), default: []].append(card)
         }
+        let counts = byGroup.mapValues(\.count)
+        // A held card (NEEDS YOU raised mid-pomodoro) looks like any other card —
+        // it only waits quietly: no lane focus, no alert, no standup until the break.
+        var focusCounts = counts
+        focusCounts[.needsYou] = (byGroup[.needsYou] ?? []).filter { !held.contains($0.id) }.count
+        let focus = Self.focus(for: focusCounts)
         for group in groups {
             renderColumn(group, cards: byGroup[group] ?? [])
-            let count = byGroup[group]?.count ?? 0
-            countLabels[group]?.stringValue = countCaption(group, count: count)
-            applyLaneTone(group, count: count)
+            let count = counts[group] ?? 0
+            countLabels[group]?.stringValue = "\(count)"
+            applyLaneTone(group, count: count, focused: group == focus)
         }
-        applyLaneWidths(compact: Set(groups.filter { (byGroup[$0] ?? []).isEmpty }))
+        // Focus landing on an EMPTY queue is an invitation to create: the + breathes.
+        if focus == .queue, counts[.queue, default: 0] == 0, lastFocus != nil, lastFocus != .queue {
+            breatheCreateControl()
+        }
+        lastFocus = focus
         // Keyboard order follows the model snapshot order. Visual placement still
         // happens by column above, but arrow-key traversal stays stable across live
         // state moves so focus does not jump when a card changes columns.
@@ -453,32 +413,74 @@ final class BoardView: NSView {
         restoreKeyboardFocus()
     }
 
-    /// An empty lane is quiet (US-005 AC#3, no false alarm): no tinted surface,
-    /// no dot, a muted title. NEEDS YOU and BLOCKED only light up — tint, coloured
-    /// title, live dot — while they actually hold a card.
-    private func applyLaneTone(_ group: ColumnGroup, count: Int) {
+    /// The lit lane. NEEDS YOU keeps its red while it holds a card (US-005 AC#3:
+    /// an empty NEEDS YOU is quiet, no false alarm); any other lit lane lifts a
+    /// shade toward the brand blue with its title in the focus ink. The handoff is
+    /// a 300ms crossfade of the surface — system-driven and frequent, so no movement.
+    private func applyLaneTone(_ group: ColumnGroup, count: Int, focused: Bool) {
         guard let lane = laneViews[group] else { return }
-        let active = count > 0
-        lane.dot?.isHidden = !active
-        let titleColor: NSColor = switch (group, active) {
-        case (.needsYou, true): BoardTheme.attention
-        case (.blocked, true): BoardTheme.stateColor(.blocked)
-        default: BoardTheme.textMuted
-        }
+        let needsLit = group == .needsYou && count > 0
+        let background: NSColor? = needsLit ? BoardTheme.needsYouColumn
+            : focused ? BoardTheme.focusColumn : nil
+        let ink: NSColor = needsLit ? BoardTheme.needs
+            : focused ? BoardTheme.focusInk : BoardTheme.textMuted
         // Only the colour changes here; the caps keep the font the header was built
         // with, so a re-tone never resizes one title out of step with its count.
         let caps = NSMutableAttributedString(
-            attributedString: BoardTheme.caps(group.title, color: titleColor))
+            attributedString: BoardTheme.caps(group.title, color: ink))
         if let font = lane.title.font {
             caps.addAttribute(.font, value: font, range: NSRange(location: 0, length: caps.length))
         }
         lane.title.attributedStringValue = caps
-        switch group {
-        case .needsYou: lane.column.themedBackground = active ? BoardTheme.needsYouColumn : nil
-        case .blocked: lane.column.themedBackground = active ? BoardTheme.blockedColumn : nil
-        default: break
+        countLabels[group]?.textColor = ink
+        if group == .queue {
+            createControl?.contentTintColor = focused ? BoardTheme.brand : BoardTheme.textFaint
         }
+        crossfade(lane.column, to: background)
     }
+
+    /// Set a lane's surface, fading from whatever it shows now when motion is on.
+    private func crossfade(_ column: NSView, to color: NSColor?) {
+        guard column.themedBackground != color else { return }
+        guard let layer = column.layer, lastFocus != nil, Self.motionAllowed else {
+            column.themedBackground = color
+            return
+        }
+        let from = layer.presentation()?.backgroundColor ?? layer.backgroundColor
+        column.themedBackground = color
+        let fade = CABasicAnimation(keyPath: "backgroundColor")
+        fade.fromValue = from ?? NSColor.clear.cgColor
+        fade.toValue = layer.backgroundColor ?? NSColor.clear.cgColor
+        fade.duration = 0.3
+        fade.timingFunction = Self.easeOut
+        layer.add(fade, forKey: "lane-tone")
+    }
+
+    /// The + swells twice — the one invitation the board makes.
+    private func breatheCreateControl() {
+        guard Self.motionAllowed, let button = createControl, let layer = button.layer else { return }
+        let cx = button.bounds.midX, cy = button.bounds.midY
+        func scaled(_ s: CGFloat) -> CATransform3D {
+            var t = CATransform3DMakeTranslation(cx, cy, 0)
+            t = CATransform3DScale(t, s, s, 1)
+            return CATransform3DTranslate(t, -cx, -cy, 0)
+        }
+        let breathe = CAKeyframeAnimation(keyPath: "transform")
+        breathe.values = [scaled(1), scaled(1.18), scaled(1)]
+        breathe.keyTimes = [0, 0.4, 1]
+        breathe.duration = 1.1
+        breathe.repeatCount = 2
+        breathe.timingFunction = Self.easeOut
+        layer.add(breathe, forKey: "breathe")
+    }
+
+    static let easeOut = CAMediaTimingFunction(controlPoints: 0.23, 1, 0.32, 1)
+    static var motionAllowed: Bool {
+        motionOverrideForTesting ?? !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+    /// Test seam: pin the Reduce Motion reading so a test's outcome does not depend
+    /// on the machine's accessibility settings.
+    static var motionOverrideForTesting: Bool?
 
     private func renderColumn(_ group: ColumnGroup, cards: [BoardCard]) {
         guard let cell = cells[group] else { return }
@@ -489,12 +491,29 @@ final class BoardView: NSView {
         // zoom rebuilds stay still.
         let previous = columnFaces[group].map { Set($0.map(\.card.id)) }
         columnFaces[group] = faces
+        // A card leaving this lane keeps its old view behind as a ghost that closes
+        // up where it stood, so the cards below slide together by layout.
+        let staying = Set(cards.map(\.id))
+        let departed: [(SessionCard, Int)] = previous == nil ? [] :
+            cell.arrangedSubviews.enumerated().compactMap { index, view in
+                guard let card = view as? SessionCard, !card.isGhost,
+                      !staying.contains(card.card.id) else { return nil }
+                return (card, index)
+            }
         cell.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        for card in cards {
-            let view = cardView(card)
-            cell.addArrangedSubview(view)
-            view.widthAnchor.constraint(equalTo: cell.widthAnchor).isActive = true
-            if let previous, !previous.contains(card.id) { view.animateArrival() }
+        var arrivals: [SessionCard] = []
+        for (label, members) in Self.projectGroups(cards) {
+            let header = ProjectHeader(label: label, count: members.count)
+            cell.addArrangedSubview(header)
+            header.widthAnchor.constraint(equalTo: cell.widthAnchor).isActive = true
+            for (index, card) in members.enumerated() {
+                let view = cardView(card)
+                view.sheenPhase = index
+                cell.addArrangedSubview(view)
+                view.widthAnchor.constraint(equalTo: cell.widthAnchor).isActive = true
+                if let previous, !previous.contains(card.id) { arrivals.append(view) }
+            }
+            if let last = cell.arrangedSubviews.last { cell.setCustomSpacing(14, after: last) }
         }
         // A clear filler at the end of the cell absorbs the column's slack height
         // so cards pack at the top (the cell itself is stretched full-height to be
@@ -502,6 +521,76 @@ final class BoardView: NSView {
         let filler = NSView()
         filler.setContentHuggingPriority(.init(1), for: .vertical)
         cell.addArrangedSubview(filler)
+        for view in arrivals {
+            view.animateArrival()
+            expandIn(view, in: cell)
+        }
+        for (ghost, index) in departed { collapseOut(ghost, in: cell, at: index) }
+    }
+
+    /// Cards within a lane fall under their project, in the order the lane first
+    /// met each project.
+    static func projectGroups(_ cards: [BoardCard]) -> [(label: String, cards: [BoardCard])] {
+        var order: [String] = []
+        var members: [String: [BoardCard]] = [:]
+        for card in cards {
+            let key = BoardTheme.projectLabel(for: card)
+            if members[key] == nil { order.append(key) }
+            members[key, default: []].append(card)
+        }
+        return order.map { ($0, members[$0] ?? []) }
+    }
+
+    /// The arriving card grows from a closed line to its full height while it
+    /// fades in — the cards below are pushed down by layout, so no sibling needs an
+    /// animation of its own. Reduce Motion keeps the fade and skips the growth.
+    private func expandIn(_ view: SessionCard, in cell: BoardCell) {
+        guard Self.motionAllowed else { return }
+        cell.layoutSubtreeIfNeeded()
+        let height = view.frame.height
+        guard height > 0 else { return }
+        let closed = view.heightAnchor.constraint(equalToConstant: 0)
+        view.layer?.masksToBounds = true
+        closed.isActive = true
+        cell.layoutSubtreeIfNeeded()
+        // The async form keeps the clean-up on the main actor: the completion-handler
+        // form hands AppKit a @Sendable closure that may not touch views or constraints.
+        Task { @MainActor in
+            await NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.32
+                context.timingFunction = Self.easeOut
+                context.allowsImplicitAnimation = true
+                closed.animator().constant = height
+                cell.layoutSubtreeIfNeeded()
+            }
+            closed.isActive = false
+            view.layer?.masksToBounds = false
+        }
+    }
+
+    /// A ghost of the departed card is put back where it was and closes up, so the
+    /// source lane's cards slide together by layout rather than by transform.
+    private func collapseOut(_ ghost: SessionCard, in cell: BoardCell, at index: Int) {
+        guard Self.motionAllowed else { return }
+        ghost.becomeGhost()
+        let slot = min(index, max(0, cell.arrangedSubviews.count - 1))   // before the filler
+        cell.insertArrangedSubview(ghost, at: slot)
+        ghost.widthAnchor.constraint(equalTo: cell.widthAnchor).isActive = true
+        cell.layoutSubtreeIfNeeded()
+        let open = ghost.heightAnchor.constraint(equalToConstant: ghost.frame.height)
+        open.isActive = true
+        ghost.layer?.masksToBounds = true
+        Task { @MainActor in
+            await NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.28
+                context.timingFunction = CAMediaTimingFunction(controlPoints: 0.4, 0, 0.6, 1)
+                context.allowsImplicitAnimation = true
+                open.animator().constant = 0
+                ghost.animator().alphaValue = 0
+                cell.layoutSubtreeIfNeeded()
+            }
+            ghost.removeFromSuperview()
+        }
     }
 
     private func face(_ card: BoardCard) -> CardFace {
@@ -520,7 +609,7 @@ final class BoardView: NSView {
     private func orderedViews(for cards: [BoardCard]) -> [SessionCard] {
         var byID: [UUID: SessionCard] = [:]
         for cell in cells.values {
-            for view in cell.arrangedSubviews.compactMap({ $0 as? SessionCard }) {
+            for view in cell.arrangedSubviews.compactMap({ $0 as? SessionCard }) where !view.isGhost {
                 byID[view.card.id] = view
             }
         }
@@ -530,15 +619,6 @@ final class BoardView: NSView {
     func applyFontScale() {
         buildScaffold()
         render(cards: lastCards, quotaBlocks: lastQuotaBlocks, switchMenus: lastSwitchMenus)
-    }
-
-    private func countCaption(_ group: ColumnGroup, count: Int) -> String {
-        switch group {
-        case .needsYou: return count == 0 ? "" : "\(count)"
-        case .working: return count == 0 ? "" : "\(count)"
-        case .queue, .parked, .blocked: return count == 0 ? "" : "\(count)"
-        case .done: return count == 0 ? "" : "\(count)"
-        }
     }
 
     // MARK: - Keyboard navigation (arrow keys move focus, Return drills in)
@@ -620,6 +700,55 @@ final class BoardView: NSView {
     }
 }
 
+/// The header over one project's cards inside a lane: a neutral dot, the repo
+/// name (mono, truncated in the middle — names differ at the end), and the
+/// cluster's size when it is more than one card.
+@MainActor
+final class ProjectHeader: NSView {
+    init(label: String, count: Int) {
+        super.init(frame: .zero)
+        identifier = NSUserInterfaceItemIdentifier("project-header")
+        let row = NSStackView()
+        row.spacing = 6
+        row.alignment = .centerY
+        row.edgeInsets = NSEdgeInsets(top: 0, left: 2, bottom: 0, right: 2)
+        row.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(row)
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: leadingAnchor),
+            row.trailingAnchor.constraint(equalTo: trailingAnchor),
+            row.topAnchor.constraint(equalTo: topAnchor),
+            row.bottomAnchor.constraint(equalTo: bottomAnchor),
+            heightAnchor.constraint(equalToConstant: 14),
+        ])
+        let dot = NSView()
+        dot.themedBackground = BoardTheme.cardStrokeStrong
+        dot.layer?.cornerRadius = 3
+        dot.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            dot.widthAnchor.constraint(equalToConstant: 6),
+            dot.heightAnchor.constraint(equalToConstant: 6),
+        ])
+        row.addArrangedSubview(dot)
+        let name = NSTextField(labelWithString: label)
+        name.font = BoardTheme.projectHeader
+        name.textColor = BoardTheme.textFaint
+        name.lineBreakMode = .byTruncatingMiddle
+        name.toolTip = label
+        name.yieldWidthToWindow(.defaultLow)
+        row.addArrangedSubview(name)
+        row.addArrangedSubview(NSView())   // flexible spacer
+        if count > 1 {
+            let size = NSTextField(labelWithString: "\(count)")
+            size.font = BoardTheme.numericSmall
+            size.textColor = BoardTheme.textDim
+            row.addArrangedSubview(size)
+        }
+    }
+
+    required init?(coder: NSCoder) { nil }
+}
+
 /// Board-level chrome uses a filled surface instead of a bezel. The darker resting
 /// fill keeps the control discoverable on the canvas; hover raises it without adding
 /// an outline that could be confused with an attention or keyboard-focus edge.
@@ -685,7 +814,8 @@ final class BoardCell: NSStackView {
         super.init(frame: .zero)
         orientation = .vertical
         alignment = .leading
-        spacing = 10
+        // Cards of one project sit 8pt apart; the next project starts 14pt below.
+        spacing = 8
         distribution = .fill
         registerForDraggedTypes([Self.cardType])
         wantsLayer = true

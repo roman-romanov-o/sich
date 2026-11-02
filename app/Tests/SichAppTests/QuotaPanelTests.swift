@@ -32,9 +32,9 @@ struct QuotaPanelTests {
     /// remaining → TWO distinct Anthropic gauges, each its own remaining + reset,
     /// NOT merged into one number.
     /// With a second Claude account the badge alone no longer says whose pools a
-    /// row shows. The account name gets a full-width caption instead of a sliver
-    /// truncated inside the 36pt logo rail.
-    @Test("a second Claude account is captioned by name at full row width")
+    /// block shows. The account name rides beside the provider name in the
+    /// block's own header line.
+    @Test("a second Claude account is captioned by name beside the provider")
     func secondAccountCaptionIsReadable() throws {
         let panel = QuotaPanel(frame: NSRect(x: 0, y: 0, width: 460, height: 560))
         let work = ClaudeProfile(id: UUID(), name: "Work account", configDir: "~/.claude-work")
@@ -48,9 +48,9 @@ struct QuotaPanelTests {
         let captions = textFields(in: panel, identifier: "quota-account-name")
         #expect(captions.map(\.stringValue) == ["Default", "Work account"])
         for caption in captions {
+            #expect(!caption.isHidden)
             #expect(caption.frame.width >= caption.attributedStringValue.size().width,
                     "\(caption.stringValue) must not truncate")
-            #expect(caption.frame.width >= QuotaLayout.innerWidth)
         }
     }
 
@@ -263,18 +263,22 @@ struct QuotaPanelTests {
             ]
         )
         #expect(panel.tallies[.claude] == AgentTaskTally(working: 2, waiting: 1))
-        #expect(panel.taskLines["claude"] == ["2 working", "1 waiting"])
-        #expect(panel.taskLines["codex"]?.isEmpty != false,
-                "external block is not agent-waiting load on the harness")
+        // The load line beside each provider name: Claude's live work, and Codex's
+        // one externally blocked card counted as idle — not as agent-waiting load.
+        #expect(loads(in: panel) == ["2 working · 1 waiting", "1 idle"])
 
         // Both provider rows carry a visual harness badge (glyph + tooltip), not text.
         let badges = allSubviews(of: panel).compactMap { $0 as? HarnessBadge }
         #expect(badges.contains { $0.agent == .claude && $0.toolTip == "Claude Code" })
         #expect(badges.contains { $0.agent == .codex && $0.toolTip == "Codex" })
 
-        // A board-less render (the standalone quota window) shows no load lines.
+        // A board-less render (the standalone quota window) has no sessions to count.
         panel.render(gauges: [])
-        #expect(panel.taskLines.values.allSatisfy { $0.isEmpty })
+        #expect(loads(in: panel).allSatisfy { $0 == "no sessions" })
+    }
+
+    private func loads(in panel: QuotaPanel) -> [String] {
+        textFields(in: panel, identifier: "quota-load").map { $0.attributedStringValue.string }
     }
 
     private func allSubviews(of view: NSView) -> [NSView] {

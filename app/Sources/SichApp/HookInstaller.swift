@@ -617,8 +617,9 @@ exit 0
 """#
 
 /// Cursor's lifecycle events, in its camelCase vocabulary — `HookNormalizer` maps
-/// them onto the same signal kinds as the Claude/Codex names. `postToolUseFailure`
-/// stands in for the permission-denied path; Cursor has no permission-request hook.
+/// them onto the same signal kinds as the Claude/Codex names. Cursor has no
+/// permission-request hook; `postToolUseFailure` is an ordinary failed tool call
+/// (still WORKING), not a permission signal.
 private let cursorEvents = [
     "sessionStart", "beforeSubmitPrompt", "preToolUse", "postToolUse",
     "postToolUseFailure", "subagentStart", "subagentStop", "preCompact",

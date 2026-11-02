@@ -234,6 +234,29 @@ struct HookSessionStoreTests {
                 "after the real turn end the replay guard is back in force (US-008 AC-1)")
     }
 
+    /// The operator report: a remote card sat in WORKING after the agent had
+    /// answered. Its Stop listed a backgrounded SHELL (a dev server that never
+    /// exits) as `running`, and the parenthesis masked both the Stop and the idle
+    /// nudge. A shell is not a child the turn waits on — this sequence, verbatim
+    /// from the far side's events.jsonl, must route NEEDS YOU.
+    @Test func stopWithOnlyABackgroundShellIsATurnEnd() {
+        let store = HookSessionStore(stallThreshold: 600)
+        let server = #"[{"id":"bpws0wrz7","type":"shell","status":"running","description":"Start Metro dev server"}]"#
+        for (offset, json) in [
+            (0.0, #"{"hook_event_name":"UserPromptSubmit","session_id":"rm"}"#),
+            (2.0, #"{"hook_event_name":"PostToolUse","session_id":"rm","tool_name":"Bash"}"#),
+            (5.0, #"{"hook_event_name":"Stop","session_id":"rm","background_tasks":\#(server)}"#),
+        ] {
+            store.ingest([normalized(json, arrival: base.addingTimeInterval(offset))])
+        }
+        #expect(store.entry(for: "rm")?.state == .waitingForInput,
+                "a Stop that leaves only a background shell running is a real turn end")
+        store.ingest([normalized(
+            #"{"hook_event_name":"Notification","session_id":"rm","notification_type":"idle_prompt"}"#,
+            arrival: base.addingTimeInterval(70))])
+        #expect(store.entry(for: "rm")?.state == .waitingForInput)
+    }
+
     /// A plain Stop (no background_tasks field at all — pre-background-agent Claude)
     /// and a plain idle nudge keep today's behavior: straight to NEEDS YOU.
     @Test func plainStopAndIdleNudgeStillPark() {

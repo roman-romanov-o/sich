@@ -45,11 +45,23 @@ struct BoardColumnMoveReproTests {
         #expect(groupHoldingCard(view) == .working)
     }
 
-    @Test("columns left→right: QUEUE → PARKED → WORKING → NEEDS YOU → BLOCKED → DONE")
+    @Test("columns left→right: BACKLOG → QUEUE → WORKING → NEEDS YOU → BLOCKED → DONE")
     func boardColumnOrder() {
         #expect(BoardView.ColumnGroup.allCases == [
-            .queue, .parked, .working, .needsYou, .blocked, .done,
+            .parked, .queue, .working, .needsYou, .blocked, .done,
         ])
+        #expect(BoardView.ColumnGroup.parked.title == "BACKLOG")
+    }
+
+    /// One lane is lit at a time: NEEDS YOU while it holds a card, else QUEUE,
+    /// else BACKLOG; an empty board lights QUEUE, where the + is the only move.
+    @Test("the lit lane follows NEEDS YOU → QUEUE → BACKLOG → QUEUE")
+    func focusRule() {
+        #expect(BoardView.focus(for: [.needsYou: 1, .queue: 3, .parked: 2]) == .needsYou)
+        #expect(BoardView.focus(for: [.queue: 3, .parked: 2, .working: 4]) == .queue)
+        #expect(BoardView.focus(for: [.parked: 2, .working: 4]) == .parked)
+        #expect(BoardView.focus(for: [.working: 4, .blocked: 1, .done: 9]) == .queue)
+        #expect(BoardView.focus(for: [:]) == .queue)
     }
 
     @Test("blocked and waiting land in separate columns")

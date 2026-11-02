@@ -9,9 +9,9 @@ final class DoneRail: NSView {
     let countLabel: NSTextField
 
     init(toggle: NSButton, archive: NSButton) {
-        let count = NSTextField(labelWithString: "")
-        count.font = BoardTheme.numeric
-        count.textColor = BoardTheme.textFaint
+        let count = NSTextField(labelWithString: "0")
+        count.font = BoardTheme.laneCount
+        count.textColor = BoardTheme.textMuted
         count.lineBreakMode = .byTruncatingTail
         countLabel = count
         super.init(frame: .zero)

@@ -25,7 +25,11 @@ public enum HookNormalizer {
         "pre_tool_use": .toolUse,
         "PostToolUse": .toolUse,
         "post_tool_use": .toolUse,
-        "PostToolUseFailure": .errorExit,
+        // A tool call that FAILED (file not found, a non-zero shell exit, a test run
+        // that went red) is still the agent at work: it reads the error and carries
+        // on, and no operator action is useful. BLOCKED means waiting on something
+        // external (CARD-STATUS.md rule 2.5), which a failed tool never is.
+        "PostToolUseFailure": .toolUse,
         "PermissionRequest": .permissionRequest,
         "permission_request": .permissionRequest,
         "Notification": .permissionRequest,
@@ -48,7 +52,7 @@ public enum HookNormalizer {
         "beforeSubmitPrompt": .userInput,
         "preToolUse": .toolUse,
         "postToolUse": .toolUse,
-        "postToolUseFailure": .errorExit,
+        "postToolUseFailure": .toolUse,
         "preCompact": .compaction,
         "subagentStart": .subagentStart,
         "subagentStop": .subagentStop,
@@ -90,11 +94,7 @@ public enum HookNormalizer {
             kind: resolveKind(payload),
             source: .hook,
             agent: resolveAgent(payload),
-            // Cursor keys the conversation as `conversation_id`; the field means the
-            // same thing (the resumable chat) so it folds into `sessionID`.
-            sessionID: payload["session_id"] as? String
-                ?? payload["conversation_id"] as? String
-                ?? payload["conversationId"] as? String ?? "",
+            sessionID: resolveSessionID(payload),
             timestamp: SignalTimestamp.parse(payload["timestamp"], arrival: arrival),
             cwd: payload["cwd"] as? String ?? firstWorkspaceRoot(payload),
             cardID: payload["sich_card_id"] as? String,
@@ -106,6 +106,25 @@ public enum HookNormalizer {
     }
 
     // MARK: - Internals (mirror the Python helper functions one-for-one)
+
+    /// The key one card's events fold under. Claude/Codex name the resumable chat
+    /// `session_id`; Antigravity `conversationId`. Cursor's `conversation_id` is NOT
+    /// that: every subagent fires hooks under its own id, and a tool call of the
+    /// current chat can carry the id of an EARLIER chat of the same process
+    /// (captured 2026-10-28: a review turn fanned out to two subagents, and its tool
+    /// events were spread over four ids — the card flapped WORKING → NEEDS YOU →
+    /// BLOCKED as the stale chat's latched entry, the subagents, and the root took
+    /// turns being the freshest observation). The one identity that spans a Cursor
+    /// run is the `agent` process the card launched, stamped by the hook script as
+    /// `sich_pid`; one process is one session.
+    private static func resolveSessionID(_ payload: [String: Any]) -> String {
+        if resolveAgent(payload) == .cursor, let pid = payload["sich_pid"] as? String, !pid.isEmpty {
+            return "cursor:\(pid)"
+        }
+        return payload["session_id"] as? String
+            ?? payload["conversation_id"] as? String
+            ?? payload["conversationId"] as? String ?? ""
+    }
 
     private static func jsonObject(from line: Data) -> [String: Any]? {
         let object = try? JSONSerialization.jsonObject(with: line)
@@ -131,14 +150,20 @@ public enum HookNormalizer {
     }
 
     /// Fold the payload's `background_tasks` array into one flag: is a background
-    /// subagent still running? A `SubagentStop` lists the stopping agent ITSELF as
-    /// `running`, so the event's own `agent_id` is excluded. `nil` when the payload
-    /// carries no array — the store then falls back to its last-known flag.
+    /// AGENT still running? Only a child agent parks the root loop (rule 2.3). A
+    /// backgrounded SHELL (`"type":"shell"`) is not a child the turn waits on: a dev
+    /// server started with `run_in_background` keeps running for hours after the
+    /// agent has answered, and counting it held the card at WORKING while the one
+    /// being waited on was the operator. A `SubagentStop` lists the stopping agent
+    /// ITSELF as `running`, so the event's own `agent_id` is excluded. `nil` when the
+    /// payload carries no array — the store then falls back to its last-known flag.
     private static func resolveBackgroundBusy(_ payload: [String: Any]) -> Bool? {
         guard let tasks = payload["background_tasks"] as? [[String: Any]] else { return nil }
         let selfID = payload["agent_id"] as? String
         return tasks.contains { task in
-            task["status"] as? String == "running" && task["id"] as? String != selfID
+            task["status"] as? String == "running"
+                && task["type"] as? String != "shell"
+                && task["id"] as? String != selfID
         }
     }
 

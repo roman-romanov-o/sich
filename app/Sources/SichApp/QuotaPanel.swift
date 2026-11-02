@@ -7,27 +7,23 @@ enum QuotaDock: Equatable {
     case trailing
     /// A strip under the board — portrait windows, where height is the spare
     /// dimension and every point of width belongs to the columns. `columns` is
-    /// how many quota cards fit side by side: the usage table splits across them
-    /// so the strip stays short. With one column it is a single card, as on the
-    /// trailing edge.
+    /// how many quota cards fit side by side: the provider blocks split across
+    /// them so the strip stays short. With one column it is a single card, as on
+    /// the trailing edge.
     case bottom(columns: Int)
 }
 
-/// Compact quota/usage panel: a dense provider-by-window usage table. (A
-/// "safe to launch" advice card used to sit above it; it only restated what
-/// the bars beside it already show, so it was removed.) The table keeps the underlying
-/// ``QuotaGauge`` invariant intact: each real pool is still rendered by one
-/// ``QuotaGaugeRow`` and exposed through `rows`; the table layout only changes
+/// Compact quota/usage panel: one block per provider (and per Claude account) —
+/// "mark · name · account" with the live board load on the right, then that
+/// provider's pools side by side, each a captioned bar with its countdown. The
+/// underlying ``QuotaGauge`` invariant stays intact: each real pool is rendered
+/// by one ``QuotaGaugeRow`` and exposed through `rows`; the panel only decides
 /// where those rows sit on screen.
 @MainActor
 public final class QuotaPanel: NSView {
     public private(set) var rows: [QuotaGaugeRow] = []
     /// Last render's per-harness in-progress counts (from the board's cards).
     public private(set) var tallies: [CardAgent: AgentTaskTally] = [:]
-    /// Test seam: the load lines actually rendered under each provider badge,
-    /// keyed by provider label — e.g. `"claude": ["2 working", "1 waiting"]`.
-    private(set) var taskLines: [String: [String]] = [:]
-
     /// Set by the shell, which re-renders afterwards: the dock decides how many
     /// usage cards the next ``render(gauges:cards:claudeProfiles:claudeProfileByCard:)`` lays out.
     var dock: QuotaDock = .trailing {
@@ -36,6 +32,17 @@ public final class QuotaPanel: NSView {
 
     private let scroll = NSScrollView()
     private let content = NSStackView()
+    /// The operator's pomodoro under the gauges (trailing dock: pinned to the bottom
+    /// of the lane; bottom dock: a compact column on the strip's trailing edge). The
+    /// dock view is rebuilt when the panel re-docks, so the panel remembers the last
+    /// render and the shell's callbacks and re-applies them to the new instance.
+    private(set) var pomodoroDock: PomodoroDock
+    private var pomodoroState = PomodoroState()
+    private var pomodoroContext = PomodoroDock.Context()
+    var onPomodoroToggle: (() -> Void)? { didSet { wirePomodoro() } }
+    var onPomodoroRestNow: (() -> Void)? { didSet { wirePomodoro() } }
+    var onPomodoroHint: ((PomodoroHint) -> Void)? { didSet { wirePomodoro() } }
+    private var pomodoroConstraints: [NSLayoutConstraint] = []
     /// Separates the bottom strip from the columns above it.
     private let topHairline = NSView()
     /// Trailing dock: the panel is the board's last lane, edged like the others.
@@ -52,10 +59,12 @@ public final class QuotaPanel: NSView {
     private var resetTicker: Timer?
 
     public override init(frame frameRect: NSRect) {
+        pomodoroDock = PomodoroDock(compact: false)
         super.init(frame: frameRect)
         wantsLayer = true
         themedBackground = BoardTheme.canvas
         buildScaffold()
+        mountPomodoro()
     }
 
     public required init?(coder: NSCoder) { nil }
@@ -112,9 +121,7 @@ public final class QuotaPanel: NSView {
         addSubview(scroll)
         NSLayoutConstraint.activate([
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
             scroll.topAnchor.constraint(equalTo: topAnchor),
-            scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
             clip.widthAnchor.constraint(equalTo: scroll.widthAnchor),
         ])
 
@@ -141,25 +148,75 @@ public final class QuotaPanel: NSView {
     }
 
     private func applyDock() {
-        let sideBySide = if case .bottom(let columns) = dock { columns > 1 } else { false }
+        let sideBySide = usageCardCount > 1
         content.orientation = sideBySide ? .horizontal : .vertical
         content.alignment = sideBySide ? .top : .leading
         topHairline.isHidden = dock == .trailing
         leadingHairline.isHidden = dock != .trailing
         hugsContentHeight.isActive = dock != .trailing
+        pomodoroDock.removeFromSuperview()
+        pomodoroDock = PomodoroDock(compact: dock != .trailing)
+        mountPomodoro()
     }
 
-    /// How many cards the usage table is split across (see ``QuotaDock``).
+    /// Pin the pomodoro dock for the current ``dock``: under the scrolling cards on
+    /// the trailing edge; as the strip's last column (one card wide) at the bottom.
+    private func mountPomodoro() {
+        addSubview(pomodoroDock)
+        NSLayoutConstraint.deactivate(pomodoroConstraints)
+        let dockView = pomodoroDock
+        if dock == .trailing {
+            pomodoroConstraints = [
+                scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
+                scroll.bottomAnchor.constraint(equalTo: dockView.topAnchor),
+                dockView.leadingAnchor.constraint(equalTo: leadingAnchor),
+                dockView.trailingAnchor.constraint(equalTo: trailingAnchor),
+                dockView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            ]
+        } else {
+            let tall = heightAnchor.constraint(greaterThanOrEqualTo: dockView.heightAnchor)
+            tall.priority = .defaultHigh
+            pomodoroConstraints = [
+                scroll.trailingAnchor.constraint(equalTo: dockView.leadingAnchor),
+                scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+                dockView.trailingAnchor.constraint(equalTo: trailingAnchor),
+                dockView.topAnchor.constraint(equalTo: topAnchor),
+                dockView.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor),
+                dockView.widthAnchor.constraint(equalToConstant: QuotaLayout.panelWidth),
+                tall,
+            ]
+        }
+        NSLayoutConstraint.activate(pomodoroConstraints)
+        wirePomodoro()
+        pomodoroDock.render(state: pomodoroState, context: pomodoroContext)
+    }
+
+    private func wirePomodoro() {
+        pomodoroDock.onToggle = onPomodoroToggle
+        pomodoroDock.onRestNow = onPomodoroRestNow
+        pomodoroDock.onHint = onPomodoroHint
+    }
+
+    /// Repaint the pomodoro dock (the shell calls this once a second while a phase
+    /// runs — it touches only the dock, never the gauge cards).
+    func renderPomodoro(state: PomodoroState, cardTitle: String?, hint: PomodoroHint?) {
+        pomodoroState = state
+        pomodoroContext = PomodoroDock.Context(cardTitle: cardTitle, hint: hint, compact: dock != .trailing)
+        pomodoroDock.render(state: state, context: pomodoroContext)
+    }
+
+    /// How many cards the provider blocks are split across (see ``QuotaDock``). On
+    /// the bottom strip the pomodoro dock takes the last column.
     private var usageCardCount: Int {
         switch dock {
         case .trailing: return 1
-        case .bottom(let columns): return max(1, columns)
+        case .bottom(let columns): return max(1, columns - 1)
         }
     }
 
     /// `cards` feeds the per-harness load readout (how many tasks each harness has
-    /// working / waiting on you) beside its gauges; callers without a board (the
-    /// standalone quota window) omit it and get the plain usage table.
+    /// working / waiting on you) beside its name; callers without a board (the
+    /// standalone quota window) omit it and get the plain usage panel.
     /// `claudeProfileByCard` maps each card id → profile id for per-account load lines.
     func render(
         gauges: [QuotaGauge],
@@ -170,19 +227,18 @@ public final class QuotaPanel: NSView {
         content.arrangedSubviews.forEach { $0.removeFromSuperview() }
         rows = []
         tallies = AgentTaskTally.tally(cards)
-        taskLines = [:]
 
         if dock == .trailing {
             let title = laneTitle()
             content.addArrangedSubview(title)
             content.setCustomSpacing(10, after: title)
         }
-        let models = providerRows(
+        let blocks = providerBlocks(
             from: gauges, claudeProfiles: claudeProfiles,
             claudeProfileByCard: claudeProfileByCard, cards: cards)
-        let perCard = max(1, (models.count + usageCardCount - 1) / usageCardCount)
-        for start in stride(from: 0, to: models.count, by: perCard) {
-            let chunk = models[start..<min(start + perCard, models.count)]
+        let perCard = max(1, (blocks.count + usageCardCount - 1) / usageCardCount)
+        for start in stride(from: 0, to: blocks.count, by: perCard) {
+            let chunk = blocks[start..<min(start + perCard, blocks.count)]
             addCard(usageCard(Array(chunk)))
         }
         preserveHiddenRows(for: gauges)
@@ -212,131 +268,157 @@ public final class QuotaPanel: NSView {
         return row
     }
 
-    /// One usage table: the 5H / WEEKLY header over its share of the provider rows.
-    private func usageCard(_ models: [ProviderQuotaRow]) -> NSView {
+    /// One usage card: its share of the provider blocks, hairlines between them.
+    private func usageCard(_ blocks: [ProviderBlock]) -> NSView {
         let card = NSStackView()
+        card.identifier = NSUserInterfaceItemIdentifier("quota-card")
         card.orientation = .vertical
         card.alignment = .leading
-        card.spacing = 0
+        card.spacing = QuotaLayout.blockGap
         // No box: the board's lanes are borderless, and a bordered card here read as a
         // different product docked beside the board. Alignment and the hairline
         // dividers do the grouping.
         card.widthAnchor.constraint(equalToConstant: QuotaLayout.cardWidth).isActive = true
-
-        let header = columnHeader()
-        card.addArrangedSubview(header)
-        card.setCustomSpacing(QuotaLayout.headerGap, after: header)
-
-        for (index, model) in models.enumerated() {
-            if index > 0 {
-                let divider = rowDivider()
-                card.addArrangedSubview(divider)
-                card.setCustomSpacing(QuotaLayout.rowGap, after: divider)
-            }
-            let row = providerRow(model)
-            card.addArrangedSubview(row)
-            if index < models.count - 1 {
-                card.setCustomSpacing(QuotaLayout.rowGap, after: row)
-            }
+        for (index, block) in blocks.enumerated() {
+            if index > 0 { card.addArrangedSubview(divider()) }
+            card.addArrangedSubview(providerBlockView(block))
         }
         return card
     }
 
-    private func columnHeader() -> NSView {
-        let row = NSStackView()
-        row.orientation = .horizontal
-        row.alignment = .centerY
-        row.spacing = QuotaLayout.columnGap
-        row.widthAnchor.constraint(equalToConstant: QuotaLayout.innerWidth).isActive = true
-        // The logo rail needs no header — the marks name themselves.
-        let rail = NSView()
-        rail.widthAnchor.constraint(equalToConstant: QuotaLayout.providerWidth).isActive = true
-        row.addArrangedSubview(rail)
-        row.addArrangedSubview(columnLabel("5H"))
-        row.addArrangedSubview(columnLabel("WEEKLY"))
-        return row
+    /// "mark · name · account … load" over the provider's pools side by side.
+    private func providerBlockView(_ block: ProviderBlock) -> NSView {
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 6
+        stack.widthAnchor.constraint(equalToConstant: QuotaLayout.cardWidth).isActive = true
+
+        let head = NSStackView()
+        head.orientation = .horizontal
+        head.alignment = .centerY
+        head.spacing = 8
+        head.widthAnchor.constraint(equalToConstant: QuotaLayout.cardWidth).isActive = true
+        head.addArrangedSubview(HarnessBadge(agent: block.agent))
+        let name = label(block.agent.displayName, font: BoardTheme.sansSmall, color: BoardTheme.textPrimary)
+        name.lineBreakMode = .byTruncatingTail
+        head.addArrangedSubview(name)
+        if let account = block.accountName {
+            head.addArrangedSubview(label("·", font: BoardTheme.sansSmall, color: BoardTheme.textMuted))
+            let caption = label(account, font: BoardTheme.sansTiny, color: BoardTheme.textMuted)
+            caption.identifier = NSUserInterfaceItemIdentifier("quota-account-name")
+            caption.lineBreakMode = .byTruncatingTail
+            // The account is identity — it keeps its words; the load readout on the
+            // right (repeated by the board itself) gives way first.
+            caption.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
+            head.addArrangedSubview(caption)
+        }
+        head.addArrangedSubview(NSView())   // flexible spacer
+        head.addArrangedSubview(loadLabel(block))
+        stack.addArrangedSubview(head)
+
+        if block.pools.isEmpty {
+            stack.addArrangedSubview(label("quota not tracked", font: BoardTheme.sansTiny, color: BoardTheme.textDim))
+            return stack
+        }
+        let gauges = NSStackView()
+        gauges.orientation = .horizontal
+        gauges.alignment = .top
+        gauges.spacing = QuotaLayout.columnGap
+        for pool in block.pools { gauges.addArrangedSubview(poolCell(pool)) }
+        stack.addArrangedSubview(gauges)
+        return stack
     }
 
-    private func providerRow(_ model: ProviderQuotaRow) -> NSView {
-        let row = NSStackView()
-        row.orientation = .horizontal
-        row.alignment = .centerY
-        row.spacing = QuotaLayout.columnGap
-        row.widthAnchor.constraint(equalToConstant: QuotaLayout.innerWidth).isActive = true
-
-        row.addArrangedSubview(providerCell(model))
-        row.addArrangedSubview(cell(for: model.fiveHour))
-        row.addArrangedSubview(cell(for: model.weekly))
-        guard let account = model.accountName else { return row }
-
-        // With several Claude accounts the badge alone no longer says whose pools
-        // these are. The name gets the whole row width above the gauges — the
-        // 36pt logo rail could only ever show a truncated sliver of it.
-        let block = NSStackView()
-        block.orientation = .vertical
-        block.alignment = .leading
-        block.spacing = 2
-        let caption = label(account, font: BoardTheme.sansSmall, color: BoardTheme.textMuted)
-        caption.identifier = NSUserInterfaceItemIdentifier("quota-account-name")
-        caption.lineBreakMode = .byTruncatingTail
-        caption.widthAnchor.constraint(equalToConstant: QuotaLayout.innerWidth).isActive = true
-        block.addArrangedSubview(caption)
-        block.addArrangedSubview(row)
-        return block
+    /// The live load beside the name: "2 working · 1 waiting" (waiting in the NEEDS
+    /// YOU red), else "3 idle", else "no sessions".
+    private func loadLabel(_ block: ProviderBlock) -> NSTextField {
+        let tally = block.tally
+        var lines: [String] = []
+        if tally.working > 0 { lines.append("\(tally.working) working") }
+        if tally.waiting > 0 { lines.append("\(tally.waiting) waiting") }
+        let field = label("", font: BoardTheme.sansTiny, color: BoardTheme.textFaint)
+        field.identifier = NSUserInterfaceItemIdentifier("quota-load")
+        field.lineBreakMode = .byTruncatingTail
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        guard !lines.isEmpty else {
+            field.stringValue = block.sessions > 0 ? "\(block.sessions) idle" : "no sessions"
+            return field
+        }
+        let text = NSMutableAttributedString()
+        for (index, line) in lines.enumerated() {
+            if index > 0 {
+                text.append(NSAttributedString(string: " · ", attributes: [
+                    .font: BoardTheme.sansTiny, .foregroundColor: BoardTheme.textFaint]))
+            }
+            let waiting = line.hasSuffix("waiting")
+            text.append(NSAttributedString(string: line, attributes: [
+                .font: waiting ? BoardTheme.sansSmall : BoardTheme.sansTiny,
+                .foregroundColor: waiting ? BoardTheme.needs : BoardTheme.textFaint]))
+        }
+        field.attributedStringValue = text
+        return field
     }
 
-    /// The provider column: the harness badge (visual identity, not a text name)
-    /// with a compact rendering of the harness's current board load under it, so
-    /// each pool's demand sits beside what's left without widening the logo rail.
-    private func providerCell(_ model: ProviderQuotaRow) -> NSView {
+    /// One pool: its caption (5H / WEEKLY / MONTHLY) centred over the bar and
+    /// countdown, a hairline under the caption tying the two bars to one ruler.
+    private func poolCell(_ pool: ProviderBlock.Pool) -> NSView {
         let cell = NSStackView()
         cell.orientation = .vertical
-        cell.alignment = .centerX
-        cell.spacing = 3
-        cell.widthAnchor.constraint(equalToConstant: QuotaLayout.providerWidth).isActive = true
-
-        if let agent = model.agent {
-            cell.addArrangedSubview(HarnessBadge(agent: agent))
-        } else {
-            cell.addArrangedSubview(label(model.label, font: BoardTheme.mono, color: BoardTheme.textPrimary))
-        }
-
-        let tally = model.tally
-        var lines: [String] = []
-        func addLine(_ text: String, compact: String, color: NSColor) {
-            lines.append(text)
-            let field = label(compact, font: BoardTheme.sansTiny, color: color)
-            field.alignment = .center
-            field.toolTip = text
-            field.widthAnchor.constraint(equalToConstant: QuotaLayout.providerWidth).isActive = true
-            cell.addArrangedSubview(field)
-        }
-        if tally.working > 0 {
-            addLine("\(tally.working) working", compact: "\(tally.working) work",
-                    color: BoardTheme.stateColor(.running))
-        }
-        if tally.waiting > 0 {
-            addLine("\(tally.waiting) waiting", compact: "\(tally.waiting) wait",
-                    color: BoardTheme.attention)
-        }
-        taskLines[model.label] = lines
+        cell.alignment = .leading
+        cell.spacing = 4
+        cell.widthAnchor.constraint(equalToConstant: QuotaLayout.cellWidth).isActive = true
+        cell.addArrangedSubview(captionLabel(pool.caption))
+        cell.addArrangedSubview(slotView(pool.slot))
         return cell
     }
 
-    private func rowDivider() -> NSView {
+    private func captionLabel(_ text: String) -> NSView {
+        let field = label(text, font: BoardTheme.capsSmall, color: BoardTheme.textFaint)
+        // An attributed value carries its own alignment — the field's would be dropped.
+        let caps = NSMutableAttributedString(attributedString: BoardTheme.caps(
+            text, color: BoardTheme.textFaint, font: BoardTheme.capsSmall, kern: 0.6))
+        let centered = NSMutableParagraphStyle()
+        centered.alignment = .center
+        caps.addAttribute(.paragraphStyle, value: centered,
+                          range: NSRange(location: 0, length: caps.length))
+        field.attributedStringValue = caps
+        let box = NSView()
+        box.translatesAutoresizingMaskIntoConstraints = false
+        field.translatesAutoresizingMaskIntoConstraints = false
+        box.addSubview(field)
+        let rule = NSView()
+        rule.themedBackground = BoardTheme.hairline
+        rule.translatesAutoresizingMaskIntoConstraints = false
+        box.addSubview(rule)
+        NSLayoutConstraint.activate([
+            box.widthAnchor.constraint(equalToConstant: QuotaLayout.cellWidth),
+            box.heightAnchor.constraint(equalToConstant: 16),
+            field.leadingAnchor.constraint(equalTo: box.leadingAnchor),
+            field.trailingAnchor.constraint(equalTo: box.trailingAnchor),
+            field.topAnchor.constraint(equalTo: box.topAnchor),
+            rule.leadingAnchor.constraint(equalTo: box.leadingAnchor),
+            rule.trailingAnchor.constraint(equalTo: box.trailingAnchor),
+            rule.bottomAnchor.constraint(equalTo: box.bottomAnchor),
+            rule.heightAnchor.constraint(equalToConstant: 1),
+        ])
+        return box
+    }
+
+    private func divider() -> NSView {
         // The board's own hairline token, not the system separator — every line in
         // the window is the same ink.
         let divider = NSView()
         divider.themedBackground = BoardTheme.hairline
         divider.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            divider.widthAnchor.constraint(equalToConstant: QuotaLayout.innerWidth),
+            divider.widthAnchor.constraint(equalToConstant: QuotaLayout.cardWidth),
             divider.heightAnchor.constraint(equalToConstant: 1),
         ])
         return divider
     }
 
-    private func cell(for slot: QuotaSlot) -> NSView {
+    private func slotView(_ slot: QuotaSlot) -> NSView {
         switch slot {
         case .gauge(let gauge):
             let row = QuotaGaugeRow(gauge: gauge)
@@ -349,15 +431,17 @@ public final class QuotaPanel: NSView {
         }
     }
 
-    private func providerRows(
+    private func providerBlocks(
         from gauges: [QuotaGauge],
         claudeProfiles: [ClaudeProfile],
         claudeProfileByCard: [UUID: UUID],
         cards: [BoardCard]
-    ) -> [ProviderQuotaRow] {
+    ) -> [ProviderBlock] {
         let anthropic = gauges.filter { $0.provider.lowercased() == "anthropic" }
 
-        var result: [ProviderQuotaRow] = claudeProfiles.map { profile in
+        // Claude blocks always keep both pools: an empty cell means "measuring",
+        // never "missing" — the two pools are never allowed to disappear.
+        var result: [ProviderBlock] = claudeProfiles.map { profile in
             let prefix = profile.poolPrefix
             let interactive = anthropic.first { normalized($0.pool) == normalized(prefix) }
             let interactive5h = anthropic.first { normalized($0.pool) == normalized(profile.pool5h) }
@@ -369,53 +453,61 @@ public final class QuotaPanel: NSView {
                 let pid = claudeProfileByCard[card.id] ?? ClaudeProfile.defaultID
                 return pid == profile.id
             }
-            return ProviderQuotaRow(
-                label: profile.quotaLabel,
+            return ProviderBlock(
                 agent: .claude,
                 accountName: claudeProfiles.count > 1 ? profile.name : nil,
                 tally: tallyCards(profileCards),
-                fiveHour: claudeSlot(interactive5h ?? interactive),
-                weekly: claudeSlot(interactiveWeekly)
+                sessions: profileCards.filter { $0.state != .done }.count,
+                pools: [
+                    .init(caption: "5H", slot: claudeSlot(interactive5h ?? interactive)),
+                    .init(caption: "WEEKLY", slot: claudeSlot(interactiveWeekly)),
+                ]
             )
         }
 
-        // Other harnesses earn a row only when there is something to read: a pool we
-        // track, or a card running on it. A row of dashes was noise. Claude accounts
-        // above always stay — "measuring" is information there, and the two pools
-        // are never allowed to disappear from the panel.
+        // Other harnesses earn a block only when there is something to read: a pool
+        // we track, or a card running on it. A block of dashes was noise.
         let others: [(String, CardAgent)] = [("codex", .codex), ("cursor", .cursor), ("antigravity", .antigravity)]
         for (label, agent) in others {
-            let row = providerRow(label: label, agent: agent, gauges: gauges, cards: cards)
-            if row.hasGauge || cards.contains(where: { $0.agent == agent }) { result.append(row) }
+            let block = providerBlock(label: label, agent: agent, gauges: gauges, cards: cards)
+            if !block.pools.isEmpty || cards.contains(where: { $0.agent == agent }) { result.append(block) }
         }
         return result
     }
 
-    private func providerRow(
-        label: String, agent: CardAgent?, gauges: [QuotaGauge], cards: [BoardCard]
-    ) -> ProviderQuotaRow {
+    private func providerBlock(
+        label: String, agent: CardAgent, gauges: [QuotaGauge], cards: [BoardCard]
+    ) -> ProviderBlock {
         let provider = label.lowercased()
         let providerGauges = gauges.filter { $0.provider.lowercased() == provider }
         let fiveHour = providerGauges.first { normalized($0.pool) == "\(provider)_5h" }
         let weekly = providerGauges.first { normalized($0.pool) == "\(provider)_weekly" }
         let single = providerGauges.first { normalized($0.pool) == provider }
-        let agentCards = agent.map { a in cards.filter { $0.agent == a } } ?? []
-        return ProviderQuotaRow(
-            label: provider,
+        let agentCards = cards.filter { $0.agent == agent }
+        var pools: [ProviderBlock.Pool] = []
+        if let fiveHour { pools.append(.init(caption: "5H", slot: .gauge(fiveHour))) }
+        if let weekly { pools.append(.init(caption: "WEEKLY", slot: .gauge(weekly))) }
+        else if let single { pools.append(.init(caption: Self.caption(for: single), slot: .gauge(single))) }
+        return ProviderBlock(
             agent: agent,
             accountName: nil,
             tally: tallyCards(agentCards),
-            fiveHour: fiveHour.map(QuotaSlot.gauge) ?? .placeholder(.empty),
-            weekly: weekly.map(QuotaSlot.gauge) ?? slot(single)
+            sessions: agentCards.filter { $0.state != .done }.count,
+            pools: pools
         )
     }
 
-    private func slot(_ gauge: QuotaGauge?) -> QuotaSlot {
-        guard let gauge else { return .placeholder(.empty) }
-        return .gauge(gauge)
+    /// What a provider's single pool is a window of: a hard-stop credit refills
+    /// monthly; a rolling window is weekly unless the source says otherwise.
+    static func caption(for gauge: QuotaGauge) -> String {
+        switch gauge.fallback {
+        case .none: return "MONTHLY"
+        case .windowReset: return "5H"
+        case .weeklyReset, .unknown: return "WEEKLY"
+        }
     }
 
-    /// Claude rows wait on the hidden `/usage` scrape — an empty cell means
+    /// Claude pools wait on the hidden `/usage` scrape — an empty cell means
     /// "measuring", not "missing", so we never flash a false green estimate.
     private func claudeSlot(_ gauge: QuotaGauge?) -> QuotaSlot {
         guard let gauge else {
@@ -458,20 +550,6 @@ public final class QuotaPanel: NSView {
         field.isEditable = false
         return field
     }
-
-    private func columnLabel(_ text: String, width: CGFloat = QuotaLayout.cellWidth) -> NSTextField {
-        let field = label(text, font: BoardTheme.capsSmall, color: BoardTheme.textFaint)
-        // An attributed value carries its own alignment — the field's would be dropped.
-        let caps = NSMutableAttributedString(attributedString: BoardTheme.caps(
-            text, color: BoardTheme.textFaint, font: BoardTheme.capsSmall))
-        let centered = NSMutableParagraphStyle()
-        centered.alignment = .center
-        caps.addAttribute(.paragraphStyle, value: centered,
-                          range: NSRange(location: 0, length: caps.length))
-        field.attributedStringValue = caps
-        field.widthAnchor.constraint(equalToConstant: width).isActive = true
-        return field
-    }
 }
 
 /// Every text-carrying box tracks ``BoardTheme/boardFontScale`` so the compact grid
@@ -487,44 +565,44 @@ enum QuotaLayout {
     }
 
     static var panelWidth: CGFloat { cardWidth + outerInset * 2 }
-    static var cardWidth: CGFloat { innerWidth }
-    static var innerWidth: CGFloat { providerWidth + cellWidth * 2 + columnGap * 2 }
-    static var providerWidth: CGFloat { scaled(36) }
-    static var cellWidth: CGFloat { scaled(94) }
-    /// Bar (18) + spacing (4) + countdown line (~13). The percent moved inside the bar,
-    /// so the cell lost a whole text row and gained a bar you can actually read.
+    static var cardWidth: CGFloat { scaled(240) }
+    /// Two pools share the card width, with air between them so each reads as its
+    /// own instrument.
+    static var cellWidth: CGFloat { ((cardWidth - columnGap) / 2).rounded(.down) }
+    /// Bar (18) + spacing (4) + countdown line (~13).
     static var cellHeight: CGFloat { scaled(36) }
     static var barHeight: CGFloat { scaled(18) }
     static let barCornerRadius: CGFloat = 5
     static let barTextInset: CGFloat = 7
-    static var columnGap: CGFloat { scaled(8) }
+    static var columnGap: CGFloat { scaled(14) }
     /// The board lanes' 20pt gutter, so the panel's content lines up like a lane's.
     static var outerInset: CGFloat { scaled(20) }
     /// Matches the board lane stack's top offset (``BoardView``'s 12pt).
     static let headerTop: CGFloat = 12
-    /// Unboxed tables side by side (bottom dock) need air to read as separate.
+    /// Unboxed cards side by side (bottom dock) need air to read as separate.
     static var sectionGap: CGFloat { scaled(28) }
-    static var headerGap: CGFloat { scaled(8) }
-    static var rowGap: CGFloat { scaled(4) }
+    /// Air around the hairline between two provider blocks.
+    static var blockGap: CGFloat { scaled(10) }
 
     private static func scaled(_ size: CGFloat) -> CGFloat {
         (size * BoardTheme.boardFontScale).rounded(.toNearestOrAwayFromZero)
     }
 }
 
-private struct ProviderQuotaRow {
-    let label: String
-    let agent: CardAgent?
-    /// Which Claude account this row belongs to; only set once there is more than
-    /// one on the board, so the single-account panel stays as terse as before.
+private struct ProviderBlock {
+    struct Pool {
+        let caption: String
+        let slot: QuotaSlot
+    }
+
+    let agent: CardAgent
+    /// Which Claude account this block belongs to; only set once there is more
+    /// than one on the board, so the single-account panel stays as terse as before.
     let accountName: String?
     let tally: AgentTaskTally
-    let fiveHour: QuotaSlot
-    let weekly: QuotaSlot
-
-    var hasGauge: Bool {
-        [fiveHour, weekly].contains { if case .gauge = $0 { true } else { false } }
-    }
+    /// Live cards on this provider (done excluded) — "N idle" when none is working.
+    let sessions: Int
+    let pools: [Pool]
 }
 
 private enum QuotaSlot {
@@ -544,6 +622,7 @@ private final class QuotaPlaceholderCell: NSView, ThemeReapplying {
     private let fill = CALayer()
     private let shimmer = CALayer()
     private let placeholder = CATextLayer()
+    private let caption = NSTextField(labelWithString: "")
 
     init(kind: QuotaPlaceholderKind) {
         self.kind = kind
@@ -561,6 +640,19 @@ private final class QuotaPlaceholderCell: NSView, ThemeReapplying {
         placeholder.alignmentMode = .center
         placeholder.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
         layer?.addSublayer(placeholder)
+        // The countdown line's slot: "measuring…" while the scrape is pending.
+        caption.stringValue = kind == .measuring ? "measuring…" : ""
+        caption.font = BoardTheme.numericSmall
+        caption.textColor = BoardTheme.textDim
+        caption.isBezeled = false
+        caption.drawsBackground = false
+        caption.isEditable = false
+        caption.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(caption)
+        NSLayoutConstraint.activate([
+            caption.leadingAnchor.constraint(equalTo: leadingAnchor),
+            caption.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
         setAccessibilityLabel(kind == .empty ? "Not available" : "Measuring")
         setAccessibilityValue(kind == .empty ? "—" : "")
     }
@@ -575,12 +667,13 @@ private final class QuotaPlaceholderCell: NSView, ThemeReapplying {
                          width: bounds.width, height: QuotaLayout.barHeight)
         track.frame = bar
         track.cornerRadius = QuotaLayout.barCornerRadius
+        track.borderWidth = 1
 
         switch kind {
         case .measuring:
             fill.frame = bar
             fill.cornerRadius = QuotaLayout.barCornerRadius
-            shimmer.frame = NSRect(x: -bar.width * 0.35, y: bar.minY, width: bar.width * 0.35, height: bar.height)
+            shimmer.frame = NSRect(x: -bar.width * 0.4, y: bar.minY, width: bar.width * 0.4, height: bar.height)
             shimmer.cornerRadius = QuotaLayout.barCornerRadius
             startMeasuringAnimation()
         case .empty:
@@ -603,10 +696,13 @@ private final class QuotaPlaceholderCell: NSView, ThemeReapplying {
     private func applyColors(under appearance: NSAppearance? = nil) {
         (appearance ?? effectiveAppearance).performAsCurrentDrawingAppearance {
             track.backgroundColor = (kind == .empty ? NSColor.clear : BoardTheme.gaugeTrack).cgColor
+            track.borderColor = (kind == .empty ? NSColor.clear : BoardTheme.gaugeRing).cgColor
             placeholder.foregroundColor = BoardTheme.textFaint.cgColor
             guard kind == .measuring else { return }
-            fill.backgroundColor = BoardTheme.brand.withAlphaComponent(0.22).cgColor
-            shimmer.backgroundColor = BoardTheme.brand.withAlphaComponent(0.65).cgColor
+            // A slow, faint drift — the panel admits it is still measuring without
+            // flashing; the same neutral ink as the gauges themselves.
+            fill.backgroundColor = BoardTheme.textFaint.withAlphaComponent(0.10).cgColor
+            shimmer.backgroundColor = BoardTheme.textFaint.withAlphaComponent(0.22).cgColor
         }
     }
 
@@ -623,9 +719,9 @@ private final class QuotaPlaceholderCell: NSView, ThemeReapplying {
         guard window != nil, shimmer.animation(forKey: "sweep") == nil,
               !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
         let animation = CABasicAnimation(keyPath: "position.x")
-        animation.fromValue = -bounds.width * 0.18
-        animation.toValue = bounds.width * 1.18
-        animation.duration = 1.15
+        animation.fromValue = -bounds.width * 0.2
+        animation.toValue = bounds.width * 1.38
+        animation.duration = 2.8
         animation.repeatCount = .infinity
         animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         shimmer.add(animation, forKey: "sweep")

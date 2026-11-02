@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 import SichCore
 
 /// A **Ghostty-default-inspired** palette in one place so every board view stays
@@ -19,34 +20,56 @@ enum BoardTheme {
     static let cardStroke = dynamic(dark: hex(0x414956), light: hex(0xC8D2DA))      // cool light edge
     static let cardStrokeStrong = dynamic(dark: hex(0x596576), light: hex(0x9EACB8))
     static let hairline = dynamic(dark: hex(0x2C323B), light: hex(0xD3DCE3))
-    /// The NEEDS YOU column's warm-tinted background — the whole column reads amber.
-    static let needsYouColumn = dynamic(dark: hex(0x272220), light: hex(0xFFF7E8))
-    /// A NEEDS YOU card's warm fill; stroke is `attention` (fresh) or `needsYouStroke` (aging).
-    static let needsYouCard = dynamic(dark: hex(0x3A2A1C), light: hex(0xFFF1D9))
-    static let needsYouStroke = hex(0xB35C1F)   // orange700 — shared accent
-    /// PARKED — shelved / deferred; quieter than QUEUE.
-    static let parkedColumn = dynamic(dark: hex(0x1A1D22), light: hex(0xECEFF2))
-    static let parkedCard = dynamic(dark: hex(0x252930), light: hex(0xF4F6F8))
-    /// BLOCKED — waiting on someone/something outside the session (PR review, upstream).
-    static let blockedColumn = dynamic(dark: hex(0x271F22), light: hex(0xFFF0F0))
-    static let blockedCard = dynamic(dark: hex(0x3A2226), light: hex(0xFFE8E8))
-    /// A card's surface carries its column's meaning: a WORKING card sits on a cool
-    /// blue tint, a DONE card on a green one — so state reads before the title does.
-    /// Only fills here; outlines are reserved for states that ask for the operator.
-    static let workingCard = dynamic(dark: hex(0x252D3A), light: hex(0xEEF5FC))
-    static let doneCard = dynamic(dark: hex(0x262C25), light: hex(0xF2F8EA))
+
+    // One signal. NEEDS YOU is the only column with a hue of its own; every other
+    // lane and card sits on the plain canvas/card surface, and column position
+    // alone says what a card is. The board's *focus* — where the operator should
+    // look next — is a quiet brand tint on exactly one lane (see ``focusColumn``).
+
+    /// The NEEDS YOU column's red-tinted background — the whole column reads red.
+    static let needsYouColumn = dynamic(dark: hex(0x271F22), light: hex(0xFFF0F0))
+    /// A NEEDS YOU card's red fill; stroke is `needs` (fresh) or `needsStroke` (aging).
+    static let needsYouCard = dynamic(dark: hex(0x3A2226), light: hex(0xFFE8E8))
+    /// The NEEDS YOU signal red — column title, card edge, "waiting" stamps.
+    static let needs = hex(0xE84C3D)
+    /// The deeper red an aging NEEDS YOU bar warms toward.
+    static let needsStroke = hex(0xB52D22)
+    /// The lit lane's surface: the canvas lifted a shade toward the brand blue.
+    static let focusColumn = dynamic(
+        dark: hex(0x20242B).blended(withFraction: 0.13, of: brand) ?? brand,
+        light: hex(0xF1F4F7).blended(withFraction: 0.13, of: brand) ?? brand)
+    /// The chosen row in a list you are picking from (the Ctrl+Tab switcher): the card
+    /// surface lifted toward the brand blue, edged in it — the board's keyboard focus.
+    static let selectionFill = dynamic(
+        dark: hex(0x282C34).blended(withFraction: 0.30, of: brand) ?? brand,
+        light: hex(0xFFFFFF).blended(withFraction: 0.22, of: brand) ?? brand)
+    /// The veil behind the Ctrl+Tab switcher: the board stays readable, a step back.
+    static let switcherScrim = dynamic(
+        dark: NSColor.black.withAlphaComponent(0.35), light: NSColor.black.withAlphaComponent(0.18))
+    /// The lit lane's title and count ink.
+    static let focusInk = dynamic(dark: hex(0x7AA6DA), light: hex(0x1E6FB0))
+    /// The band Claude paints behind each of the user's own prompts — a saturated
+    /// brand blue so a prompt is findable at a glance while scrolling a transcript.
+    /// Tuned to keep `termFg` legible on top (white on dark, ink on light).
+    static let promptBand = dynamic(dark: hex(0x2F5E99), light: hex(0xC9DFF7))
     /// The unfilled part of a quota gauge — the groove the fill runs in. Must read as
     /// *recessed* against the panel in both modes, so it darkens the dark canvas and
     /// darkens the light one too (a lighter-than-paper groove would vanish).
     static let gaugeTrack = dynamic(dark: hex(0x1B1F26), light: hex(0xCBD5DD))
-    /// Text drawn *on top of* a gauge fill. Every fill colour the bar can take (green
-    /// `done`, orange `attention`, red `alert`) is bright in both appearances, so this
-    /// stays a fixed near-black rather than flipping with the theme.
-    static let gaugeLabelOnFill = hex(0x08121C)
-    /// "Plenty left" — a calm sage, not the done-lime. Healthy capacity is the
-    /// normal state of the quota panel, so it must be the quietest fill there;
-    /// the orange/red tones are what the eye should find.
-    static let healthy = hex(0x7FA06F)
+    /// Gauge fills are neutral and translucent — the text ink at three densities.
+    /// A fuller pool is a touch lighter, an empty one a touch denser, so a panel of
+    /// bars still says healthy / low / spent without competing with the board.
+    static func gaugeFill(_ tone: QuotaCapacityTone) -> NSColor {
+        switch tone {
+        case .healthy: return textPrimary.withAlphaComponent(0.14)
+        case .constrained: return textPrimary.withAlphaComponent(0.20)
+        case .critical: return textPrimary.withAlphaComponent(0.30)
+        case .unknown: return .clear
+        }
+    }
+    /// The hairline ring around a gauge track, so the track edge stays visible where
+    /// a translucent fill ends and two bars side by side never merge into one strip.
+    static var gaugeRing: NSColor { textPrimary.withAlphaComponent(0.12) }
     /// Harness logos on cards and quota rows. One neutral ink: the silhouette
     /// already names the harness, and a brand colour per mark put Claude's orange
     /// on nearly every card — the same orange that means NEEDS YOU.
@@ -168,17 +191,17 @@ enum BoardTheme {
         return (raw * 20).rounded(.toNearestOrAwayFromZero) / 20
     }
 
+    /// Half-point steps: the column title (12.5) and card title (13.5) sit between
+    /// the integer sizes, and rounding them away lost exactly the step they add.
     private static func scaled(_ size: CGFloat) -> CGFloat {
-        (size * boardFontScale * responsiveFontScale).rounded(.toNearestOrAwayFromZero)
+        (size * boardFontScale * responsiveFontScale * 2).rounded(.toNearestOrAwayFromZero) / 2
     }
 
-    // Type policy: sans carries prose; numbers (counts, %, durations, countdowns)
-    // set in SF Pro with tabular digits so they align and change width-stably
-    // without switching typeface mid-line; SF Mono is reserved for code-shaped
-    // text (commands, pool ids, the terminal). The card title anchors by SIZE, not weight — it is
-    // the largest text on a card face at REGULAR weight. The title is the one
-    // line the operator actually reads across a full board, and at medium a
-    // column of them read as a wall of emphasis (8 Sep type study).
+    // Type policy: titles, project headers and done rows set in a monospace — the
+    // titles are task slugs in a terminal tool, and the face matches the terminal
+    // behind every card. Sans carries the remaining prose; numbers (counts, %,
+    // durations, countdowns) set in SF Pro with tabular digits so they align and
+    // change width-stably.
 
     static var mono: NSFont { .monospacedSystemFont(ofSize: scaled(11), weight: .regular) }
     static var monoBold: NSFont { .monospacedSystemFont(ofSize: scaled(11), weight: .semibold) }
@@ -186,67 +209,85 @@ enum BoardTheme {
     /// Numeric data in SF Pro with tabular (fixed-width) digits.
     static var numeric: NSFont { .monospacedDigitSystemFont(ofSize: scaled(11), weight: .regular) }
     static var numericSmall: NSFont { .monospacedDigitSystemFont(ofSize: scaled(10), weight: .regular) }
+    /// A countdown that matters now (imminent or exhausted) — weight, not hue, lifts it.
+    static var numericSmallStrong: NSFont { .monospacedDigitSystemFont(ofSize: scaled(10), weight: .semibold) }
     /// The percent riding inside a quota bar — semibold so it holds up against the fill.
     static var gaugeLabel: NSFont { .monospacedDigitSystemFont(ofSize: scaled(11), weight: .semibold) }
-    /// Column wayfinding caps — tracking (see ``caps(_:color:)``), not weight,
-    /// does the work, so headers stop competing with card titles.
-    static var columnTitle: NSFont { .systemFont(ofSize: scaled(11), weight: .semibold) }
-    /// The card headline — the size anchor on a card face (see type policy above).
-    static var cardTitle: NSFont { .systemFont(ofSize: scaled(15), weight: .regular) }
+    /// Column signage reads first: a step larger than card meta, bold, tracked wide
+    /// (see ``caps(_:color:font:kern:)``).
+    static var columnTitle: NSFont { .systemFont(ofSize: scaled(12.5), weight: .bold) }
+    /// The lane's card count beside its title — always shown, `0` included.
+    static var laneCount: NSFont { .monospacedDigitSystemFont(ofSize: scaled(12), weight: .medium) }
+    /// The card headline — the title face at medium weight, the one line the
+    /// operator reads across a full board.
+    static var cardTitle: NSFont { titleMono(scaled(13.5), weight: .medium) }
     /// A finished card's title — a step below the live card headline, tracking zoom.
-    static var doneTitle: NSFont { .systemFont(ofSize: scaled(13), weight: .regular) }
+    static var doneTitle: NSFont { titleMono(scaled(13), weight: .regular) }
+    /// The project header over a group of cards inside a lane.
+    static var projectHeader: NSFont { titleMono(scaled(10.5), weight: .semibold) }
+
+    /// The title face: JetBrains Mono, shipped in the bundle (OFL — see
+    /// `Resources/JetBrainsMono-OFL.txt`) and registered for this process the first
+    /// time a title font is asked for. SF Mono stands in if the files are missing, so
+    /// a stripped bundle still draws every title in *a* mono.
+    static func titleMono(_ size: CGFloat, weight: NSFont.Weight) -> NSFont {
+        _ = bundledFontsRegistered
+        let face = weight == .semibold ? "JetBrainsMono-SemiBold"
+            : weight == .medium ? "JetBrainsMono-Medium" : "JetBrainsMono-Regular"
+        return NSFont(name: face, size: size) ?? .monospacedSystemFont(ofSize: size, weight: weight)
+    }
+
+    private static let bundledFontsRegistered: Bool = {
+        var registered = false
+        for face in ["JetBrainsMono-Regular", "JetBrainsMono-Medium", "JetBrainsMono-SemiBold"] {
+            guard let url = resourceURL(face, ext: "ttf") else { continue }
+            if CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil) { registered = true }
+        }
+        return registered
+    }()
     static var sansSmall: NSFont { .systemFont(ofSize: scaled(11), weight: .medium) }
     static var sansTiny: NSFont { .systemFont(ofSize: scaled(10), weight: .regular) }
-    /// Sans prose emphasis — advisory headlines. Prose never sets in mono.
-    static var sansStrong: NSFont { .systemFont(ofSize: scaled(12), weight: .semibold) }
-    /// The project chip on a card — tiny; the project colour carries the identity.
+    /// The small chips on a card footer (host, quota, link).
     static var chip: NSFont { .systemFont(ofSize: scaled(10), weight: .medium) }
 
     /// An ALL-CAPS wayfinding label with letter tracking, e.g. column headers.
     /// Small caps want *positive* tracking — the one place the board adds it.
-    static func caps(_ text: String, color: NSColor, font: NSFont = columnTitle) -> NSAttributedString {
+    static func caps(
+        _ text: String, color: NSColor, font: NSFont = columnTitle, kern: CGFloat = 1.0
+    ) -> NSAttributedString {
         NSAttributedString(string: text, attributes: [
-            .font: font, .kern: 0.6, .foregroundColor: color,
+            .font: font, .kern: kern, .foregroundColor: color,
         ])
     }
 
-    /// The smaller caps tier — table headers inside a panel (quota LEFT / 5H / WEEKLY).
-    static var capsSmall: NSFont { .systemFont(ofSize: scaled(10), weight: .semibold) }
+    /// The smaller caps tier — the 5H / WEEKLY captions over the quota gauges.
+    static var capsSmall: NSFont { .systemFont(ofSize: scaled(9.5), weight: .semibold) }
 
     /// The card headline as an attributed string — one font for EVERY title so
-    /// the column scans as a uniform list, with tightened two-line leading (SF
-    /// wants slightly negative tracking above 13pt, and the default leading lets
-    /// a wrapped title float apart). Word wrapping keeps slug titles breaking at
-    /// their hyphens.
+    /// the column scans as a uniform list, with slightly loosened leading so a
+    /// wrapped mono title stays readable, and the tracking mono wants above 13pt.
+    /// Word wrapping keeps slug titles breaking at their hyphens.
     static func cardTitleText(_ title: String, color: NSColor) -> NSAttributedString {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byWordWrapping
-        let lineHeight = (cardTitle.pointSize * 1.15).rounded()
+        let lineHeight = (cardTitle.pointSize * 1.3).rounded()
         paragraph.minimumLineHeight = lineHeight
         paragraph.maximumLineHeight = lineHeight
         return NSAttributedString(string: title, attributes: [
             .font: cardTitle, .foregroundColor: color,
-            .kern: -0.2, .paragraphStyle: paragraph,
+            .kern: -0.3, .paragraphStyle: paragraph,
         ])
     }
 
     // MARK: - Semantic colour (the policy lives here)
 
-    /// The colour for a card's state rail / chip — the at-a-glance lifecycle cue.
+    /// The colour for a card's state stamp — one signal: only "needs you" carries a
+    /// hue; every other state is the faint text ink. Column position says the rest.
     static func stateColor(_ state: CardState) -> NSColor {
         switch state {
-        case .idle: return hex(0x667980)      // base01
-        case .parked: return hex(0x728797)   // base00 — shelved, not loud
-        case .running: return hex(0x3A9ADE)   // solarized blue — the "working" pulse
-        case .runningTests: return hex(0x7A5FB8) // solarized violet
-        case .waitingForInput: return hex(0xD97A3A) // solarized orange
-        case .blocked: return hex(0xE84C3D)   // solarized red
-        case .done: return hex(0x99CC00)      // solarized green
-        case .unknown: return hex(0x728797)   // base00 — clears WCAG AA on the canvas
-        // A dead link reads in the alert red — the same "something is wrong" ink as
-        // `blocked`, and deliberately nowhere near `done`'s green or `unknown`'s
-        // grey, which are the two readings it must never be mistaken for (US-007 AC-4).
-        case .unreachable: return alert
+        case .waitingForInput: return needs
+        case .idle, .parked, .running, .runningTests, .blocked, .done, .unknown, .unreachable:
+            return textFaint
         }
     }
 
@@ -277,9 +318,11 @@ enum BoardTheme {
     /// `fatalError` inside a `.app` copied to anyone else's Mac. `make-app.sh` copies
     /// the marks into `Contents/Resources`, so the packaged app never reaches the
     /// module bundle; dev runs (no such resource in the main bundle) still do.
-    private static func markURL(_ name: String) -> URL? {
-        if let url = Bundle.main.url(forResource: name, withExtension: "pdf") { return url }
-        return Bundle.module.url(forResource: name, withExtension: "pdf", subdirectory: "Resources")
+    private static func markURL(_ name: String) -> URL? { resourceURL(name, ext: "pdf") }
+
+    private static func resourceURL(_ name: String, ext: String) -> URL? {
+        if let url = Bundle.main.url(forResource: name, withExtension: ext) { return url }
+        return Bundle.module.url(forResource: name, withExtension: ext, subdirectory: "Resources")
     }
 
     private static var markCache: [CardAgent: NSImage] = [:]
@@ -297,69 +340,6 @@ enum BoardTheme {
         }
     }
 
-    /// Stable per-repo chip colour, assigned first-seen-first-slot. Hash-bucketing
-    /// (the old FNV-1a scheme) let two repos on one board collide on a hue; walking
-    /// the palette in discovery order guarantees the first 8 distinct repos all
-    /// read differently, and only a 9th wraps. Keyed on ``projectLabel(_:)`` (not
-    /// ``shortPath(_:)``) so every `git worktree` of the same repo shares one
-    /// colour instead of each task/branch minting its own.
-    static func repoColor(_ path: String) -> NSColor {
-        color(forKey: projectLabel((path as NSString).standardizingPath))
-    }
-
-    /// The card-aware variant. An owned remote-tmux card's `projectDir` is its
-    /// `user@host` label, so keying on it would give every session on one box the
-    /// same hue and never the hue of the project itself. A card linked via
-    /// ``linkProject(card:toDirectory:)`` keys on the REMOTE directory's trailing
-    /// name instead — the same key a local checkout of that project produces — so
-    /// "my-app here" and "my-app on the mac studio" read as one project.
-    static func repoColor(for card: BoardCard) -> NSColor {
-        if let key = projectLinkByCard[card.id] { return color(forKey: key) }
-        return repoColor(card.projectDir)
-    }
-
-    /// Link a remote card to its project by the trailing name of its far-side
-    /// working directory. A `nil`/root/`~` dir carries no project name — the card
-    /// keeps its host-label hue.
-    static func linkProject(card id: UUID, toDirectory dir: String?) {
-        let leaf = ((dir ?? "") as NSString).lastPathComponent
-        guard !leaf.isEmpty, leaf != "~", leaf != "/" else { return }
-        projectLinkByCard[id] = leaf
-    }
-
-    private static var projectLinkByCard: [UUID: String] = [:]
-
-    /// One key → one palette slot, first-seen-first-slot, and the assignment is
-    /// durable: the slot map persists in `UserDefaults`, so a project keeps its
-    /// colour across relaunches instead of re-rolling by discovery order.
-    private static func color(forKey key: String) -> NSColor {
-        var slots = repoColorSlots
-            ?? (repoColorDefaults.dictionary(forKey: repoColorSlotsKey) as? [String: Int] ?? [:])
-        defer { repoColorSlots = slots }
-        if let slot = slots[key] {
-            return repoPalette[slot % repoPalette.count]
-        }
-        let slot = slots.count
-        slots[key] = slot
-        repoColorDefaults.set(slots, forKey: repoColorSlotsKey)
-        return repoPalette[slot % repoPalette.count]
-    }
-
-    /// Injectable store (same seam as `RecentFolderStore`) so tests run against a
-    /// throwaway suite instead of the developer's real defaults.
-    static var repoColorDefaults: UserDefaults = .standard {
-        didSet { repoColorSlots = nil }
-    }
-    private static let repoColorSlotsKey = "sich.repoColorSlots"
-    private static var repoColorSlots: [String: Int]?
-    /// Muted identity hues that stay clear of every *semantic* hue on the board —
-    /// no attention orange, alert red, done green, running blue or test violet — so
-    /// a project label can never be read as a card's state.
-    private static let repoPalette = [
-        hex(0x4FB3A9), hex(0xC678A8), hex(0xC9A64B), hex(0x9C8FD6),
-        hex(0x5FA8B8), hex(0x93A97A), hex(0xC98F91), hex(0xB39E82),
-    ]
-
     /// Display form of a card's project dir. A deep absolute path collapses to its
     /// leaf — the project name is the only useful part on a narrow card, and the
     /// parent (`/Users/.../MyProjects`) is noise that truncates the leaf off-screen.
@@ -373,7 +353,7 @@ enum BoardTheme {
         return leaf.isEmpty ? path : leaf
     }
 
-    /// "Which repo" label for the repo chip. A `git worktree` checkout (this
+    /// "Which repo" label for a lane's project header. A `git worktree` checkout (this
     /// project's own model for parallel task sessions) has a leaf that's just the
     /// branch/task slug — e.g. `ui-fixes` — which repeats the card's own title
     /// and never says which repo the work is actually in. Resolves through
@@ -385,6 +365,38 @@ enum BoardTheme {
         }
         let repoLeaf = (mainRepoRoot as NSString).lastPathComponent
         return repoLeaf.isEmpty ? shortPath(path) : repoLeaf
+    }
+
+    /// "Which repo" label for a card. A remote card files under the leaf of its
+    /// far-side folder, so `box:~/work/a1-os` and `~/MyProjects/a1-os` sit under one
+    /// `a1-os` header — the work is the same repo, wherever it runs. A remote card
+    /// whose folder is still unknown falls back to its destination.
+    static func projectLabel(for card: BoardCard) -> String {
+        guard let destination = card.remoteDestination else {
+            return projectLabel(card.projectDir)
+        }
+        return card.remoteDir.map(shortPath) ?? shortDestination(destination)
+    }
+
+    /// Display form of an ssh destination. The host keeps only its first DNS label —
+    /// `roman@studio.tail00ee33.ts.net:2200` reads `roman@studio:2200` — because the
+    /// tailnet / domain suffix is the same on every box and was what the ellipsis ate
+    /// on a card. A bare IP keeps all of its dots.
+    static func shortDestination(_ destination: String) -> String {
+        var rest = Substring(destination)
+        var user = ""
+        if let at = rest.firstIndex(of: "@") {
+            user = String(rest[...at])
+            rest = rest[rest.index(after: at)...]
+        }
+        var port = ""
+        if let colon = rest.lastIndex(of: ":") {
+            port = String(rest[colon...])
+            rest = rest[..<colon]
+        }
+        let first = rest.prefix { $0 != "." }
+        let host = first.contains(where: \.isLetter) ? first : rest
+        return user + host + port
     }
 
     /// Build an opaque sRGB colour from a 0xRRGGBB literal.

@@ -11,6 +11,12 @@ import Testing
 /// calls: this is the interaction-AC-binding-rule the repo has shipped broken before.
 @MainActor
 private func makePalette(recents: [PaletteProject]) -> (CreateCardPalette, NSView, NSWindow) {
+    // The folder stage refuses a folder that is not on disk (a shell cannot start in
+    // one), so the demo project the recents point at must exist.
+    for recent in recents {
+        try? FileManager.default.createDirectory(
+            atPath: recent.path, withIntermediateDirectories: true)
+    }
     let palette = CreateCardPalette(recents: recents)
     let root = NSView(frame: NSRect(x: 0, y: 0, width: 900, height: 640))
     palette.translatesAutoresizingMaskIntoConstraints = false

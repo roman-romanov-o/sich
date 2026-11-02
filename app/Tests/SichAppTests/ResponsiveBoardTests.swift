@@ -46,12 +46,13 @@ struct ResponsiveBoardTests {
             == .bottom(columns: 2))
     }
 
-    @Test("a bottom-docked panel splits the usage table across cards and loses no gauge")
+    @Test("a bottom-docked panel splits the provider blocks across cards and loses no gauge")
     func bottomDockSplitsUsageTable() {
-        func headers(in view: NSView) -> Int {
-            let own = (view as? NSTextField)?.stringValue == "WEEKLY" ? 1 : 0
-            return view.subviews.reduce(own) { $0 + headers(in: $1) }
+        func cards(in view: NSView) -> Int {
+            let own = view.identifier?.rawValue == "quota-card" ? 1 : 0
+            return view.subviews.reduce(own) { $0 + cards(in: $1) }
         }
+        // Two blocks (Claude, Codex): one card on the side, one block per card below.
         let gauges = QuotaProjection.gauges(from: QuotaSeed.demo)
         let side = QuotaPanel()
         side.render(gauges: gauges)
@@ -59,8 +60,8 @@ struct ResponsiveBoardTests {
         strip.dock = .bottom(columns: 3)
         strip.render(gauges: gauges)
 
-        #expect(headers(in: side) == 1)
-        #expect(headers(in: strip) == 2)
+        #expect(cards(in: side) == 1)
+        #expect(cards(in: strip) == 2)
         #expect(strip.rows.map(\.gauge.id) == side.rows.map(\.gauge.id))
     }
 

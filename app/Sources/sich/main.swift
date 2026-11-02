@@ -12,6 +12,10 @@ import SichCore
 //
 // Usage:  swift run sich
 
+// First thing, before any pty can be spawned: drop whatever card binding or agent
+// session markers the launcher leaked into our environment (see LaunchEnvironment).
+LaunchEnvironment.scrub()
+
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
 // Daily-use launch: NO seeded cards at all. The board is exactly the operator's
@@ -49,8 +53,9 @@ RemoteHookStatus.probingEnabled = !isE2E
 SSHLineTransport.spawningEnabled = !isE2E
 let delegate = isE2E
     ? BoardShell(
-        seeds: [BoardSeed.liveTerminal(projectDir: RepoLocator.launchProjectDir())]
-            + BoardSeed.demo,
+        seeds: ProcessInfo.processInfo.environment["SICH_PROMO"] != nil
+            ? PromoRecorder.seeds(projectDir: RepoLocator.launchProjectDir())
+            : [BoardSeed.liveTerminal(projectDir: RepoLocator.launchProjectDir())] + BoardSeed.demo,
         sources: QuotaSeed.demo)
     : BoardShell(seeds: [],
                  sources: QuotaSeed.connecting)   // honest "unknown" until the poller lands

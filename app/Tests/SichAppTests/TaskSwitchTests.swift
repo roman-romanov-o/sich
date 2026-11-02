@@ -217,4 +217,43 @@ struct TaskSwitchTests {
         #expect(shell.taskSwitcher.isHidden == true)
         #expect(shell.drilledInCardID == only.id)
     }
+
+    /// Colour carries information only: the chosen row is the one filled plate, and
+    /// a card that waits for you gets a small flag — not a red row that competes with
+    /// the choice.
+    @Test("the chosen row is the filled one; a waiting card carries a flag, not a red row")
+    func chosenRowStandsOutAndWaitingIsAFlag() {
+        let waiting = BoardCard(sessionID: "w", projectDir: "~/a", agent: .claude, state: .waitingForInput)
+        let calm = BoardCard(sessionID: "c", projectDir: "~/b", agent: .codex, state: .idle)
+        let overlay = TaskSwitcherOverlay()
+        overlay.render(cards: [waiting, calm], highlight: 1)
+
+        let all = Self.descendants(of: overlay)
+        let chosen = all.filter { $0.identifier?.rawValue == "switcher-row-chosen" }
+        let others = all.filter { $0.identifier?.rawValue == "switcher-row" }
+        #expect(chosen.count == 1 && others.count == 1)
+        #expect(chosen.first?.themedBackground == BoardTheme.selectionFill)
+        #expect(others.first?.themedBackground == .clear, "the waiting row is not filled red")
+
+        let flags = all.filter { $0.identifier?.rawValue == "switcher-waiting-flag" }
+        #expect(flags.count == 1, "exactly the waiting card is flagged")
+        #expect(flags.first.map { $0.isDescendant(of: others[0]) } == true)
+    }
+
+    private static func descendants(of view: NSView) -> [NSView] {
+        view.subviews + view.subviews.flatMap(descendants(of:))
+    }
+
+    @Test("a row names only the folder, never the whole path")
+    func rowShowsFolderName() {
+        let local = BoardCard(sessionID: "l", projectDir: "/Users/me/MyProjects/payments-api",
+                              agent: .claude, state: .idle)
+        let tilde = BoardCard(sessionID: "t", projectDir: "~/work/auth-service", agent: .claude, state: .idle)
+        let overlay = TaskSwitcherOverlay()
+        overlay.render(cards: [local, tilde], highlight: 0)
+        let folders = Self.descendants(of: overlay)
+            .filter { $0.identifier?.rawValue == "switcher-directory" }
+            .compactMap { ($0 as? NSTextField)?.stringValue }
+        #expect(folders == ["payments-api", "auth-service"])
+    }
 }

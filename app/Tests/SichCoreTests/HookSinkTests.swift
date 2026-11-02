@@ -78,7 +78,7 @@ struct HookSinkTests {
             ("UserPromptSubmit", .userInput),
             ("PreToolUse", .toolUse),
             ("PostToolUse", .toolUse),
-            ("PostToolUseFailure", .errorExit),
+            ("PostToolUseFailure", .toolUse),
             ("PermissionRequest", .permissionRequest),
             ("Notification", .permissionRequest),
             ("PermissionDenied", .errorExit),

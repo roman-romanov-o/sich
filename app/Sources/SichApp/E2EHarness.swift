@@ -110,8 +110,53 @@ final class E2EHarness {
             self.checks.append(Check(
                 "returned_to_board",
                 self.shell.drillIn.isHidden && !self.shell.boardView.isHidden))
+            self.captureCreatePalette()
+        }
+    }
+
+    /// The ⌘N palette on its folder stage with a half-typed path, so the inline
+    /// completion list is in the shot: the surface that replaced the open panel.
+    private func captureCreatePalette() {
+        shell.openCreatePalette()
+        guard let palette = shell.createPalette else { finish(); return }
+        window.display()
+        after(0.2) {
+            self.window.sendEvent(self.returnKey())           // This Mac → folder stage
+            let home = NSHomeDirectory() + "/"
+            if let editor = self.window.firstResponder as? NSTextView {
+                editor.insertText(home, replacementRange: NSRange(location: NSNotFound, length: 0))
+            }
+            self.window.display()
+            self.after(0.3) {
+                self.shots.append(self.capture("04-create-palette-folder"))
+                self.checks.append(Check(
+                    "palette_lists_home_folders",
+                    palette.stage == .project && !palette.folderSuggestions.isEmpty))
+                self.shell.dismissCreatePalette()
+                self.captureTaskSwitcher()
+            }
+        }
+    }
+
+    /// The Ctrl+Tab switcher mid-choice: opened, then stepped once, as a held ⌃ would.
+    private func captureTaskSwitcher() {
+        shell.advanceSwitcher(reverse: false)
+        shell.advanceSwitcher(reverse: false)
+        window.display()
+        after(0.2) {
+            self.shots.append(self.capture("05-task-switcher"))
+            self.checks.append(Check("switcher_shown", !self.shell.taskSwitcher.isHidden))
+            self.shell.cancelSwitcher()
             self.finish()
         }
+    }
+
+    private func returnKey() -> NSEvent {
+        NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil,
+            characters: "\r", charactersIgnoringModifiers: "\r",
+            isARepeat: false, keyCode: 36)!
     }
 
     private func finish() {
@@ -172,12 +217,13 @@ final class E2EHarness {
         catch { return false }
     }
 
-    /// Render the content view's layer tree into a bitmap. Faithful for our UI
-    /// (custom `draw(_:)` layer-backed views and image-content layers, not stock
-    /// NSControls) and needs no Screen Recording permission, so the visual artifact
-    /// exists on any machine — CI included.
+    /// Render the window's layer tree into a bitmap — the frame view, so the titlebar
+    /// (traffic lights, and the task toolbar while drilled in) is in the shot, not just
+    /// the content. Faithful for our UI (custom `draw(_:)` layer-backed views and
+    /// image-content layers) and needs no Screen Recording permission, so the visual
+    /// artifact exists on any machine — CI included.
     private func layerRenderPNG(to path: URL) -> Bool {
-        guard let view = window.contentView, let layer = view.layer,
+        guard let view = window.contentView?.superview ?? window.contentView, let layer = view.layer,
               let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds),
               let ctx = NSGraphicsContext(bitmapImageRep: rep) else { return false }
         layer.render(in: ctx.cgContext)

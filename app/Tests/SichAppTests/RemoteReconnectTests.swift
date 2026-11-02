@@ -112,6 +112,7 @@ final class ReconnectTransport: RemoteLineTransport, @unchecked Sendable {
     func start(
         argv: [String],
         onLines: @escaping @Sendable ([Data]) -> Void,
+        onHeartbeat: @escaping @Sendable () -> Void,
         onExit: @escaping @Sendable (Int32) -> Void
     ) -> RemoteLineStream? {
         lock.lock()

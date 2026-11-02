@@ -59,9 +59,12 @@ public protocol RemoteLineStream: AnyObject, Sendable {
 public protocol RemoteLineTransport: Sendable {
     /// Launch `argv`; `onLines` fires per read chunk, `onExit` once with the child's
     /// status. Returns `nil` when the child could not be launched at all.
+    /// `onHeartbeat` fires whenever the far side proves it is alive without sending a
+    /// line (the relay command's stderr beat).
     func start(
         argv: [String],
         onLines: @escaping @Sendable ([Data]) -> Void,
+        onHeartbeat: @escaping @Sendable () -> Void,
         onExit: @escaping @Sendable (Int32) -> Void
     ) -> RemoteLineStream?
 }
@@ -89,6 +92,11 @@ public final class RemoteEventRelay: @unchecked Sendable {
     /// window, and bounded so a long-lived relay cannot grow without limit (US-008).
     public static let dedupCapacity = 512
 
+    /// Silence (no line AND no heartbeat) longer than this means the session behind
+    /// the ssh is gone even though ssh itself has not exited: four missed beats.
+    public static let defaultStallTimeout: TimeInterval =
+        TimeInterval(RemoteTmuxCommand.relayHeartbeatSeconds * 4)
+
     /// The host as stamped onto every line — the spec's host, validated through the
     /// destination chokepoint at init.
     public let host: String
@@ -96,6 +104,7 @@ public final class RemoteEventRelay: @unchecked Sendable {
     private let argv: [String]
     private let transport: RemoteLineTransport
     private let reconnectDelay: TimeInterval
+    private let stallTimeout: TimeInterval
     private let sink: @Sendable ([RemoteEventLine]) -> Void
 
     private let lock = NSLock()
@@ -103,6 +112,8 @@ public final class RemoteEventRelay: @unchecked Sendable {
     private var stopped = false
     private var seen: DedupWindow
     private var currentHealth: RemoteRelayHealth = .connecting
+    private var lastSign = Date()
+    private var watchdog: DispatchSourceTimer?
 
     /// Throws when the spec cannot produce a legal ssh destination — the same
     /// chokepoint every other remote channel goes through (DD-004 / AC-5).
@@ -110,12 +121,14 @@ public final class RemoteEventRelay: @unchecked Sendable {
         spec: RemoteTmuxSpec,
         transport: RemoteLineTransport,
         reconnectDelay: TimeInterval = 5,
+        stallTimeout: TimeInterval = RemoteEventRelay.defaultStallTimeout,
         sink: @escaping @Sendable ([RemoteEventLine]) -> Void
     ) throws {
         self.argv = try RemoteTmuxCommand.relayArgv(for: spec)
         self.host = try RemoteTmuxCommand.hostToken(for: spec)
         self.transport = transport
         self.reconnectDelay = reconnectDelay
+        self.stallTimeout = stallTimeout
         self.sink = sink
         self.seen = DedupWindow(capacity: Self.dedupCapacity)
     }
@@ -137,6 +150,14 @@ public final class RemoteEventRelay: @unchecked Sendable {
     public func start() {
         lock.lock()
         stopped = false
+        if watchdog == nil {
+            let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+            let tick = stallTimeout / 4
+            timer.schedule(deadline: .now() + tick, repeating: tick)
+            timer.setEventHandler { [weak self] in self?.recycleIfStalled() }
+            timer.resume()
+            watchdog = timer
+        }
         lock.unlock()
         launch()
     }
@@ -147,6 +168,8 @@ public final class RemoteEventRelay: @unchecked Sendable {
         stopped = true
         let running = stream
         stream = nil
+        watchdog?.cancel()
+        watchdog = nil
         lock.unlock()
         running?.cancel()
     }
@@ -154,9 +177,13 @@ public final class RemoteEventRelay: @unchecked Sendable {
     // MARK: - Internals
 
     private func launch() {
+        lock.lock()
+        lastSign = Date()   // a fresh dial gets the full stall budget to say something
+        lock.unlock()
         let started = transport.start(
             argv: argv,
             onLines: { [weak self] lines in self?.receive(lines) },
+            onHeartbeat: { [weak self] in self?.heartbeat() },
             onExit: { [weak self] code in self?.childExited(code) }
         )
         lock.lock()
@@ -177,6 +204,7 @@ public final class RemoteEventRelay: @unchecked Sendable {
     private func receive(_ lines: [Data]) {
         lock.lock()
         currentHealth = .streaming
+        lastSign = Date()
         let fresh = lines.filter { seen.admit($0) }
         lock.unlock()
         guard !fresh.isEmpty else { return }
@@ -191,9 +219,37 @@ public final class RemoteEventRelay: @unchecked Sendable {
         stream = nil
         guard !stopped else { return lock.unlock() }
         if code == Self.sshFailureExit { currentHealth = .unreachable }
-        let delay = reconnectDelay
         lock.unlock()
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + delay) { [weak self] in
+        scheduleRelaunch()
+    }
+
+    /// The far side's beat: the session behind the ssh is alive, nothing to deliver.
+    private func heartbeat() {
+        lock.lock()
+        currentHealth = .streaming
+        lastSign = Date()
+        lock.unlock()
+    }
+
+    /// The watchdog. ssh exiting is not the only way a link dies: the session behind
+    /// it can vanish while the transport still answers keepalives, and then nothing
+    /// ever exits. No line and no beat for `stallTimeout` means exactly that — kill
+    /// the child and dial again, reading `unreachable` until the far side speaks.
+    private func recycleIfStalled() {
+        lock.lock()
+        guard !stopped, let running = stream,
+              Date().timeIntervalSince(lastSign) > stallTimeout
+        else { return lock.unlock() }
+        stream = nil
+        currentHealth = .unreachable
+        lock.unlock()
+        running.cancel()
+        scheduleRelaunch()
+    }
+
+    private func scheduleRelaunch() {
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + reconnectDelay) {
+            [weak self] in
             guard let self, !self.isStopped else { return }
             self.launch()
         }

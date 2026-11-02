@@ -81,7 +81,7 @@ struct HostChipRenderTests {
             let chip = try chip(forRemote: state, destination: "roman@tint.invalid")
             let actionable = state == .notInstalled || state == .staleVersion
             #expect(chip.status.isActionable == actionable)
-            #expect((chip.textColor == BoardTheme.attention) == actionable)
+            #expect((chip.textColor == BoardTheme.textMuted) == actionable)
             #expect((chip.toolTip?.contains("click to install") == true) == actionable)
             #expect((chip.themedBackground != nil) == actionable)
             if actionable {

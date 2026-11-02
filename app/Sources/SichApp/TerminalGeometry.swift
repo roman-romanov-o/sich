@@ -10,7 +10,7 @@ import Foundation
 enum TerminalGeometry {
 
     /// Injectable so tests never read or pollute the operator's real defaults —
-    /// the same seam idiom as `BoardTheme.repoColorDefaults`.
+    /// the same seam idiom as `RecentFolderStore`.
     static var defaults: UserDefaults = .standard
 
     private static let key = "sich.terminalGeometry"

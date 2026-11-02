@@ -80,13 +80,11 @@ public final class QuotaGaugeRow: NSView {
         remainingLabel.stringValue = remainingLine()
         remainingLabel.isHidden = true
 
-        resetLabel.stringValue = resetLine()
-        resetLabel.isHidden = resetLabel.stringValue.isEmpty
-        resetLabel.font = BoardTheme.numericSmall
-        resetLabel.textColor = resetColor()
+        resetLabel.textColor = BoardTheme.textMuted
         resetLabel.lineBreakMode = .byTruncatingTail
         resetLabel.toolTip = poolTitle()
         stack.addArrangedSubview(resetLabel)
+        refreshReset()
     }
 
     /// Re-evaluate the reset countdown against the current clock — the panel ticks
@@ -94,7 +92,7 @@ public final class QuotaGaugeRow: NSView {
     public func refreshReset(now: Date = Date()) {
         resetLabel.stringValue = resetLine(now: now)
         resetLabel.isHidden = resetLabel.stringValue.isEmpty
-        resetLabel.textColor = resetColor(now: now)
+        resetLabel.font = resetIsHot(now: now) ? BoardTheme.numericSmallStrong : BoardTheme.numericSmall
     }
 
     private func poolTitle() -> String {
@@ -152,16 +150,15 @@ public final class QuotaGaugeRow: NSView {
         return isExhausted ? "back in \(left)" : "in \(left)"
     }
 
-    /// Highlight the countdown when it matters: bright attention while exhausted (you
-    /// are waiting on exactly this reset) or when it's imminent/soon. A distant reset
-    /// stays calm but stays *legible* — `textDim` on the card fill was the reason this
-    /// line read as decoration rather than the answer to "when can I launch again".
-    private func resetColor(now: Date = Date()) -> NSColor {
-        guard let reset = gauge.reset else { return BoardTheme.textMuted }
-        if isExhausted { return BoardTheme.attention }
+    /// A countdown that matters now — exhausted (you are waiting on exactly this
+    /// reset) or imminent — is lifted by weight, not hue: the panel stays neutral
+    /// and the board keeps its one red. A distant reset stays calm but *legible*.
+    private func resetIsHot(now: Date = Date()) -> Bool {
+        guard let reset = gauge.reset else { return false }
+        if isExhausted { return true }
         switch QuotaCountdown.urgency(to: reset, from: now) {
-        case .imminent, .soon: return BoardTheme.attention
-        case .distant: return BoardTheme.textMuted
+        case .imminent, .soon: return true
+        case .distant: return false
         }
     }
 
@@ -201,46 +198,43 @@ enum QuotaCapacityTone: Equatable {
     case unknown
 }
 
+/// A pool's bar: a recessed track with a hairline ring, a translucent neutral fill
+/// whose density says healthy / low / spent, and the percent riding inside.
 @MainActor
 final class QuotaBar: NSView, ThemeReapplying {
     private let track = CALayer()
     private let fill = CALayer()
-    /// The percent is drawn twice, once per background it can land on: `labelOnTrack`
-    /// sits under the fill, and `labelOnFill` is a sublayer of the clipping fill so it
-    /// only shows where the fill actually covers. Whatever the fraction, the glyphs the
-    /// eye sees are always the pass with contrast against what's behind them.
-    private let labelOnTrack = QuotaBar.makeTextLayer()
-    private let labelOnFill = QuotaBar.makeTextLayer()
+    /// The fill is a translucent wash of the text ink, so one pass of the label in
+    /// that same ink reads on both the track and the fill.
+    private let label = QuotaBar.makeTextLayer()
     private var currentFraction: Double?
     private var currentState: QuotaPoolState = .active
     private var currentTone: QuotaCapacityTone = .healthy
 
-    var labelText: String { labelOnTrack.string as? String ?? "" }
+    var labelText: String { label.string as? String ?? "" }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         translatesAutoresizingMaskIntoConstraints = false
-        fill.masksToBounds = true
+        track.borderWidth = 1
         layer?.addSublayer(track)
-        layer?.addSublayer(labelOnTrack)
         layer?.addSublayer(fill)
-        fill.addSublayer(labelOnFill)
+        layer?.addSublayer(label)
     }
 
     required init?(coder: NSCoder) { nil }
 
     func configure(
         fraction: Double?, state: QuotaPoolState,
-        tone: QuotaCapacityTone, label: String
+        tone: QuotaCapacityTone, label text: String
     ) {
         track.cornerRadius = QuotaLayout.barCornerRadius
         fill.cornerRadius = QuotaLayout.barCornerRadius
         currentFraction = fraction
         currentState = state
         currentTone = tone
-        labelOnTrack.string = label
-        labelOnFill.string = label
+        label.string = text
         applyColors()
         needsLayout = true
     }
@@ -271,22 +265,13 @@ final class QuotaBar: NSView, ThemeReapplying {
     private func applyColors(under appearance: NSAppearance? = nil) {
         (appearance ?? effectiveAppearance).performAsCurrentDrawingAppearance {
             track.backgroundColor = BoardTheme.gaugeTrack.cgColor
-            labelOnTrack.foregroundColor =
+            track.borderColor = BoardTheme.gaugeRing.cgColor
+            label.foregroundColor =
                 (currentState == .unknown ? BoardTheme.textFaint : BoardTheme.textPrimary).cgColor
-            labelOnFill.foregroundColor = BoardTheme.gaugeLabelOnFill.cgColor
             switch currentState {
-            case .unknown:
-                fill.backgroundColor = NSColor.clear.cgColor
-            case .exhausted:
-                fill.backgroundColor = BoardTheme.alert.cgColor
-            case .active:
-                let color: NSColor = switch currentTone {
-                case .healthy: BoardTheme.healthy
-                case .constrained: BoardTheme.attention
-                case .critical: BoardTheme.alert
-                case .unknown: NSColor.clear
-                }
-                fill.backgroundColor = color.cgColor
+            case .unknown: fill.backgroundColor = NSColor.clear.cgColor
+            case .exhausted: fill.backgroundColor = BoardTheme.gaugeFill(.critical).cgColor
+            case .active: fill.backgroundColor = BoardTheme.gaugeFill(currentTone).cgColor
             }
         }
     }
@@ -296,11 +281,7 @@ final class QuotaBar: NSView, ThemeReapplying {
         track.frame = bounds
         let f = currentState == .exhausted ? 1.0 : max(0.0, min(currentFraction ?? 0.0, 1.0))
         fill.frame = NSRect(x: 0, y: 0, width: bounds.width * CGFloat(f), height: bounds.height)
-        // Both passes span the full bar in the same coordinate space, so the glyphs line
-        // up exactly; only the fill's clipping decides which pass is visible where.
-        let textFrame = centeredTextFrame()
-        labelOnTrack.frame = textFrame
-        labelOnFill.frame = textFrame
+        label.frame = centeredTextFrame()
     }
 
     private func centeredTextFrame() -> NSRect {

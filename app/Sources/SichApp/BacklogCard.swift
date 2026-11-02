@@ -55,7 +55,7 @@ final class BacklogCard: NSView {
         if let projectDir = record.projectDir {
             let chip = label(
                 BoardTheme.shortPath(projectDir), font: BoardTheme.monoSmall,
-                color: BoardTheme.repoColor(projectDir))
+                color: BoardTheme.textFaint)
             stack.setCustomSpacing(8, after: stack.arrangedSubviews.last ?? chip)
             stack.addArrangedSubview(chip)
         }

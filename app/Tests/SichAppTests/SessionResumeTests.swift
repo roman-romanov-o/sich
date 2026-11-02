@@ -269,9 +269,10 @@ struct SessionResumeTests {
     // MARK: - TC-UNIT-027 — deterministic Claude conversation resume
 
     /// The start command PINS our own id (so we own it up front, no hook-scraping),
-    /// and the restart command replays that EXACT id with a fresh-claude fallback — the
-    /// round-trip that makes restart-resume deterministic. Neither is print-mode headless.
-    @Test("start pins --session-id; restart resumes the same id, lowercased, with fallback")
+    /// and the restart command replays that EXACT id; when there is no transcript yet its
+    /// fallback starts fresh under the SAME id, so the token never drifts from the
+    /// conversation the operator then types into. Neither is print-mode headless.
+    @Test("start pins --session-id; restart resumes the same id, falling back to the same id")
     func claudeResumeCommandsArePinnedAndReversible() {
         let id = UUID(uuidString: "AABBCCDD-1122-3344-5566-778899AABBCC")!
         let lower = id.uuidString.lowercased()
@@ -282,12 +283,14 @@ struct SessionResumeTests {
         // put a real `claude` ahead of `~/.sich/bin` — the card then never updates).
         let shim = "\"$HOME/.sich/bin/claude\""
         #expect(start == "\(shim) --session-id \(lower)\n")
-        #expect(resume == "\(shim) --resume \(lower) 2>/dev/null || \(shim)\n")
+        #expect(resume == "\(shim) --resume \(lower) 2>/dev/null"
+                + " || \(shim) --session-id \(lower) 2>/dev/null || \(shim)\n")
         // A far-side shell has no shim: remote launches stay a bare PATH lookup.
         #expect(BoardShell.startClaudeCommand(sessionID: id, via: .remotePath)
                 == "claude --session-id \(lower)\n")
         #expect(BoardShell.resumeClaudeCommand(sessionID: id, via: .remotePath)
-                == "claude --resume \(lower) 2>/dev/null || claude\n")
+                == "claude --resume \(lower) 2>/dev/null"
+                + " || claude --session-id \(lower) 2>/dev/null || claude\n")
         // Firewall stays clean: we never auto-spawn a headless print-mode agent.
         #expect(!start.contains("--print") && !start.contains(" -p"))
         #expect(!resume.contains("--print") && !resume.contains(" -p"))

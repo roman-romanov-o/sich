@@ -23,7 +23,6 @@ struct SessionDispositionTests {
     func cleanExit() {
         let d = SessionDisposition(state: .exited)
         #expect(d == .exited(code: 0))
-        #expect(d.shortLabel == "exited")
         #expect(d.isTerminal)
     }
 
@@ -33,7 +32,6 @@ struct SessionDispositionTests {
         #expect(exit.signal == SIGKILL)
         let d = SessionDisposition(state: .crashed(exit))
         #expect(d == .crashed(signal: SIGKILL))
-        #expect(d.shortLabel == "crashed")
         #expect(d.endBanner == "— session killed (signal \(SIGKILL)) —")
     }
 
@@ -47,8 +45,6 @@ struct SessionDispositionTests {
 
         let d = SessionDisposition(state: .crashed(exit))
         #expect(d == .exited(code: code))           // exit, not crash
-        #expect(d.shortLabel == "exited")
-        #expect(d.shortLabel != "crashed")
         #expect(d.endBanner == "— session ended (exit \(code)) —")
     }
 

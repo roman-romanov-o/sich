@@ -2,7 +2,7 @@ import AppKit
 
 /// Draws a single-line label's text in the vertical centre of its frame.
 ///
-/// Every pill on this UI (``BackPill``, ``StatusPill``, ``WorktreePill``) is a
+/// Every pill on this UI (``BackPill``, the rest overlay's pills) is a
 /// layer-backed `NSTextField` that pins a fixed `intrinsicContentSize.height` to get
 /// its pill shape — 26pt around a 15pt line, say. `NSTextFieldCell` spends that slack
 /// entirely above the line, so the text sits low in its own fill: measured on the

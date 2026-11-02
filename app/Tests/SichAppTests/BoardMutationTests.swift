@@ -177,17 +177,6 @@ final class BoardMutationTests: XCTestCase {
         XCTAssertEqual(deleted?.id, card.id, "menu dispatch reached the delete callback")
     }
 
-    /// Repo chip colours assign first-seen-first-slot: distinct repos get distinct
-    /// hues (up to the palette size) and the same repo is stable across calls —
-    /// the fix for hash-bucket collisions making two repos read as one.
-    func testRepoColorsAreDistinctPerRepoAndStable() {
-        let paths = (0..<8).map { "/Users/x/proj-\($0)" }
-        let colors = paths.map { BoardTheme.repoColor($0) }
-
-        XCTAssertEqual(Set(colors).count, paths.count, "first 8 repos never share a hue")
-        XCTAssertEqual(BoardTheme.repoColor(paths[3]), colors[3], "same repo stays stable")
-    }
-
     /// A stub seed (idles on `cat`, never an agentic CLI) — light enough for a unit test.
     static func oneSeed() -> [BoardSeed] {
         [BoardSeed(sessionID: "t", projectDir: "~/x", agent: .claude,
