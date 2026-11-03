@@ -16,7 +16,7 @@ export const Clip: React.FC<{ cuts: Cut[] }> = ({ cuts }) => {
         start += length;
         return (
           <Sequence key={i} from={at} durationInFrames={length}>
-            <CutView cut={cut} length={length} />
+            <CutView cut={cut} length={length} first={i === 0} />
           </Sequence>
         );
       })}
@@ -25,10 +25,11 @@ export const Clip: React.FC<{ cuts: Cut[] }> = ({ cuts }) => {
 };
 
 /** One cut: everything inside runs on footage time, so camera, captions and stamps carry over. */
-const CutView: React.FC<{ cut: Cut; length: number }> = ({ cut, length }) => {
+const CutView: React.FC<{ cut: Cut; length: number; first: boolean }> = ({ cut, length, first }) => {
   const frame = useCurrentFrame();
-  // Every cut dips at both ends — including the clip's own ends, so a looping GIF's seam is soft too.
-  const opacity = interpolate(frame, [0, CUT_FADE, length - CUT_FADE, length], [0, 1, 1, 0], {
+  // Cuts dip in and out of each other, but the clip's first frame is fully lit: GitHub
+  // shows it as the poster when a viewer's GIFs don't autoplay.
+  const opacity = interpolate(frame, [0, CUT_FADE, length - CUT_FADE, length], [first ? 1 : 0, 1, 1, 0], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });

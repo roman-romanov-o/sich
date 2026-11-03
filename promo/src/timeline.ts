@@ -165,13 +165,13 @@ export type Cut = { from: number; to: number };
 export const CLIPS: Record<string, Cut[]> = {
   // The pitch: focus block → others' questions held → real break → they return as one list.
   Hero: [
-    { from: 0.3, to: B.drill - 0.75 },
+    { from: B.focus - 0.08, to: B.drill - 0.75 },
     { from: B.back - 0.2, to: B.breakLapse - 0.1 },
     { from: B.tray - 0.3, to: B.switch1 - 0.2 },
   ],
-  Terminal: [{ from: B.drill - 0.85, to: B.interrupt - 0.2 }],
+  Terminal: [{ from: B.drill + 0.1, to: B.interrupt - 0.2 }],
   Switch: [{ from: B.switch1 - 0.5, to: B.answer2 + 0.9 }],
-  Backlog: [{ from: B.clear - 0.05, to: beat("end") - 0.8 }],
+  Backlog: [{ from: B.clear + 0.35, to: beat("end") - 0.8 }],
 };
 export const CUT_FADE = 6;
 export const clipFrames = (cuts: Cut[]) => cuts.reduce((n, c) => n + Math.round((c.to - c.from) * FPS), 0);
