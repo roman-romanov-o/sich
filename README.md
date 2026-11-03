@@ -15,17 +15,18 @@
 </p>
 
 <p align="center">
-  <img src="assets/hero.gif" alt="Sich in action: you start a pomodoro on one task, other agents' questions are held instead of pinging you, a breathing break screen follows, and their questions come back as one list" width="900">
+  <img src="assets/hero.gif" alt="Sich in action: a kanban board of coding agents with two cards in NEEDS YOU; Control-Tab jumps to one and its question is answered in its terminal, the board clears and the next task is pulled from the backlog, then a pomodoro holds new questions until a breathing break" width="900">
 </p>
 
-<p align="center"><b>Many agents. One focus. Their questions wait for your break.</b><br>
+<p align="center"><b>Every agent on one board. One glance tells you who needs you.</b><br>
 <sub><a href="assets/promo.mp4">▶ Watch the full one-minute tour</a></sub></p>
 
 Sich is a native macOS app for working alongside many coding agents (Claude Code,
 Codex, Cursor, Antigravity, Gemini CLI) without burning out. It gives the work a
-shape: a kanban board where every card **is** a live terminal session, and a
-pomodoro that decides when the agents get your attention — so you stop
-tab-hopping between a dozen sessions and work on one thing at a time.
+shape: a kanban board where every card **is** a live terminal session and moves
+on its own as the agent works, waits for you, or finishes — so you stop
+tab-hopping between a dozen sessions. A built-in pomodoro holds the agents'
+questions while you focus on one thing.
 
 ## Why Sich
 
@@ -36,11 +37,11 @@ puts structure between you and that noise.
 
 | | |
 |---|---|
+| 🗂️ **A board that keeps the shape of your day** | BACKLOG, QUEUE, WORKING, NEEDS YOU, DONE: the backlog keeps tomorrow's tasks off today's lanes. One glance tells you where everything is, so you don't have to keep it in your head. |
+| 🔴 **Never miss a question** | Cards move between QUEUE, WORKING, NEEDS YOU and DONE from the agents' own lifecycle hooks, not screen scraping. Outside a focus block, the moment an agent stops to ask, its card turns red and the NEEDS YOU count tells you how many are waiting. |
 | 🍅 **Focus blocks, not firefighting** | Start a pomodoro on the card you are working. While it runs, agents that stop to ask something are held: no alert, no red lane pulling at you, just a quiet "2 will need you after this pomodoro". The minutes are logged against the task you were on. |
 | 🌿 **Real breaks** | When the timer ends the board dims behind a breathing break screen, and the agents keep working underneath. A reply you are halfway through typing holds the break until you press ↵. |
 | 📋 **Questions come back as one list** | When the break is over, the held questions appear together. Pick one and the next pomodoro starts on it, so you answer agents one at a time instead of all at once. |
-| 🗂️ **A board that keeps the shape of your day** | BACKLOG, QUEUE, WORKING, NEEDS YOU, DONE: the backlog keeps tomorrow's tasks off today's lanes. One glance tells you where everything is, so you don't have to keep it in your head. |
-| 🔴 **Never miss a question** | Cards move between QUEUE, WORKING, NEEDS YOU and DONE from the agents' own lifecycle hooks, not screen scraping. Outside a focus block, the moment an agent stops to ask, its card turns red and the NEEDS YOU count tells you how many are waiting. |
 | ⛽ **Know your capacity before you start** | Live quota gauges for your Claude subscription, API credits, Codex and more, each with its reset time. You decide whether to start agent number six before you run out mid-task, not after. |
 | 🧱 **No surprise API bills** | Sich only runs interactive sessions. It structurally refuses to spawn headless `claude -p`, so it never spends API credits on your behalf. |
 | 🌍 **Local and remote side by side** | Attach a tmux session on any SSH host as a card: the agent's hooks are relayed back, so a remote card moves through the columns like a local one. Windows hosts work too, through psmux. |

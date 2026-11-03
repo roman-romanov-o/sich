@@ -158,16 +158,24 @@ export const CLICKS: Click[] = [
   { from: { x: 0.4, y: 0.45 }, to: { x: 0.07, y: 0.17 }, appear: B.pull - 1.3, arrive: B.pull - 0.35, click: B.pull - 0.15, hide: B.pull + 0.05 },
 ];
 
-/** A stretch of footage, in footage seconds. */
-export type Cut = { from: number; to: number };
+/** A stretch of footage, in footage seconds; `captions` replaces the tour's own. */
+export type Cut = { from: number; to: number; captions?: Caption[] };
 
 /** The short README clips, each a few cuts of the same footage played back to back. */
 export const CLIPS: Record<string, Cut[]> = {
-  // The pitch: focus block → others' questions held → real break → they return as one list.
+  // The board leads; the pomodoro is the supporting act at the end.
   Hero: [
-    { from: B.focus - 0.08, to: B.drill - 0.75 },
-    { from: B.back - 0.2, to: B.breakLapse - 0.1 },
-    { from: B.tray - 0.3, to: B.switch1 - 0.2 },
+    {
+      from: B.release + 0.55,
+      to: B.answer1 + 0.5,
+      captions: [
+        { from: B.release - 0.3, to: B.switch1 - 0.3, text: "Every agent on *one board.*", accent: BLUE },
+        ...CAPTIONS.filter((c) => c.from >= B.switch1),
+      ],
+    },
+    { from: B.clear + 0.35, to: B.pull - 0.05 },
+    { from: B.back - 0.2, to: B.timelapse + 0.1 },
+    { from: B.rest - 0.1, to: B.breakLapse - 0.1 },
   ],
   Terminal: [{ from: B.drill + 0.1, to: B.interrupt - 0.2 }],
   Switch: [{ from: B.switch1 - 0.5, to: B.answer2 + 0.9 }],
