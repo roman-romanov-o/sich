@@ -38,7 +38,7 @@ const CutView: React.FC<{ cut: Cut; length: number; first: boolean }> = ({ cut, 
       <Backdrop footageFrom={0} />
       <AbsoluteFill style={{ opacity }}>
         <Stage />
-        <Captions />
+        <Captions captions={cut.captions} />
         <Stamp />
       </AbsoluteFill>
     </Sequence>

@@ -5,11 +5,11 @@ import { CAPTIONS, Caption, EASE_OUT, FPS } from "../timeline";
 const clamp = { extrapolateLeft: "clamp", extrapolateRight: "clamp" } as const;
 
 /** Kinetic captions, timed in footage seconds. */
-export const Captions: React.FC = () => {
+export const Captions: React.FC<{ captions?: Caption[] }> = ({ captions = CAPTIONS }) => {
   const t = useCurrentFrame() / FPS;
   return (
     <AbsoluteFill>
-      {CAPTIONS.map((c) => (t >= c.from - 0.05 && t <= c.to + 0.3 ? <Line key={c.text} c={c} t={t} /> : null))}
+      {captions.map((c) => (t >= c.from - 0.05 && t <= c.to + 0.3 ? <Line key={c.text} c={c} t={t} /> : null))}
     </AbsoluteFill>
   );
 };
