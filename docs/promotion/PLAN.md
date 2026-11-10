@@ -10,6 +10,18 @@ Legend: **[A]** agent does it · **[A→H]** agent drafts, human approves/sends 
 Exit criterion of each phase is listed; don't start a phase until the previous
 one's exit holds.
 
+## Status (2026-11-10)
+
+| # | State |
+|---|-------|
+| 0.1 | Done from v0.4.0: Developer ID signed, notarized and stapled DMG (#11) |
+| 0.2 | Done: `roman-romanov-o/homebrew-tap`, bumped by the release workflow through a deploy key scoped to the tap repo |
+| 0.3 | Done (#8–#10): hero GIF, feature GIFs, promo MP4 |
+| 0.4 | Partly done: value prop and `xattr` removal shipped; "Coming from Vibe Kanban?" and the comparison table still open |
+| 0.5 | Done via `gh repo edit`, except the social preview upload (`assets/social-preview.png`, web UI only) |
+| 0.6 | Not started |
+| 1.x | Drafts in `submissions.md` |
+
 ---
 
 ## Phase 0 — Make the landing worth landing on (≈1–2 days)

@@ -38,8 +38,8 @@ Each release disk image is built by the public
 the tagged commit, and the build is attested with Sigstore. Before installing:
 
 ```bash
-gh attestation verify Sich-vX.Y.Z-universal.dmg --repo roman-romanov-o/sich
-shasum -a 256 -c Sich-vX.Y.Z-universal.dmg.sha256
+gh attestation verify Sich-universal.dmg --repo roman-romanov-o/sich
+shasum -a 256 -c Sich-universal.dmg.sha256
 ```
 
 The first command fails if the disk image was not produced by this repository's
