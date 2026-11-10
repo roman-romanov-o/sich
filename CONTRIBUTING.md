@@ -51,4 +51,5 @@ A few conventions that keep the codebase honest:
 ## Releasing
 
 Push a tag `vX.Y.Z` on `main`. The release workflow builds the universal
-`Sich.app`, stamps the version, and attaches the zip to a GitHub Release.
+`Sich.app`, stamps the version, signs and notarizes it, and attaches the
+disk image to a GitHub Release.

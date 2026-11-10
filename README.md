@@ -87,16 +87,10 @@ and `app/scripts/readme-screenshots.sh`.</sub>
 
 ## Install
 
-Download the latest `Sich.app` from
-[**Releases**](https://github.com/roman-romanov-o/sich/releases)
-— the app ships as a release artifact, never as a binary in this repository.
-
-The bundle is currently unsigned; on first launch either right-click →
-**Open**, or clear the quarantine flag:
-
-```bash
-xattr -dr com.apple.quarantine /Applications/Sich.app
-```
+Download `Sich-vX.Y.Z-universal.dmg` from the latest
+[**release**](https://github.com/roman-romanov-o/sich/releases/latest), open it
+and drag Sich to Applications. The app is signed with a Developer ID and
+notarized by Apple, so it opens like any other Mac app.
 
 Requires macOS 14 or later. The prebuilt app is a universal binary — it runs on
 both Apple silicon and Intel Macs.

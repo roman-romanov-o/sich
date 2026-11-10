@@ -107,21 +107,9 @@ echo "✓ Built $APP"
 
 if [ "$make_dmg" = true ]; then
     VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$CONTENTS/Info.plist")"
-    DMG="$BUILD_DIR/$APP_NAME-$VERSION.dmg"
-    STAGE="$BUILD_DIR/dmg-stage"
-    echo "▸ Packaging $DMG …"
-    rm -rf "$STAGE" "$DMG"
-    mkdir -p "$STAGE"
-    cp -R "$APP" "$STAGE/$APP_NAME.app"
-    ln -s /Applications "$STAGE/Applications"
-    if [ -z "$sign_identity" ]; then
-        # An ad-hoc signed, un-notarized bundle is blocked by Gatekeeper on first
-        # launch. Ship the way out in the disk image itself — nobody reads a link.
-        cp packaging/FIRST-LAUNCH.txt "$STAGE/FIRST LAUNCH — READ ME.txt"
-    fi
-    hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
-    rm -rf "$STAGE"
-    echo "✓ Packaged $(cd "$BUILD_DIR" && pwd)/$APP_NAME-$VERSION.dmg ($(du -h "$DMG" | cut -f1))"
+    echo "▸ Packaging $BUILD_DIR/$APP_NAME-$VERSION.dmg …"
+    packaging/make-dmg.sh "$APP" "$BUILD_DIR/$APP_NAME-$VERSION.dmg" \
+        ${sign_identity:+--sign "$sign_identity"}
     if [ -z "$sign_identity" ]; then
         echo "  Share that file. Recipient: open it, drag Sich to Applications, then follow"
         echo "  'FIRST LAUNCH — READ ME.txt' (the app is unsigned, so macOS blocks run #1)."
