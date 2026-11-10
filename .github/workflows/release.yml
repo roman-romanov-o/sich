@@ -100,8 +100,9 @@ jobs:
         run: |
           # `universal`, not `arm64`: make-app.sh builds both macOS slices so the
           # release runs on Intel too. Keep the name honest — it is the only thing
-          # a downloader can check before installing.
-          dmg="build/Sich-${TAG:-dev}-universal.dmg"
+          # a downloader can check before installing. No version in the name, so
+          # releases/latest/download/Sich-universal.dmg (the README button) is stable.
+          dmg="build/Sich-universal.dmg"
           lipo -archs build/Sich.app/Contents/MacOS/sich
           if [ -z "${SIGN_IDENTITY:-}" ]; then
             packaging/make-dmg.sh build/Sich.app "$dmg"
@@ -135,7 +136,7 @@ jobs:
 
       # SLSA build provenance: a signed statement that THIS workflow, on THIS
       # commit, produced the disk image. Anyone can check it before installing with
-      #   gh attestation verify Sich-<tag>-universal.dmg --repo roman-romanov-o/sich
+      #   gh attestation verify Sich-universal.dmg --repo roman-romanov-o/sich
       - name: Attest build provenance
         id: attest
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -149,7 +150,7 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
           BUNDLE: ${{ steps.attest.outputs.bundle-path }}
-        run: cp "$BUNDLE" "build/Sich-${TAG:-dev}-universal.dmg.sigstore.json"
+        run: cp "$BUNDLE" build/Sich-universal.dmg.sigstore.json
 
       # Creates the release if the tag has none yet, otherwise attaches to the
       # existing one (so a release drafted by hand keeps its notes).
@@ -187,7 +188,7 @@ jobs:
           tap="$RUNNER_TEMP/homebrew-tap"
           git clone --depth 1 git@github.com:roman-romanov-o/homebrew-tap.git "$tap"
           version="${TAG#v}"
-          sha="$(cut -d' ' -f1 "build/Sich-${TAG}-universal.dmg.sha256")"
+          sha="$(cut -d' ' -f1 build/Sich-universal.dmg.sha256)"
           sed -i '' -E \
             -e "s/^  version \".*\"/  version \"$version\"/" \
             -e "s/^  sha256 \".*\"/  sha256 \"$sha\"/" \
