@@ -166,6 +166,38 @@ jobs:
               --verify-tag --generate-notes
           fi
 
+      # `brew install --cask roman-romanov-o/tap/sich` follows each release. The
+      # deploy key can write to the tap repository and nothing else.
+      - name: Bump Homebrew cask
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG: ${{ github.ref_name }}
+          TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          if [ -z "$TAP_DEPLOY_KEY" ]; then
+            echo "::error::HOMEBREW_TAP_DEPLOY_KEY is not set; the cask cannot be bumped."
+            exit 1
+          fi
+          key="$RUNNER_TEMP/tap-key"
+          printf '%s\n' "$TAP_DEPLOY_KEY" > "$key"
+          chmod 600 "$key"
+          # GitHub's published host key, pinned instead of trusted on first use.
+          echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" > "$RUNNER_TEMP/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts"
+          tap="$RUNNER_TEMP/homebrew-tap"
+          git clone --depth 1 git@github.com:roman-romanov-o/homebrew-tap.git "$tap"
+          version="${TAG#v}"
+          sha="$(cut -d' ' -f1 "build/Sich-${TAG}-universal.dmg.sha256")"
+          sed -i '' -E \
+            -e "s/^  version \".*\"/  version \"$version\"/" \
+            -e "s/^  sha256 \".*\"/  sha256 \"$sha\"/" \
+            "$tap/Casks/sich.rb"
+          git -C "$tap" -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -am "sich $version"
+          git -C "$tap" push origin HEAD:main
+          rm -f "$key"
+
       # Manual runs still leave the disk image inspectable as a workflow artifact.
       - name: Upload workflow artifact
         if: "!startsWith(github.ref, 'refs/tags/v')"

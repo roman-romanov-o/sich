@@ -4,7 +4,7 @@
 
 <h1 align="center">Sich</h1>
 
-<p align="center"><strong>A calm board for your coding agents, so you can stay focused</strong></p>
+<p align="center"><strong>A calm kanban board for your coding agents</strong></p>
 
 <p align="center">
   <a href="https://github.com/roman-romanov-o/sich/actions/workflows/ci.yml"><img src="https://github.com/roman-romanov-o/sich/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -87,7 +87,11 @@ and `app/scripts/readme-screenshots.sh`.</sub>
 
 ## Install
 
-Download `Sich-vX.Y.Z-universal.dmg` from the latest
+```bash
+brew install --cask roman-romanov-o/tap/sich
+```
+
+Or download `Sich-vX.Y.Z-universal.dmg` from the latest
 [**release**](https://github.com/roman-romanov-o/sich/releases/latest), open it
 and drag Sich to Applications. The app is signed with a Developer ID and
 notarized by Apple, so it opens like any other Mac app.
