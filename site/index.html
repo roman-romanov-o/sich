@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sich: a calm kanban board for your coding agents</title>
+<meta name="description" content="Native macOS kanban for Claude Code and Codex. Every card is a live terminal, cards move by themselves when an agent needs you, and quota gauges show your subscription and API limits. Free and MIT.">
+<link rel="canonical" href="https://roman-romanov-o.github.io/sich/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Sich: a calm kanban board for your coding agents">
+<meta property="og:description" content="Every Claude Code and Codex session on one board. One glance tells you who needs you.">
+<meta property="og:url" content="https://roman-romanov-o.github.io/sich/">
+<meta property="og:image" content="https://roman-romanov-o.github.io/sich/assets/social-preview.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="assets/sich-icon-flat.png">
+<link rel="stylesheet" href="style.css">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Sich",
+  "operatingSystem": "macOS 14 or later",
+  "applicationCategory": "DeveloperApplication",
+  "description": "Native macOS kanban board where every card is a live Claude Code, Codex, Cursor or Gemini CLI terminal session.",
+  "license": "https://opensource.org/licenses/MIT",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "downloadUrl": "https://github.com/roman-romanov-o/sich/releases/latest/download/Sich-universal.dmg",
+  "codeRepository": "https://github.com/roman-romanov-o/sich"
+}
+</script>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <a class="brand" href="./"><img src="assets/sich-icon-flat.png" alt="">Sich</a>
+    <nav>
+      <a class="hide-sm" href="#features">Features</a>
+      <a class="hide-sm" href="#faq">FAQ</a>
+      <a class="hide-sm" href="vibe-kanban-alternative/">Compare</a>
+      <a href="https://github.com/roman-romanov-o/sich">GitHub</a>
+    </nav>
+  </header>
+
+  <div class="hero">
+    <h1>A calm <em>kanban board</em><br>for your coding agents</h1>
+    <p class="lede">Every Claude Code and Codex session on one board. Each card is the live terminal. When an agent stops to ask, its card moves to NEEDS YOU.</p>
+    <div class="cta">
+      <a class="btn" href="https://github.com/roman-romanov-o/sich/releases/latest/download/Sich-universal.dmg">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.37 12.7c-.03-2.6 2.12-3.85 2.22-3.91-1.21-1.77-3.09-2.01-3.76-2.04-1.6-.16-3.12.94-3.93.94-.81 0-2.06-.92-3.39-.89-1.74.03-3.35 1.01-4.25 2.57-1.81 3.14-.46 7.79 1.3 10.34.86 1.25 1.89 2.65 3.24 2.6 1.3-.05 1.79-.84 3.36-.84 1.57 0 2.01.84 3.38.81 1.4-.02 2.29-1.27 3.14-2.53.99-1.45 1.4-2.86 1.42-2.93-.03-.01-2.72-1.04-2.73-4.12zM13.79 5.07c.72-.87 1.2-2.08 1.07-3.29-1.03.04-2.28.69-3.02 1.56-.66.77-1.24 2-1.09 3.18 1.15.09 2.32-.58 3.04-1.45z"/></svg>
+        Download for macOS
+      </a>
+      <a class="btn ghost" href="https://github.com/roman-romanov-o/sich">Star on GitHub</a>
+    </div>
+    <p class="small">Free, MIT, no account. macOS 14+, Apple silicon and Intel. Signed and notarized.</p>
+    <p><code class="cmd">brew tap roman-romanov-o/tap &amp;&amp; brew trust --cask roman-romanov-o/tap/sich &amp;&amp; brew install --cask roman-romanov-o/tap/sich</code></p>
+    <div class="shot">
+      <img src="assets/hero.gif" width="1200" height="675" alt="Sich board: two cards in NEEDS YOU, Control-Tab jumps to one, its question is answered in the terminal, the next task is pulled from the backlog">
+    </div>
+  </div>
+
+  <section id="features">
+    <h2>What it does</h2>
+    <p class="sub">Starting five agents is easy. Keeping your head while five agents interrupt you is not.</p>
+    <div class="grid">
+      <div class="card"><h3>Cards move by themselves</h3><p>BACKLOG, QUEUE, WORKING, NEEDS YOU, DONE. Driven by the agents' own lifecycle hooks, no screen scraping.</p></div>
+      <div class="card"><h3>The card is the terminal</h3><p>Real sessions rendered in-process with libghostty. No second terminal app, no window juggling.</p></div>
+      <div class="card"><h3>Quota gauges</h3><p>Claude subscription, API credit and Codex limits with reset times, live on the board.</p></div>
+      <div class="card"><h3>No surprise API bills</h3><p>Sich only runs interactive sessions. It never spawns headless <code>claude -p</code>.</p></div>
+      <div class="card"><h3>Focus blocks</h3><p>A pomodoro holds agent questions until your break, then hands them back as one list.</p></div>
+      <div class="card"><h3>Remote cards</h3><p>Attach a tmux session on any SSH host. Its hooks are relayed back, so it moves like a local card.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="feature">
+      <div><h2>⌃Tab to whoever needs you</h2><p class="sub">Hold ⌃, tap Tab. NEEDS YOU comes first. Release and you are in that agent's terminal with its question on screen.</p></div>
+      <img src="assets/feature-switch.gif" loading="lazy" alt="Control-Tab switcher listing NEEDS YOU tasks first, then landing in the agent's terminal">
+    </div>
+    <div class="feature">
+      <div><h2>Nobody waiting? Take the next task</h2><p class="sub">When NEEDS YOU is empty the board points at the BACKLOG. Click a task and its agent starts in that project.</p></div>
+      <img src="assets/feature-backlog.gif" loading="lazy" alt="Clicking a backlog task starts a Claude Code session in its project">
+    </div>
+    <div class="feature">
+      <div><h2>Click a card, you are in the session</h2><p class="sub">Box drawing edge to edge, smooth scrollback, paste, themes, ⌘↑ / ⌘↓ between your own prompts.</p></div>
+      <img src="assets/feature-terminal.gif" loading="lazy" alt="A card opens into its live Claude Code terminal and a follow-up prompt is typed">
+    </div>
+  </section>
+
+  <section id="faq">
+    <h2>FAQ</h2>
+    <details><summary>How do I track multiple Claude Code sessions at once?</summary>
+      <p>Run each session as a card in Sich. Claude Code hooks move the card to NEEDS YOU when it stops to ask something, and ⌃Tab jumps straight to it.</p></details>
+    <details><summary>Is there a kanban board for Claude Code and Codex on macOS?</summary>
+      <p>Yes. Sich is a native macOS app (Swift, AppKit) with a kanban board where each card is a live Claude Code, Codex, Cursor, Antigravity or Gemini CLI terminal.</p></details>
+    <details><summary>How can I see my Claude subscription quota and API usage?</summary>
+      <p>Sich shows live gauges for your Claude subscription, API credit and Codex limits, each with its reset time.</p></details>
+    <details><summary>Can it spend my Anthropic API credits?</summary>
+      <p>No. It only runs interactive sessions under your own login and refuses to spawn headless <code>claude -p</code>.</p></details>
+    <details><summary>Does it work with remote machines?</summary>
+      <p>Yes. Attach a tmux session on any SSH host as a card. Windows hosts work through psmux. Nothing is installed on the remote host.</p></details>
+    <details><summary>What does it cost? Does it send my data anywhere?</summary>
+      <p>Free and MIT licensed, no account. The only network calls are your own usage queries to the providers.</p></details>
+  </section>
+
+  <footer>
+    <a href="https://github.com/roman-romanov-o/sich">GitHub</a> ·
+    <a href="https://github.com/roman-romanov-o/sich/releases">Releases</a> ·
+    <a href="https://github.com/roman-romanov-o/sich/blob/main/SECURITY.md">Security</a> ·
+    MIT license
+  </footer>
+</div>
+</body>
+</html>

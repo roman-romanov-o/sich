@@ -17,9 +17,9 @@ one's exit holds.
 | 0.1 | Done from v0.4.0: Developer ID signed, notarized and stapled DMG (#11) |
 | 0.2 | Done: `roman-romanov-o/homebrew-tap`, bumped by the release workflow through a deploy key scoped to the tap repo |
 | 0.3 | Done (#8–#10): hero GIF, feature GIFs, promo MP4 |
-| 0.4 | Partly done: value prop and `xattr` removal shipped; "Coming from Vibe Kanban?" and the comparison table still open |
+| 0.4 | Done except the comparison table, which lives on the Pages comparison page instead |
 | 0.5 | Done via `gh repo edit`, except the social preview upload (`assets/social-preview.png`, web UI only) |
-| 0.6 | Not started |
+| 0.6 | Landing page + `/vibe-kanban-alternative/` on GitHub Pages; quota-monitor and Kanban Code pages still open |
 | 1.x | Drafts in `submissions.md` |
 
 ---

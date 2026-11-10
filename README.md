@@ -92,6 +92,8 @@ and `app/scripts/readme-screenshots.sh`.</sub>
 ## Install
 
 ```bash
+brew tap roman-romanov-o/tap
+brew trust --cask roman-romanov-o/tap/sich   # Homebrew 7 asks you to trust third-party casks
 brew install --cask roman-romanov-o/tap/sich
 ```
 

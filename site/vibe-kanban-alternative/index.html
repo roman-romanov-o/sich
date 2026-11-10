@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vibe Kanban alternative for macOS: Sich</title>
+<meta name="description" content="Vibe Kanban announced its sunset in April 2026 and is now community maintained. Sich is a free, MIT, native macOS kanban where every card is a live Claude Code or Codex terminal. Comparison with Vibe Kanban, Kanban Code, Conductor, cmux and Claude Squad.">
+<link rel="canonical" href="https://roman-romanov-o.github.io/sich/vibe-kanban-alternative/">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Vibe Kanban alternative for macOS: Sich">
+<meta property="og:description" content="Native macOS kanban for Claude Code and Codex. Free, MIT. How it compares with Vibe Kanban, Kanban Code, Conductor, cmux and Claude Squad.">
+<meta property="og:url" content="https://roman-romanov-o.github.io/sich/vibe-kanban-alternative/">
+<meta property="og:image" content="https://roman-romanov-o.github.io/sich/assets/social-preview.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../assets/sich-icon-flat.png">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <a class="brand" href="../"><img src="../assets/sich-icon-flat.png" alt="">Sich</a>
+    <nav><a href="https://github.com/roman-romanov-o/sich">GitHub</a></nav>
+  </header>
+
+  <div class="hero">
+    <h1>Looking for a <em>Vibe Kanban</em> alternative?</h1>
+    <p class="lede">Vibe Kanban announced its sunset on 2026-04-10. Its cloud services are gone and the local app lives on as a community project. If you are on a Mac and want a kanban for Claude Code or Codex, Sich is one option.</p>
+    <div class="cta">
+      <a class="btn" href="https://github.com/roman-romanov-o/sich/releases/latest/download/Sich-universal.dmg">Download for macOS</a>
+      <a class="btn ghost" href="../">What Sich does</a>
+    </div>
+    <p class="small">Free, MIT, no account. macOS 14+.</p>
+  </div>
+
+  <section>
+    <h2>How they compare</h2>
+    <p class="sub">Checked 2026-11-10 against each project's README, docs and repo. "Not found" means we could not find it in their docs, not that it is missing. Corrections welcome as a <a href="https://github.com/roman-romanov-o/sich/issues">GitHub issue</a>.</p>
+    <div class="table-scroll">
+    <table>
+      <thead><tr><th></th><th>Sich</th><th>Vibe Kanban</th><th>Kanban Code</th><th>Conductor</th><th>cmux</th><th>Claude Squad</th></tr></thead>
+      <tbody>
+        <tr><th>Form</th><td>Native macOS (AppKit)</td><td>Local web UI, Tauri desktop app</td><td>SwiftUI on macOS, Tauri on Windows</td><td>Mac app</td><td>Native macOS (AppKit)</td><td>TUI on tmux</td></tr>
+        <tr><th>Platforms</th><td>macOS 14+</td><td>macOS, Windows, Linux</td><td>macOS 26+, Windows</td><td>macOS</td><td>macOS</td><td>Terminal</td></tr>
+        <tr><th>License</th><td>MIT, free</td><td>Apache-2.0, free</td><td>Apache-2.0, free</td><td>Closed source</td><td>GPL-3.0, free + paid Pro</td><td>AGPL-3.0, free</td></tr>
+        <tr><th>Kanban board</th><td class="y">Yes</td><td class="y">Yes</td><td class="y">Yes</td><td class="n">Not found</td><td class="n">No, vertical tabs</td><td class="n">No, list</td></tr>
+        <tr><th>Live terminal per task</th><td class="y">Yes, libghostty</td><td class="y">Yes</td><td class="y">Yes, tmux</td><td class="y">Yes</td><td class="y">Yes, libghostty</td><td class="y">Yes, tmux</td></tr>
+        <tr><th>Cards move from agent hooks</th><td class="y">Yes</td><td class="n">Not found</td><td class="y">Yes</td><td class="n">Not found</td><td class="n">No board</td><td class="n">No board</td></tr>
+        <tr><th>Subscription / API quota gauges</th><td class="y">Yes</td><td class="n">Not found</td><td class="n">Per-card tokens and cost</td><td class="n">Not found</td><td class="n">Not found</td><td class="n">No</td></tr>
+        <tr><th>Remote sessions over SSH</th><td class="y">Yes, tmux</td><td class="n">Not found</td><td class="y">Yes, SSH + Mutagen</td><td class="n">Not found</td><td class="y">Yes, beta</td><td class="n">No</td></tr>
+        <tr><th>Git worktrees</th><td class="y">Yes</td><td class="y">Yes</td><td class="y">Yes</td><td class="y">Yes</td><td class="n">Not found</td><td class="y">Yes</td></tr>
+        <tr><th>Status</th><td>Active</td><td>Community maintained</td><td>Active</td><td>Active</td><td>Active</td><td>Last push 2026-08-20</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Where others are stronger</h2>
+    <div class="grid">
+      <div class="card"><h3>Vibe Kanban</h3><p>More agents (10+), Windows and Linux, built-in diff review with inline comments, PR create and merge.</p></div>
+      <div class="card"><h3>Kanban Code</h3><p>Backlog from GitHub issues, PR and CI state on cards, cloud VMs per card, Windows build.</p></div>
+      <div class="card"><h3>Conductor</h3><p>Polished review to merge flow: diff viewer, checks, PR, archive.</p></div>
+      <div class="card"><h3>cmux</h3><p>Full Ghostty-compatible terminal, scriptable in-app browser, socket API, iOS companion.</p></div>
+      <div class="card"><h3>Claude Squad</h3><p>Pure terminal, so it works over plain SSH with no GUI.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Pick Sich if</h2>
+    <div class="grid">
+      <div class="card"><h3>You run many agents at once</h3><p>The board shows who is working, who is waiting on you and who is done. ⌃Tab jumps to the next one waiting.</p></div>
+      <div class="card"><h3>You watch your limits</h3><p>Live gauges for Claude subscription, API credit and Codex, with reset times.</p></div>
+      <div class="card"><h3>You never want a surprise API bill</h3><p>Sich only runs interactive sessions and refuses to spawn headless <code>claude -p</code>.</p></div>
+      <div class="card"><h3>You want a native Mac app</h3><p>Swift and AppKit, no Electron, no account, signed and notarized.</p></div>
+    </div>
+  </section>
+
+  <section id="faq">
+    <h2>FAQ</h2>
+    <details><summary>Is Vibe Kanban shut down?</summary>
+      <p>Its team announced the sunset on 2026-04-10 and turned off the cloud services about 30 days later. The open source local app is still on GitHub and is community maintained.</p></details>
+    <details><summary>What is the best Vibe Kanban alternative on macOS?</summary>
+      <p>It depends on what you used it for. For a native Mac kanban where each card is a live Claude Code or Codex terminal with quota gauges, try Sich. For cross-platform and built-in PR review, the community Vibe Kanban or Kanban Code fit better.</p></details>
+    <details><summary>Can I move my Vibe Kanban tasks to Sich?</summary>
+      <p>There is no importer. Recreate open tasks in the Sich BACKLOG; each one starts its agent in the project folder you pick.</p></details>
+  </section>
+
+  <footer>
+    <a href="../">Sich</a> ·
+    <a href="https://github.com/roman-romanov-o/sich">GitHub</a> ·
+    MIT license
+  </footer>
+</div>
+</body>
+</html>
