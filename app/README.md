@@ -59,16 +59,15 @@ Two things make a bundle shareable rather than merely local:
   accessor falls back to the *absolute* `.build` path of the machine that
   compiled it, which is a `fatalError` on any other Mac. `BoardTheme.markURL`
   prefers the main bundle so the packaged app never consults the module bundle.
-- **Gatekeeper.** There is no Apple Developer ID here, so the bundle is ad-hoc
-  signed and *not* notarized; the recipient's first launch is blocked until they
-  run `xattr -dr com.apple.quarantine /Applications/Sich.app` or click
-  "Open Anyway" in System Settings > Privacy & Security. That is the whole of
-  `FIRST-LAUNCH.txt`. Getting rid of that step requires a paid Developer ID plus
-  `notarytool` — nothing else in the packaging changes.
+- **Gatekeeper.** A local build is ad-hoc signed and *not* notarized, so on
+  another Mac the first launch is blocked until the recipient runs
+  `xattr -dr com.apple.quarantine /Applications/Sich.app` or clicks
+  "Open Anyway" in System Settings > Privacy & Security; an unsigned `--dmg`
+  ships those steps as `FIRST-LAUNCH.txt`. Tagged releases are signed with the
+  Developer ID and notarized by the release workflow, so they skip all of it.
 
 Build output lands in `app/build/`, which is git-ignored: the artifact is
-rebuildable, so hand over the `.dmg` directly (or attach it to a GitHub release)
-rather than committing it.
+rebuildable, so hand over the `.dmg` directly rather than committing it.
 
 ## Dev hot reload
 
