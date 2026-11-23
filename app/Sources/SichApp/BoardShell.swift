@@ -32,6 +32,19 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
     /// The window's titlebar while a card is open: "‹ Board" and the task, centred.
     let titlebar = TaskTitlebar()
     private(set) var createPalette: CreateCardPalette?
+    /// First-launch agent setup (``AgentSetupSheet``), mounted over the board.
+    var agentSetupSheet: AgentSetupSheet?
+    /// Agent → binary a card can start; `nil` until the first scan lands (and always
+    /// under tests / the E2E capture, which never scan), meaning "assume all".
+    var installedAgents: [CardAgent: String]?
+    /// Installer runs in flight or failed, overriding the scan for that agent's row.
+    var agentInstallStates: [CardAgent: AgentSetupSheet.RowState] = [:] {
+        didSet { agentSetupSheet?.update(agentSetupStates()) }
+    }
+    var lastAgentScan = Date.distantPast
+    /// Only the real launch may scan (it spawns the user's login shell) — tests and
+    /// the E2E capture never set this, like ``HiddenTUIProbe/spawningEnabled``.
+    public static var agentScanningEnabled = false
     // The quota panel folded in as a right-side region — one assembled window
     // shows the board AND the four never-netted gauges (no separate binary).
     let quota = QuotaPanel()
@@ -211,6 +224,10 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         startSessionsBridge()
         startNotionImport()
         installPostLaunchIntegrations()
+        refreshAgentInventory { [weak self] in
+            guard let self, let found = self.installedAgents, found.isEmpty else { return }
+            self.presentAgentSetup()
+        }
         handleLaunchCaptureRequests()
         registerNeedsYouStandupObserver()
         presentNeedsYouStandupIfNeeded()
@@ -1167,6 +1184,8 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         let appMenu = LayoutAwareMenu()
         appMenu.addItem(withTitle: "New Task", action: #selector(newTaskMenuAction),
                         keyEquivalent: "n").target = self
+        appMenu.addItem(withTitle: "Set Up Agents…", action: #selector(setUpAgentsMenuAction),
+                        keyEquivalent: "").target = self
         appMenu.addItem(withTitle: "Agent Accounts…",
                         action: #selector(manageAgentAccountsMenuAction),
                         keyEquivalent: "").target = self
@@ -1201,6 +1220,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
 
     @objc private func newTaskMenuAction() { openCreatePalette() }
     @objc private func manageAgentAccountsMenuAction() { promptManageAgentAccounts() }
+    @objc private func setUpAgentsMenuAction() { presentAgentSetup() }
     @objc private func fitWindowMenuAction() { fitWindowToScreen() }
     @objc private func increaseFontMenuAction() { zoomFont(direction: 1) }
     @objc private func decreaseFontMenuAction() { zoomFont(direction: -1) }
@@ -1416,7 +1436,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         return root
     }
 
-    private func layoutFullWindow(_ view: NSView, in root: NSView) {
+    func layoutFullWindow(_ view: NSView, in root: NSView) {
         view.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(view)
         NSLayoutConstraint.activate([
@@ -1590,6 +1610,11 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         let palette = CreateCardPalette(
             recents: paletteRecents(), agentAccounts: agentAccountStore.accounts)
         palette.folderSource = PaletteFolderSource(remoteRunner: remoteSessionRunner)
+        palette.installedAgents = installedAgents.map { Set($0.keys) }
+        palette.onSetUpAgent = { [weak self] in
+            self?.dismissCreatePalette()
+            self?.presentAgentSetup()
+        }
         palette.onCancel = { [weak self] in self?.dismissCreatePalette() }
         palette.addAgentAccount = { [weak self] agent in
             self?.promptAddAgentAccount(agent: agent, from: palette)
@@ -2636,7 +2661,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
 
     /// Re-derive the view from the current model — the single render path, so a
     /// live state change just re-runs this (US-003 AC#3 / US-005 live update).
-    private func refresh(includeQuota: Bool = true) {
+    func refresh(includeQuota: Bool = true) {
         let shown = displayCards()
         let gauges = QuotaProjection.gauges(from: quotaSources)
         let quotaBlocks = quotaBlocks(for: shown, gauges: gauges)
@@ -3096,6 +3121,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             return drillIn.hasUnsentInput
         }
         quota.onPomodoroToggle = { [weak self] in self?.pomodoroRingClicked() }
+        quota.onAddAgent = { [weak self] in self?.presentAgentSetup() }
         quota.onPomodoroRestNow = { [weak self] in self?.pomodoro.restNow() }
         quota.onPomodoroHint = { [weak self] _ in self?.pomodoro.restNow() }
         restOverlay.onEndBreak = { [weak self] in self?.pomodoro.endBreak() }
@@ -3185,7 +3211,10 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.presentNeedsYouStandupIfNeeded() }
+            MainActor.assumeIsolated {
+                self?.presentNeedsYouStandupIfNeeded()
+                self?.refreshAgentInventoryIfStale()
+            }
         }
     }
 
@@ -3194,7 +3223,7 @@ public final class BoardShell: NSObject, NSApplicationDelegate, NSWindowDelegate
         guard ProcessInfo.processInfo.environment["SICH_E2E"] == nil else { return }
         guard !needsYouStandupOpen else { return }
         guard drilledInCardID == nil, backlogPage.isHidden,
-              archivePage.isHidden, createPalette == nil else { return }
+              archivePage.isHidden, createPalette == nil, agentSetupSheet == nil else { return }
         // Rule: a standup never interrupts a pomodoro or its break — it waits for
         // the phase boundary (the break-over tray is that moment's standup).
         guard pomodoro.allowsStandup else { return }

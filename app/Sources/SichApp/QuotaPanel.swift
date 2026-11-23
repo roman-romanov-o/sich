@@ -30,6 +30,13 @@ public final class QuotaPanel: NSView {
         didSet { if dock != oldValue { applyDock() } }
     }
 
+    /// Agents this Mac can run (nil = unknown, show all). A provider that isn't
+    /// installed has nothing to measure — its block is dropped unless a card uses it.
+    /// Set by the shell, which re-renders afterwards.
+    var installedAgents: Set<CardAgent>?
+    /// The empty state's "Add an agent" — opens the shell's agent setup.
+    var onAddAgent: (() -> Void)?
+
     private let scroll = NSScrollView()
     private let content = NSStackView()
     /// The operator's pomodoro under the gauges (trailing dock: pinned to the bottom
@@ -235,13 +242,43 @@ public final class QuotaPanel: NSView {
         }
         let blocks = providerBlocks(
             from: gauges, claudeProfiles: claudeProfiles,
-            claudeProfileByCard: claudeProfileByCard, cards: cards)
+            claudeProfileByCard: claudeProfileByCard, cards: cards
+        ).filter { block in
+            installedAgents.map { $0.contains(block.agent) } ?? true
+                || cards.contains { $0.agent == block.agent }
+        }
+        if blocks.isEmpty {
+            addCard(emptyState())
+            preserveHiddenRows(for: gauges)
+            return
+        }
         let perCard = max(1, (blocks.count + usageCardCount - 1) / usageCardCount)
         for start in stride(from: 0, to: blocks.count, by: perCard) {
             let chunk = blocks[start..<min(start + perCard, blocks.count)]
             addCard(usageCard(Array(chunk)))
         }
         preserveHiddenRows(for: gauges)
+    }
+
+    /// No agent at all: nothing to measure, so the lane offers the one useful step.
+    private func emptyState() -> NSView {
+        let lede = label("No agent yet", font: BoardTheme.sansSmall, color: BoardTheme.textPrimary)
+        let detail = label("Add one to run tasks and see its quota here.",
+                           font: BoardTheme.sansTiny, color: BoardTheme.textDim)
+        detail.lineBreakMode = .byWordWrapping
+        detail.maximumNumberOfLines = 0
+        detail.preferredMaxLayoutWidth = QuotaLayout.cardWidth
+        let add = SetupPill(title: "+ Add an agent", style: .secondary)
+        add.identifier = NSUserInterfaceItemIdentifier("quota-add-agent")
+        add.onClick = { [weak self] in self?.onAddAgent?() }
+        let stack = NSStackView(views: [lede, detail, add])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 6
+        stack.setCustomSpacing(12, after: detail)
+        stack.identifier = NSUserInterfaceItemIdentifier("quota-empty")
+        stack.widthAnchor.constraint(equalToConstant: QuotaLayout.cardWidth).isActive = true
+        return stack
     }
 
     /// Side by side, the stack view sizes itself to the shorter cards and lets the
@@ -479,7 +516,8 @@ public final class QuotaPanel: NSView {
         label: String, agent: CardAgent, gauges: [QuotaGauge], cards: [BoardCard]
     ) -> ProviderBlock {
         let provider = label.lowercased()
-        let providerGauges = gauges.filter { $0.provider.lowercased() == provider }
+        // An unknown pool has no reading to show — a bar reading "n/a" was noise.
+        let providerGauges = gauges.filter { $0.provider.lowercased() == provider && $0.state != .unknown }
         let fiveHour = providerGauges.first { normalized($0.pool) == "\(provider)_5h" }
         let weekly = providerGauges.first { normalized($0.pool) == "\(provider)_weekly" }
         let single = providerGauges.first { normalized($0.pool) == provider }
@@ -618,9 +656,11 @@ private enum QuotaPlaceholderKind: Equatable {
 @MainActor
 private final class QuotaPlaceholderCell: NSView, ThemeReapplying {
     private let kind: QuotaPlaceholderKind
+    /// The same empty track a real gauge draws, clipped so the sweep can never paint
+    /// outside it (an unclipped sweep smeared a grey band across the lane).
     private let track = CALayer()
-    private let fill = CALayer()
-    private let shimmer = CALayer()
+    /// A soft-edged glint drifting through the track — no hard block, no "knob".
+    private let shimmer = CAGradientLayer()
     private let placeholder = CATextLayer()
     private let caption = NSTextField(labelWithString: "")
 
@@ -631,9 +671,11 @@ private final class QuotaPlaceholderCell: NSView, ThemeReapplying {
         translatesAutoresizingMaskIntoConstraints = false
         widthAnchor.constraint(equalToConstant: QuotaLayout.cellWidth).isActive = true
         heightAnchor.constraint(equalToConstant: QuotaLayout.cellHeight).isActive = true
+        track.masksToBounds = true
+        track.addSublayer(shimmer)
+        shimmer.startPoint = CGPoint(x: 0, y: 0.5)
+        shimmer.endPoint = CGPoint(x: 1, y: 0.5)
         layer?.addSublayer(track)
-        layer?.addSublayer(fill)
-        layer?.addSublayer(shimmer)
         placeholder.string = kind == .empty ? "—" : ""
         placeholder.font = BoardTheme.numericSmall
         placeholder.fontSize = BoardTheme.numericSmall.pointSize
@@ -665,19 +707,20 @@ private final class QuotaPlaceholderCell: NSView, ThemeReapplying {
         // is unflipped, so that's `height - barHeight`, not zero.
         let bar = NSRect(x: 0, y: bounds.height - QuotaLayout.barHeight,
                          width: bounds.width, height: QuotaLayout.barHeight)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)   // geometry snaps; only the sweep moves
+        defer { CATransaction.commit() }
         track.frame = bar
         track.cornerRadius = QuotaLayout.barCornerRadius
         track.borderWidth = 1
 
         switch kind {
         case .measuring:
-            fill.frame = bar
-            fill.cornerRadius = QuotaLayout.barCornerRadius
-            shimmer.frame = NSRect(x: -bar.width * 0.4, y: bar.minY, width: bar.width * 0.4, height: bar.height)
-            shimmer.cornerRadius = QuotaLayout.barCornerRadius
+            // In the track's own coordinates; parked just off its leading edge.
+            let width = bar.width * 0.5
+            shimmer.frame = NSRect(x: -width, y: 0, width: width, height: bar.height)
             startMeasuringAnimation()
         case .empty:
-            fill.frame = .zero
             shimmer.frame = .zero
             shimmer.removeAllAnimations()
         }
@@ -701,8 +744,9 @@ private final class QuotaPlaceholderCell: NSView, ThemeReapplying {
             guard kind == .measuring else { return }
             // A slow, faint drift — the panel admits it is still measuring without
             // flashing; the same neutral ink as the gauges themselves.
-            fill.backgroundColor = BoardTheme.textFaint.withAlphaComponent(0.10).cgColor
-            shimmer.backgroundColor = BoardTheme.textFaint.withAlphaComponent(0.22).cgColor
+            let glint = BoardTheme.textFaint.withAlphaComponent(0.16).cgColor
+            let clear = BoardTheme.textFaint.withAlphaComponent(0).cgColor
+            shimmer.colors = [clear, glint, clear]
         }
     }
 
@@ -718,10 +762,13 @@ private final class QuotaPlaceholderCell: NSView, ThemeReapplying {
     private func startMeasuringAnimation() {
         guard window != nil, shimmer.animation(forKey: "sweep") == nil,
               !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        // Enters fully off the leading edge, leaves fully off the trailing one, so the
+        // clipped track never shows the glint's ends.
+        let width = bounds.width * 0.5
         let animation = CABasicAnimation(keyPath: "position.x")
-        animation.fromValue = -bounds.width * 0.2
-        animation.toValue = bounds.width * 1.38
-        animation.duration = 2.8
+        animation.fromValue = -width / 2
+        animation.toValue = bounds.width + width / 2
+        animation.duration = 2.4
         animation.repeatCount = .infinity
         animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         shimmer.add(animation, forKey: "sweep")

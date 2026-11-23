@@ -408,6 +408,12 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     /// a scratch tree; the app never changes it.
     var home = NSHomeDirectory()
     var onCancel: (() -> Void)?
+    /// Agents this Mac can start (nil = unknown, treat all as installed). A harness
+    /// that isn't installed routes to ``onSetUpAgent`` instead of making a dead card.
+    var installedAgents: Set<CardAgent>? {
+        didSet { if stage == .harness { renderStage() } }
+    }
+    var onSetUpAgent: (() -> Void)?
 
     // Test seams — the real gestures the integration tests dispatch.
     private(set) var navRows: [PaletteRow] = []
@@ -1074,7 +1080,9 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
         add(sectionLabel("HARNESS — RUNS THE SESSION"))
         for option in Harness.allCases {
             let glyph = option.cardAgent.map { BoardTheme.agentGlyph($0) } ?? ""
-            addNav(PaletteRow(glyph: glyph, title: option.title, subtitle: option.subtitle))
+            let missing = isMissing(option)
+            addNav(PaletteRow(glyph: glyph, title: option.title,
+                              subtitle: missing ? "not installed · ↵ to set up" : option.subtitle))
         }
         setFooter(["↵ next: account", "↑↓ navigate", "← back", "esc cancel"])
     }
@@ -1273,8 +1281,18 @@ final class CreateCardPalette: NSView, NSTextFieldDelegate {
     }
 
     private func activateHarnessRow(_ idx: Int) {
-        harness = Harness.allCases[idx]
+        let option = Harness.allCases[idx]
+        if isMissing(option) {
+            onSetUpAgent?()
+            return
+        }
+        harness = option
         advanceFromHarness()
+    }
+
+    private func isMissing(_ option: Harness) -> Bool {
+        guard let agent = option.cardAgent, let installed = installedAgents else { return false }
+        return !installed.contains(agent)
     }
 
     private func activateAgentAccountRow(_ idx: Int) {

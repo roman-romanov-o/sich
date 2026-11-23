@@ -722,7 +722,7 @@ is_self_or_shim() {
 find_real_claude() {
     old_ifs="$IFS"
     IFS=:
-    for d in $PATH; do
+    for d in $PATH:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin; do
         candidate="$d/claude"
         is_self_or_shim "$candidate" && continue
         if [ -x "$candidate" ]; then
@@ -782,7 +782,7 @@ should_inject() {
     return 0
 }
 
-REAL_CLAUDE="$(find_real_claude)" || { echo "Error: claude not found in PATH" >&2; exit 127; }
+REAL_CLAUDE="$(find_real_claude)" || { echo "Error: claude is not installed. Set it up from Sich > Set Up Agents..., or run: \#(AgentInventory.installCommand(for: .claude))" >&2; exit 127; }
 
 if ! should_inject "$@"; then
     exec "$REAL_CLAUDE" "$@"
@@ -812,7 +812,7 @@ is_self_or_shim() {
 find_real_codex() {
     old_ifs="$IFS"
     IFS=:
-    for d in $PATH; do
+    for d in $PATH:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin; do
         candidate="$d/codex"
         is_self_or_shim "$candidate" && continue
         if [ -x "$candidate" ]; then
@@ -877,7 +877,7 @@ should_inject() {
     return 0
 }
 
-REAL_CODEX="$(find_real_codex)" || { echo "Error: codex not found in PATH" >&2; exit 127; }
+REAL_CODEX="$(find_real_codex)" || { echo "Error: codex is not installed. Set it up from Sich > Set Up Agents..., or run: \#(AgentInventory.installCommand(for: .codex))" >&2; exit 127; }
 
 if ! should_inject "$@"; then
     exec "$REAL_CODEX" "$@"
@@ -917,7 +917,7 @@ is_self_or_shim() {
 find_real_agent() {
     old_ifs="$IFS"
     IFS=:
-    for d in $PATH; do
+    for d in $PATH:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin; do
         candidate="$d/$name"
         is_self_or_shim "$candidate" && continue
         if [ -x "$candidate" ]; then
@@ -930,7 +930,7 @@ find_real_agent() {
     return 1
 }
 
-REAL_AGENT="$(find_real_agent)" || { echo "Error: $name not found in PATH" >&2; exit 127; }
+REAL_AGENT="$(find_real_agent)" || { echo "Error: $name is not installed. Set it up from Sich > Set Up Agents..., or run: \#(AgentInventory.installCommand(for: .cursor))" >&2; exit 127; }
 
 if [ -n "$SICH_CARD_ID" ]; then
     export SICH_CURSOR_PID=$$
@@ -992,7 +992,7 @@ is_self_or_shim() {
 find_real_agent() {
     old_ifs="$IFS"
     IFS=:
-    for d in $PATH "$HOME/.local/bin"; do
+    for d in $PATH:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin; do
         candidate="$d/$name"
         is_self_or_shim "$candidate" && continue
         if [ -x "$candidate" ]; then
@@ -1005,7 +1005,7 @@ find_real_agent() {
     return 1
 }
 
-REAL_AGENT="$(find_real_agent)" || { echo "Error: $name not found in PATH (install: curl -fsSL https://antigravity.google/cli/install.sh | bash)" >&2; exit 127; }
+REAL_AGENT="$(find_real_agent)" || { echo "Error: $name is not installed. Set it up from Sich > Set Up Agents..., or run: \#(AgentInventory.installCommand(for: .antigravity))" >&2; exit 127; }
 
 if [ -n "$SICH_CARD_ID" ]; then
     export SICH_ANTIGRAVITY_PID=$$

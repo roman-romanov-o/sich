@@ -51,6 +51,9 @@ RemoteHookStatus.probingEnabled = !isE2E
 // …and for the per-host event relay (`ssh … tail -F`), which is the only thing that
 // makes a remote agent observable at all (US-003).
 SSHLineTransport.spawningEnabled = !isE2E
+// The agent inventory asks the user's login shell for its PATH and runs vendor
+// installers — real launch only.
+BoardShell.agentScanningEnabled = !isE2E
 let delegate = isE2E
     ? BoardShell(
         seeds: ProcessInfo.processInfo.environment["SICH_PROMO"] != nil
