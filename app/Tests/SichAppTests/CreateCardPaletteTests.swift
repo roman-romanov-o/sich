@@ -209,3 +209,27 @@ private let kReturn: UInt16 = 36
     pressKey(53, chars: "\u{1b}", in: window)   // esc, carrying the character a real key sends
     #expect(cancelled)
 }
+
+/// A harness this Mac can't run routes to agent setup instead of creating a card that
+/// dies with "claude not found"; an installed one still goes through.
+@MainActor
+@Test func uninstalledHarnessRoutesToSetupViaRealEvents() throws {
+    let proj = URL(fileURLWithPath: "/tmp/demo-project", isDirectory: true)
+    let (palette, _, window) = makePalette(
+        recents: [PaletteProject(path: proj.path, activeCards: 0)])
+    palette.installedAgents = [.codex]
+    var setups = 0
+    palette.onSetUpAgent = { setups += 1 }
+
+    pressKey(kReturn, chars: "\r", in: window)     // "This Mac"
+    pressKey(kReturn, chars: "\r", in: window)     // project
+    #expect(palette.stage == .harness)
+    pressKey(kReturn, chars: "\r", in: window)     // Claude Code — not installed
+    #expect(setups == 1)
+    #expect(palette.stage == .harness, "no card path for a missing agent")
+
+    pressKey(125, in: window)                      // Claude → Codex (installed)
+    pressKey(kReturn, chars: "\r", in: window)
+    #expect(setups == 1)
+    #expect(palette.stage == .agentAccount)
+}
