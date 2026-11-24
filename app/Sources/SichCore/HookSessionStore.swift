@@ -80,12 +80,18 @@ public final class HookSessionStore {
     // mid-turn resumes WORKING, a manual `/compact` typed at rest returns to NEEDS YOU
     // instead of a false WORKING that only the stall sweep would correct.
     private var compactionRestore: [SessionKey: (state: CardState, latched: Bool)] = [:]
-    // Background parenthesis (CARD-STATUS.md rule 2.3): sessions whose last
-    // `background_tasks`-carrying payload reported a still-running backgrounded
-    // subagent. A `Stop` (or idle nudge) landing inside the parenthesis parked the
-    // OPERATOR's prompt, not the WORK — the card stays WORKING. Only consulted when
-    // an event doesn't carry the flag itself; a payload's own array is authoritative.
-    private var backgroundBusy: Set<SessionKey> = []
+    // Background parenthesis (CARD-STATUS.md rule 2.3): what each session's last
+    // `background_tasks`-carrying payload reported still running, updated in burst
+    // order. A `Stop` (or idle nudge) that leaves AWAITED work running parked the
+    // OPERATOR's prompt, not the WORK — the card stays WORKING (`parked`).
+    private var background: [SessionKey: BackgroundTasks] = [:]
+    // Background shells a live probe found to be long-lived services (a listening
+    // server, a windowed app): running, but not awaited — they outlive the turn.
+    private var services: [SessionKey: Set<String>] = [:]
+    // Sessions whose turn ended into the background parenthesis: WORKING only
+    // because awaited background work is still running. When the last awaited
+    // shell turns out to be a service, the parked Stop is a real turn end after all.
+    private var parked: Set<SessionKey> = []
     // Sessions whose last applied signal was `SessionEnd`: the agent process is gone,
     // so the card's terminal is a plain shell again and an operator Enter there is
     // not a prompt submit (see `noteOperatorSubmit`).
@@ -208,8 +214,9 @@ public final class HookSessionStore {
     private func applyBurst(key: SessionKey, burst: [SignalEvent]) {
         let decisive = dominant(burst)
         lastEventAt[key] = burst.map(\.timestamp).max()!
-        burst.forEach { updateBackgroundBusy(key: key, event: $0) }
+        burst.forEach { updateBackground(key: key, event: $0) }
         if decisive.kind == .sessionEnd { ended.insert(key) } else { ended.remove(key) }
+        notePark(key: key, kind: decisive.kind)
         let next = resolveNext(key: key, event: decisive)
         noteTurnBoundary(key: key, kind: decisive.kind, next: next)
         write(
@@ -238,7 +245,7 @@ public final class HookSessionStore {
         return classify(
             prior: prior, event: event,
             awaitingPrompt: awaitingPrompt.contains(key),
-            backgroundBusy: backgroundBusy.contains(key)
+            backgroundBusy: awaitsBackground(key)
         )
     }
 
@@ -250,11 +257,74 @@ public final class HookSessionStore {
     /// in burst order — a coalesced burst may open and close it in one batch.
     /// `SessionEnd` closes it unconditionally: the process is gone, and a stale
     /// `true` would mask the first real turn end after a resume.
-    private func updateBackgroundBusy(key: SessionKey, event: SignalEvent) {
+    private func updateBackground(key: SessionKey, event: SignalEvent) {
         if event.kind == .sessionEnd {
-            backgroundBusy.remove(key)
-        } else if let busy = event.backgroundBusy {
-            if busy { backgroundBusy.insert(key) } else { backgroundBusy.remove(key) }
+            background[key] = nil
+            services[key] = nil
+        } else if let tasks = event.background {
+            background[key] = tasks
+            services[key] = services[key]?.intersection(tasks.shellIDs)
+        }
+    }
+
+    /// Is the session's turn still waiting on its background work — a subagent, a
+    /// monitor, or a shell not known to be a long-lived service?
+    private func awaitsBackground(_ key: SessionKey) -> Bool {
+        guard let tasks = background[key] else { return false }
+        return tasks.agentRunning || tasks.otherRunning
+            || !tasks.shellIDs.subtracting(services[key] ?? []).isEmpty
+    }
+
+    /// A `Stop` (or idle nudge) parks the session iff it left awaited work running;
+    /// a neutral signal leaves the park as it was; anything else is the agent (or
+    /// the operator) moving again, which ends it.
+    private func notePark(key: SessionKey, kind: SignalKind) {
+        switch kind {
+        case .stop:
+            if awaitsBackground(key) { parked.insert(key) } else { parked.remove(key) }
+        case .subagentStop, .sessionStart:
+            break
+        default:
+            parked.remove(key)
+        }
+    }
+
+    // MARK: - Background shell probing (rule 2.3)
+
+    /// One backgrounded shell of a LOCAL session — the unit a live probe inspects.
+    public struct BackgroundShell: Hashable, Sendable {
+        public let sessionID: String
+        public let taskID: String
+
+        public init(sessionID: String, taskID: String) {
+            self.sessionID = sessionID
+            self.taskID = taskID
+        }
+    }
+
+    /// The shells holding a local session parked that no probe has yet found to be
+    /// a service. Remote sessions are excluded: their processes live on another
+    /// machine, so the command check in the normalizer is all they get.
+    public var shellsToProbe: [BackgroundShell] {
+        parked.filter { $0.host == nil }.flatMap { key in
+            (background[key]?.shellIDs ?? []).subtracting(services[key] ?? [])
+                .map { BackgroundShell(sessionID: key.id, taskID: $0) }
+        }
+    }
+
+    /// Record shells a probe found to be long-lived services. A session parked only
+    /// on such shells was never waiting on them: its parked `Stop` was a real turn
+    /// end, so it lands NEEDS YOU and arms the turn latch exactly as that Stop would.
+    public func markServices(_ shells: [BackgroundShell], now: Date) {
+        for shell in shells {
+            let key = SessionKey(host: nil, id: shell.sessionID)
+            services[key, default: []].insert(shell.taskID)
+            guard parked.contains(key), !awaitsBackground(key),
+                  let entry = bySession[key], entry.state == .running else { continue }
+            parked.remove(key)
+            awaitingPrompt.insert(key)
+            write(key: key, state: .waitingForInput, at: max(now, entry.updatedAt),
+                  projectDir: nil, cardID: nil, agent: nil)
         }
     }
 
@@ -268,7 +338,8 @@ public final class HookSessionStore {
 
     private func tick(key: SessionKey, now: Date) {
         guard let entry = bySession[key], let last = lastEventAt[key],
-              !Self.restingStates.contains(entry.state) else { return }
+              !Self.restingStates.contains(entry.state),
+              !parkedOnSilentWork(key) else { return }
         if now.timeIntervalSince(last) > stallThreshold {
             write(
                 key: key,
@@ -276,6 +347,13 @@ public final class HookSessionStore {
                 at: now, projectDir: nil, cardID: nil, agent: nil
             )
         }
+    }
+
+    /// Parked on work that emits no hooks while it runs (shell jobs, monitors) and
+    /// on no subagent: silence is the wait itself, so the stall guard stands down.
+    /// A subagent fires its own hooks, so a parenthesis holding one stays guarded.
+    private func parkedOnSilentWork(_ key: SessionKey) -> Bool {
+        parked.contains(key) && background[key]?.agentRunning != true
     }
 
     private func currentState(_ key: SessionKey) -> CardState {
@@ -327,10 +405,11 @@ public final class HookSessionStore {
             // Stop is the root turn boundary (CARD-STATUS.md rule 3): the agent
             // finished its turn and is idle until the operator types — the attention
             // signal the board exists for. EXCEPT inside the background parenthesis
-            // (rule 2.3): a Stop that leaves a backgrounded subagent running parked
-            // the prompt while the work continues — waiting on your own subagent is
-            // WORKING, not NEEDS YOU. The child's completion re-invokes the root
-            // loop, whose FINAL Stop (background_tasks drained) lands here unmasked.
+            // (rule 2.3): a Stop that leaves a backgrounded subagent or awaited job
+            // running parked the prompt while the work continues — waiting on your
+            // own background work is WORKING, not NEEDS YOU. Its completion
+            // re-invokes the root loop, whose FINAL Stop (background_tasks drained)
+            // lands here unmasked.
             return Self.settled(
                 prior: prior, next: backgroundBusy ? .running : .waitingForInput
             )

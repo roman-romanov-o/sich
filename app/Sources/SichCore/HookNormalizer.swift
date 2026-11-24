@@ -101,7 +101,7 @@ public enum HookNormalizer {
             // Present only on a relayed line: the channel stamped it at ingestion
             // (US-003 AC-2) and it is what keeps two machines apart (US-004 AC-3).
             host: payload[RemoteEventLine.hostKey] as? String,
-            backgroundBusy: resolveBackgroundBusy(payload)
+            background: resolveBackground(payload)
         )
     }
 
@@ -149,22 +149,38 @@ public enum HookNormalizer {
         return hookKind[name] ?? .unknown
     }
 
-    /// Fold the payload's `background_tasks` array into one flag: is a background
-    /// AGENT still running? Only a child agent parks the root loop (rule 2.3). A
-    /// backgrounded SHELL (`"type":"shell"`) is not a child the turn waits on: a dev
-    /// server started with `run_in_background` keeps running for hours after the
-    /// agent has answered, and counting it held the card at WORKING while the one
-    /// being waited on was the operator. A `SubagentStop` lists the stopping agent
-    /// ITSELF as `running`, so the event's own `agent_id` is excluded. `nil` when the
-    /// payload carries no array — the store then falls back to its last-known flag.
-    private static func resolveBackgroundBusy(_ payload: [String: Any]) -> Bool? {
+    /// Fold the payload's `background_tasks` array into what is still running
+    /// (rule 2.3). A shell whose command already names a long-lived service (dev
+    /// server, file tail) is dropped here — that is the only check a REMOTE session
+    /// gets; a local one is additionally probed live by the store's owner. A
+    /// `SubagentStop` lists the stopping agent ITSELF as `running`, so the event's
+    /// own `agent_id` is excluded. `nil` when the payload carries no array — the
+    /// store then falls back to what it last knew.
+    private static func resolveBackground(_ payload: [String: Any]) -> BackgroundTasks? {
         guard let tasks = payload["background_tasks"] as? [[String: Any]] else { return nil }
         let selfID = payload["agent_id"] as? String
-        return tasks.contains { task in
-            task["status"] as? String == "running"
-                && task["type"] as? String != "shell"
-                && task["id"] as? String != selfID
+        var result = BackgroundTasks()
+        for task in tasks where task["status"] as? String == "running" {
+            guard let id = task["id"] as? String, id != selfID else { continue }
+            switch task["type"] as? String {
+            case "subagent": result.agentRunning = true
+            case "shell":
+                if !isLongLivedService(task["command"] as? String ?? "") { result.shellIDs.insert(id) }
+            default: result.otherRunning = true
+            }
         }
+        return result
+    }
+
+    /// True when a backgrounded shell command starts something that runs until it
+    /// is killed rather than until its work is done: a dev/preview server
+    /// (`npm run dev`, `npx expo start`, `likec4 start`, `python -m http.server`,
+    /// `uvicorn`, `docker compose up`) or a followed log (`tail -f`). Matched on the
+    /// standalone subcommand word, so `gh run watch` or `--save-dev` stay awaited.
+    private static func isLongLivedService(_ command: String) -> Bool {
+        command.contains(
+            #/(?:^|[\s;&|(])(?:start|serve|dev|preview|runserver|http\.server|uvicorn|gunicorn|compose\s+up|tail\s+-[fF])(?=$|[\s;&|)])/#
+        )
     }
 
     /// Cursor carries no `cwd` on most events, only `workspace_roots` (Antigravity:

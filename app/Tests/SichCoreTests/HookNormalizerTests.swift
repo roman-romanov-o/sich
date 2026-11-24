@@ -220,33 +220,42 @@ struct HookNormalizerTests {
 
     // MARK: - background_tasks parsing (CARD-STATUS.md rule 2.3)
 
-    @Test func backgroundTasksFoldToOneFlag() throws {
-        // Running child → busy; the payload is the live-capture Stop shape.
+    @Test func backgroundTasksFoldByKind() throws {
+        // Running child → agent; the payload is the live-capture Stop shape.
         let busy = try #require(normalize(
             #"{"hook_event_name":"Stop","session_id":"S","background_tasks":[{"id":"a1","type":"subagent","status":"running"}]}"#))
-        #expect(busy.backgroundBusy == true)
+        #expect(busy.background == BackgroundTasks(agentRunning: true))
 
-        // All children finished → not busy; absent array → nil (older Claude).
+        // All children finished → empty; absent array → nil (older Claude).
         let drained = try #require(normalize(
             #"{"hook_event_name":"Stop","session_id":"S","background_tasks":[{"id":"a1","status":"completed"}]}"#))
-        #expect(drained.backgroundBusy == false)
+        #expect(drained.background == BackgroundTasks())
         let absent = try #require(normalize(#"{"hook_event_name":"Stop","session_id":"S"}"#))
-        #expect(absent.backgroundBusy == nil)
+        #expect(absent.background == nil)
 
         // A SubagentStop lists the stopping agent ITSELF as still running — its own
         // id must not count as an open child.
         let selfListed = try #require(normalize(
             #"{"hook_event_name":"SubagentStop","session_id":"S","agent_id":"a1","background_tasks":[{"id":"a1","status":"running"}]}"#))
-        #expect(selfListed.backgroundBusy == false,
+        #expect(selfListed.background == BackgroundTasks(),
                 "the stopping agent's own entry is not a still-open background task")
 
-        // A backgrounded SHELL (live capture: a Metro dev server left running by
-        // `run_in_background`) is not a child the turn waits on — the Stop that
-        // leaves it running is a real turn end.
-        let shellOnly = try #require(normalize(
-            #"{"hook_event_name":"Stop","session_id":"S","background_tasks":[{"id":"bpws0wrz7","type":"shell","status":"running","description":"Start Metro dev server"}]}"#))
-        #expect(shellOnly.backgroundBusy == false,
-                "a running background shell does not hold the background parenthesis open")
+        // A running shell is carried by its task id — the key the live probe uses
+        // (live capture: the "Research case for Fund" card's `codex exec` run).
+        let shell = try #require(normalize(
+            #"{"hook_event_name":"Stop","session_id":"S","background_tasks":[{"id":"bfkrjsvny","type":"shell","status":"running","command":"codex exec -s read-only - < prompt.md"}]}"#))
+        #expect(shell.background == BackgroundTasks(shellIDs: ["bfkrjsvny"]))
+
+        // A shell whose command already names a long-lived service (live capture: a
+        // Metro dev server) is dropped up front — the only check a remote session gets.
+        let server = try #require(normalize(
+            #"{"hook_event_name":"Stop","session_id":"S","background_tasks":[{"id":"bpws0wrz7","type":"shell","status":"running","description":"Start Metro dev server","command":"npx expo start"}]}"#))
+        #expect(server.background == BackgroundTasks())
+
+        // A monitor is an explicit wait.
+        let monitor = try #require(normalize(
+            #"{"hook_event_name":"Stop","session_id":"S","background_tasks":[{"id":"m1","type":"monitor","status":"running"}]}"#))
+        #expect(monitor.background == BackgroundTasks(otherRunning: true))
     }
 
     /// The idle nudge is the turn boundary restated — it must route through `stop`

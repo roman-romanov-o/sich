@@ -133,6 +133,10 @@ public final class SessionsPoller {
     private var inFlight = false      // exactly one drain at a time (offset-file safety)
     private var pendingPoll = false   // a trigger landed mid-drain → re-poll after apply
     private var currentDrain: Task<Void, Never>?
+    // When each parked background shell was last probed (rule 2.3) — a probe spawns
+    // `lsof`/`ps`, so one shell is re-checked at most every `shellProbeInterval`.
+    private var lastShellProbe: [HookSessionStore.BackgroundShell: Date] = [:]
+    private static let shellProbeInterval: TimeInterval = 10
 
     /// `stallThreshold` rides through to the store's rule-2.1 stall guard (default
     /// 10 min); injectable so an E2E test can provoke a real stall in seconds.
@@ -215,17 +219,35 @@ public final class SessionsPoller {
         }
         inFlight = true
         let tail = self.tail
+        let shells = shellsDueForProbe(now: Date())
         currentDrain = Task.detached(priority: .userInitiated) { [weak self] in
             let now = Date()
             let batch = SessionsFeed.parse(tail.poll(), arrival: now)
-            await self?.apply(batch, now: now)   // hops back to the main actor
+            let services = shells.filter { BackgroundShellProbe.isService($0) == true }
+            await self?.apply(batch, services: services, now: now)   // hops back to the main actor
         }
+    }
+
+    /// The parked background shells whose last probe is older than the interval.
+    /// Re-probed rather than checked once: a server usually binds its port a few
+    /// seconds AFTER the Stop that left it running.
+    private func shellsDueForProbe(now: Date) -> [HookSessionStore.BackgroundShell] {
+        let pending = store.shellsToProbe
+        lastShellProbe = lastShellProbe.filter { pending.contains($0.key) }
+        let due = pending.filter {
+            now.timeIntervalSince(lastShellProbe[$0] ?? .distantPast) >= Self.shellProbeInterval
+        }
+        due.forEach { lastShellProbe[$0] = now }
+        return due
     }
 
     /// The main-actor tail of a LOCAL drain: release the drain guard, fold the batch,
     /// then honour a trigger that landed while the drain was running.
-    private func apply(_ batch: SessionsFeed.ParsedEventBatch, now: Date) {
+    private func apply(
+        _ batch: SessionsFeed.ParsedEventBatch, services: [HookSessionStore.BackgroundShell], now: Date
+    ) {
         inFlight = false
+        store.markServices(services, now: now)
         applyBatch(batch, now: now)
         if pendingPoll {
             pendingPoll = false
