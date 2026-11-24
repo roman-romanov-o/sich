@@ -44,18 +44,40 @@ from the board.
    auto-compact resumes WORKING; a manual `/compact` typed after an ended turn
    goes back to NEEDS YOU, since the agent is again waiting on the operator.
 
-   2.3. **A backgrounded subagent keeps the card WORKING.** Claude fires a
-   `Stop` when the main turn parks with "Waiting for N background agents to
-   finish" — but that Stop's own payload lists the still-running child in
+   2.3. **Backgrounded work the turn waits on keeps the card WORKING.** Claude
+   fires a `Stop` when the main turn parks with "Waiting for N background agents
+   to finish", or ends its turn while backgrounded shell jobs it started run on —
+   but that Stop's own payload lists the still-running work in
    `background_tasks`. Such a Stop (and the ~60s `idle_prompt` nudge that
    follows it) parked the *prompt*, not the *work*: the card stays WORKING and
    the turn latch does not arm. The FINAL Stop — the one whose payload reports
    the background drained — is the real turn end and routes NEEDS YOU as usual.
-   The stall guard (2.1) still bounds the parenthesis: a child that goes silent
-   past the threshold routes attention anyway. Only a backgrounded **agent** holds
-   the parenthesis open. A backgrounded **shell** (`"type":"shell"` — a dev server,
-   a watch task) is not a child the turn waits on: a Stop that leaves one running
-   is a real turn end and routes NEEDS YOU.
+   Two kinds of background work hold the parenthesis open:
+   - a backgrounded **subagent** (`"type":"subagent"`). It emits its own hooks,
+     so the stall guard (2.1) still bounds it: a child that goes silent past
+     the threshold routes attention anyway.
+   - an awaited **job** — a backgrounded shell (`"type":"shell"`: a CI watch, a
+     build, a test run, a `codex exec`) or a monitor. Its completion
+     notification re-invokes the agent. A job emits no hooks while it runs, so
+     silence is the wait itself: the stall guard does not fire while a turn is
+     parked on jobs alone.
+
+   A backgrounded shell running a **long-lived service** — a server or an app —
+   is NOT awaited: it outlives the turn by design, so a Stop that leaves only
+   services running is a real turn end and routes NEEDS YOU. Two checks find
+   them:
+   - **the command** names one (`npm run dev`, `npx expo start`, `likec4 start`,
+     `http.server`, `uvicorn`, `docker compose up`, `tail -f` — matched on the
+     standalone word `start`, `serve`, `dev`, `preview`, …). This is the only
+     check a REMOTE session gets.
+   - **the live process tree** (local sessions): Claude writes each background
+     shell to `/private/tmp/claude-<uid>/<project>/<session>/tasks/<id>.output`,
+     keyed by the payload's task id. The processes holding that file, and their
+     descendants, are the task; if any of them **listens on a TCP port** or
+     **owns a window**, the shell is a service. A parked card's shells are
+     re-probed every ~10 s (a server binds its port seconds after the Stop);
+     the moment the last awaited shell proves to be a service, the card moves
+     to NEEDS YOU and the turn latch arms, exactly as that Stop would have.
 
    2.4. **A `!` bash-mode command is a turn.** Claude Code runs a `!command` line
    (and the model turn answering its output) with no `UserPromptSubmit` and no

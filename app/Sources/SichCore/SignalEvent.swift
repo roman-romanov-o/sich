@@ -57,12 +57,11 @@ public struct SignalEvent: Sendable, Equatable {
     /// field, so this is the ONLY thing separating two machines that happen to run
     /// the same session id in the same cwd (US-004 AC-3).
     public let host: String?
-    /// What the payload's `background_tasks` array reports: `true` when a background
-    /// subagent is still running, `false` when none are, `nil` when the payload
-    /// carries no such array (most hooks, and pre-background-agent Claude versions).
-    /// A `Stop` with `true` is NOT an operator wait — the turn parked while a child
-    /// keeps working (CARD-STATUS.md rule 2.3).
-    public let backgroundBusy: Bool?
+    /// What the payload's `background_tasks` array reports still running, `nil`
+    /// when the payload carries no such array (most hooks, and pre-background-task
+    /// Claude versions). A `Stop` that leaves awaited work running is NOT an operator
+    /// wait — the turn parked while its work continues (CARD-STATUS.md rule 2.3).
+    public let background: BackgroundTasks?
 
     public init(
         kind: SignalKind,
@@ -73,7 +72,7 @@ public struct SignalEvent: Sendable, Equatable {
         cwd: String? = nil,
         cardID: String? = nil,
         host: String? = nil,
-        backgroundBusy: Bool? = nil
+        background: BackgroundTasks? = nil
     ) {
         self.kind = kind
         self.source = source
@@ -83,7 +82,29 @@ public struct SignalEvent: Sendable, Equatable {
         self.cwd = cwd
         self.cardID = cardID
         self.host = host
-        self.backgroundBusy = backgroundBusy
+        self.background = background
+    }
+}
+
+/// The backgrounded work a turn left running (CARD-STATUS.md rule 2.3). The kinds
+/// differ in what silence means and in how "awaited" is known: a subagent emits its
+/// own hooks, so a silent one is stalled; a monitor is an explicit wait; a shell is
+/// awaited unless it turns out to be a long-lived service (a server, an app), which
+/// only its live processes can tell — so shells are carried by task id for the
+/// store to probe.
+public struct BackgroundTasks: Equatable, Sendable {
+    /// A backgrounded subagent is still running.
+    public var agentRunning: Bool
+    /// A monitor (or a task kind this build does not know) is still running.
+    public var otherRunning: Bool
+    /// Task ids of still-running shells whose command does not already name a
+    /// long-lived service.
+    public var shellIDs: Set<String>
+
+    public init(agentRunning: Bool = false, otherRunning: Bool = false, shellIDs: Set<String> = []) {
+        self.agentRunning = agentRunning
+        self.otherRunning = otherRunning
+        self.shellIDs = shellIDs
     }
 }
 

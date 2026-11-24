@@ -234,6 +234,122 @@ struct HookSessionStoreTests {
                 "after the real turn end the replay guard is back in force (US-008 AC-1)")
     }
 
+    /// The operator report: the "Research case for Fund" card parked on four
+    /// backgrounded `codex exec` / `cursor-agent` runs it was explicitly waiting on,
+    /// and showed NEEDS YOU. An awaited shell job is background work like a
+    /// subagent — WORKING — and, since a shell emits no hooks while it runs, the
+    /// stall guard must not reap the silence either. The drained Stop ends the turn.
+    @Test func stopWithAwaitedBackgroundJobStaysWorkingPastTheStallBudget() {
+        let store = HookSessionStore(stallThreshold: 600)
+        let jobs = #"[{"id":"bfkrjsvny","type":"shell","status":"running","command":"codex exec -s read-only - < prompt.md"}]"#
+        for (offset, json) in [
+            (0.0, #"{"hook_event_name":"UserPromptSubmit","session_id":"job"}"#),
+            (2.0, #"{"hook_event_name":"PostToolUse","session_id":"job","tool_name":"Bash"}"#),
+            (5.0, #"{"hook_event_name":"Stop","session_id":"job","background_tasks":\#(jobs)}"#),
+            (70.0, #"{"hook_event_name":"Notification","session_id":"job","notification_type":"idle_prompt"}"#),
+        ] {
+            store.ingest([normalized(json, arrival: base.addingTimeInterval(offset))])
+        }
+        #expect(store.entry(for: "job")?.state == .running,
+                "a Stop that leaves an awaited background job running parked the prompt, not the work")
+        store.sweepStale(now: base.addingTimeInterval(3600))
+        #expect(store.entry(for: "job")?.state == .running,
+                "a silent awaited job is the wait itself, not a stall")
+
+        // The job's completion re-invokes the agent; its final Stop drains the list.
+        for (offset, json) in [
+            (3700.0, #"{"hook_event_name":"PreToolUse","session_id":"job","tool_name":"Read"}"#),
+            (3710.0, #"{"hook_event_name":"Stop","session_id":"job","background_tasks":[]}"#),
+        ] {
+            store.ingest([normalized(json, arrival: base.addingTimeInterval(offset))])
+        }
+        #expect(store.entry(for: "job")?.state == .waitingForInput,
+                "the final Stop (background drained) is the real turn end")
+    }
+
+    /// A background shell the command check can't place (an app launched with
+    /// `swift run`, a server behind a script) parks the turn until the live probe
+    /// finds it is a long-lived service. Then the parked Stop was a real turn end:
+    /// NEEDS YOU, with the turn latch armed exactly as that Stop would have.
+    @Test func probedServiceEndsTheParkedTurn() {
+        let store = HookSessionStore(stallThreshold: 600)
+        let tasks = #"[{"id":"app1","type":"shell","status":"running","command":"swift run Demo"},{"id":"job1","type":"shell","status":"running","command":"make test"}]"#
+        for (offset, json) in [
+            (0.0, #"{"hook_event_name":"UserPromptSubmit","session_id":"svc"}"#),
+            (5.0, #"{"hook_event_name":"Stop","session_id":"svc","background_tasks":\#(tasks)}"#),
+        ] {
+            store.ingest([normalized(json, arrival: base.addingTimeInterval(offset))])
+        }
+        #expect(store.entry(for: "svc")?.state == .running)
+        #expect(Set(store.shellsToProbe.map(\.taskID)) == ["app1", "job1"])
+
+        // The app turns out to be a service — but the test job is still awaited.
+        store.markServices([.init(sessionID: "svc", taskID: "app1")], now: base.addingTimeInterval(15))
+        #expect(store.entry(for: "svc")?.state == .running,
+                "an awaited job is still running alongside the service")
+        #expect(store.shellsToProbe.map(\.taskID) == ["job1"], "a known service is not re-probed")
+
+        // The job finishes; the agent's next turn leaves only the app running.
+        let appOnly = #"[{"id":"app1","type":"shell","status":"running","command":"swift run Demo"}]"#
+        for (offset, json) in [
+            (60.0, #"{"hook_event_name":"UserPromptSubmit","session_id":"svc"}"#),
+            (65.0, #"{"hook_event_name":"Stop","session_id":"svc","background_tasks":\#(appOnly)}"#),
+        ] {
+            store.ingest([normalized(json, arrival: base.addingTimeInterval(offset))])
+        }
+        #expect(store.entry(for: "svc")?.state == .waitingForInput,
+                "a Stop leaving only a known service running is a real turn end")
+        #expect(store.shellsToProbe.isEmpty)
+    }
+
+    /// The probe usually lands AFTER the Stop (a server binds its port seconds
+    /// later): marking the last awaited shell a service flips the parked card.
+    @Test func lateServiceVerdictFlipsTheParkedCardAndLatches() {
+        let store = HookSessionStore(stallThreshold: 600)
+        let app = #"[{"id":"app1","type":"shell","status":"running","command":"./build/Demo.app/Contents/MacOS/Demo"}]"#
+        for (offset, json) in [
+            (0.0, #"{"hook_event_name":"UserPromptSubmit","session_id":"late"}"#),
+            (5.0, #"{"hook_event_name":"Stop","session_id":"late","background_tasks":\#(app)}"#),
+        ] {
+            store.ingest([normalized(json, arrival: base.addingTimeInterval(offset))])
+        }
+        #expect(store.entry(for: "late")?.state == .running)
+        store.markServices([.init(sessionID: "late", taskID: "app1")], now: base.addingTimeInterval(20))
+        #expect(store.entry(for: "late")?.state == .waitingForInput)
+        // Latched like any turn end: a straggling tool hook does not revive it.
+        store.ingest([normalized(
+            #"{"hook_event_name":"PreToolUse","session_id":"late","tool_name":"Bash"}"#,
+            arrival: base.addingTimeInterval(25))])
+        #expect(store.entry(for: "late")?.state == .waitingForInput)
+    }
+
+    /// Only a turn that ENDED into the parenthesis is parked: a mid-turn payload
+    /// listing a running shell (a SubagentStop) must neither be probed nor flipped.
+    @Test func midTurnShellIsNotParked() {
+        let store = HookSessionStore(stallThreshold: 600)
+        let shell = #"[{"id":"j1","type":"shell","status":"running","command":"make test"}]"#
+        for (offset, json) in [
+            (0.0, #"{"hook_event_name":"UserPromptSubmit","session_id":"mid"}"#),
+            (3.0, #"{"hook_event_name":"SubagentStop","session_id":"mid","agent_id":"x","background_tasks":\#(shell)}"#),
+        ] {
+            store.ingest([normalized(json, arrival: base.addingTimeInterval(offset))])
+        }
+        #expect(store.shellsToProbe.isEmpty)
+        store.markServices([.init(sessionID: "mid", taskID: "j1")], now: base.addingTimeInterval(10))
+        #expect(store.entry(for: "mid")?.state == .running, "the turn itself is still running")
+    }
+
+    /// A remote session's processes live on another machine: never probed locally.
+    @Test func remoteParkedShellIsNotProbed() {
+        let store = HookSessionStore(stallThreshold: 600)
+        let shell = #"[{"id":"j1","type":"shell","status":"running","command":"make test"}]"#
+        store.ingest([normalized(
+            #"{"hook_event_name":"Stop","session_id":"rem","sich_host":"box","background_tasks":\#(shell)}"#,
+            arrival: base)])
+        #expect(store.entry(for: "rem", host: "box")?.state == .running)
+        #expect(store.shellsToProbe.isEmpty)
+    }
+
     /// The operator report: a remote card sat in WORKING after the agent had
     /// answered. Its Stop listed a backgrounded SHELL (a dev server that never
     /// exits) as `running`, and the parenthesis masked both the Stop and the idle
@@ -241,7 +357,7 @@ struct HookSessionStoreTests {
     /// from the far side's events.jsonl, must route NEEDS YOU.
     @Test func stopWithOnlyABackgroundShellIsATurnEnd() {
         let store = HookSessionStore(stallThreshold: 600)
-        let server = #"[{"id":"bpws0wrz7","type":"shell","status":"running","description":"Start Metro dev server"}]"#
+        let server = #"[{"id":"bpws0wrz7","type":"shell","status":"running","description":"Start Metro dev server","command":"npx expo start"}]"#
         for (offset, json) in [
             (0.0, #"{"hook_event_name":"UserPromptSubmit","session_id":"rm"}"#),
             (2.0, #"{"hook_event_name":"PostToolUse","session_id":"rm","tool_name":"Bash"}"#),
