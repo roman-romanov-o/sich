@@ -20,7 +20,7 @@ The secondary, differentiating need: **subscription quota is now split into non-
 
 1. **Mission-control board** — every active session as a card with live state (idle / running / waiting-for-me / blocked) and a "who needs me now" attention signal.
 2. **Drill-in terminal** — click a card to get the real live terminal for that task *inside the app* (we own the PTY). Run `claude` in it directly.
-3. **Two-pool / multi-provider quota panel** — four distinct, **never-summed** gauges: the two Anthropic pools (interactive + Agent-SDK credit) plus Codex / Gemini. Reads Claude's real `/api/oauth/usage`.
+3. **Two-pool / multi-provider quota panel** — four distinct, **never-summed** gauges: the two Anthropic pools (interactive + Agent-SDK credit) plus Codex / Gemini. Reads the numbers each CLI's own `/usage` panel shows; Sich makes no network calls for it.
 4. **Backlog → capacity allocator (the differentiator)** — given remaining quota per pool and historical burn, *suggest* which backlog item to start next and on which harness/account (the Anthropic pool with headroom, else Codex / Gemini). Suggest-only, never auto-dispatch.
 
 ## Hard constraints (non-negotiable invariants)

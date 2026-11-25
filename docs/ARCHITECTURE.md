@@ -53,9 +53,9 @@ sessions observed via hooks are merged into one `SessionRegistry`.
 
 ### Quota panel
 `NativeQuotaPoller` (`SichApp/QuotaSidecar.swift`) reads each Claude
-profile's usage in-process — `ClaudeUsageProbe` hits the real
-`/api/oauth/usage` endpoint with the keychain OAuth token, and
-`QuotaUsageReader` walks the transcript directories — then hands
+profile's usage in-process — `ClaudeUsageProbe` types `/usage` into a
+hidden `claude` terminal and parses the panel, so Sich never reads the
+OAuth token or calls Anthropic itself — then hands
 `[QuotaSourceInput]` to `QuotaPanel`. Codex, Cursor and Antigravity have
 their own readers next to it.
 

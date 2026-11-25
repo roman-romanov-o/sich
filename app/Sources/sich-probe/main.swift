@@ -10,23 +10,6 @@ import SichCore
 
 let argv = Array(CommandLine.arguments.dropFirst())
 
-// `swift run sich-probe quota` — exercise the REAL live-usage path end to end
-// (keychain token → GET /api/oauth/usage → decode), to confirm our binary can read
-// the cross-app keychain item. Prints the resulting interactive reading or "fell back".
-if argv.first == "quota" {
-    let token = UsageEndpointReader.keychainToken()
-    print("keychain token: \(token == nil ? "DENIED/absent" : "read OK (\(token!.count) chars)")")
-    if let data = await UsageEndpointReader.fetch(), let src = UsageEndpointReader.interactiveSource(from: data) {
-        let r = src.reading
-        let pct = r.remainingFraction.map { String(format: "%.0f%%", $0 * 100) } ?? "—"
-        print("interactive: MEASURED (live endpoint) · remaining \(pct) "
-            + "· \(r.refillKind.rawValue) · reset \(r.reset.map { "\($0)" } ?? "—")")
-    } else {
-        print("interactive: fell back to local estimate (endpoint unreachable / token denied)")
-    }
-    exit(0)
-}
-
 // `swift run sich-probe usage` — one full hidden-pty `/usage` scrape end to
 // end (spawn claude → trust/ready → type /usage → parse panel): the manual smoke
 // for the shipped measured-quota path. Prints the parsed reading or the fallback.

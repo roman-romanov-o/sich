@@ -65,26 +65,19 @@ public final class NativeQuotaPoller {
     static func liveOrEstimate(profiles: [ClaudeProfile]) async -> [QuotaSourceInput] {
         var sources: [QuotaSourceInput] = []
 
-        if ProcessInfo.processInfo.environment["SICH_LIVE_USAGE"] != nil,
-           let data = await UsageEndpointReader.fetch(),
-           let live = UsageEndpointReader.interactiveSource(from: data) {
-            sources = [live]
-                + (UsageEndpointReader.interactiveDisplaySources(from: data) ?? [])
-        } else {
-            for profile in profiles {
-                let prefix = profile.poolPrefix
-                let projectsDir = profile.projectsDir
-                let probe = await MainActor.run { ClaudeUsageProbe.probe(for: profile) }
-                if let panel = await probe.current() {
-                    sources += [ClaudeUsagePanel.interactiveSource(from: panel, poolPrefix: prefix)]
-                    sources += ClaudeUsagePanel.interactiveDisplaySources(from: panel, poolPrefix: prefix)
-                } else if !HiddenTUIProbe.spawningEnabled {
-                    // Tests / offline only — the JSONL guess can read ~98% free while
-                    // `/usage` shows 100% used, so never show it when probes are live.
-                    let now = Date()
-                    sources += QuotaUsageReader.readInteractiveSources(
-                        now: now, projectsDir: projectsDir, poolPrefix: prefix)
-                }
+        for profile in profiles {
+            let prefix = profile.poolPrefix
+            let projectsDir = profile.projectsDir
+            let probe = await MainActor.run { ClaudeUsageProbe.probe(for: profile) }
+            if let panel = await probe.current() {
+                sources += [ClaudeUsagePanel.interactiveSource(from: panel, poolPrefix: prefix)]
+                sources += ClaudeUsagePanel.interactiveDisplaySources(from: panel, poolPrefix: prefix)
+            } else if !HiddenTUIProbe.spawningEnabled {
+                // Tests / offline only — the JSONL guess can read ~98% free while
+                // `/usage` shows 100% used, so never show it when probes are live.
+                let now = Date()
+                sources += QuotaUsageReader.readInteractiveSources(
+                    now: now, projectsDir: projectsDir, poolPrefix: prefix)
             }
         }
         sources += QuotaUsageReader.nonLocalSources
