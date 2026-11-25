@@ -8,7 +8,7 @@ import Foundation
 /// `inferred:false` → the gauge renders it `measured`. The panel also shows
 /// per-model rows ("Current week (Fable)") — ignored on purpose: the gauge tracks
 /// the two constraints Anthropic enforces account-wide, session (5h rolling) and
-/// week (all models), mirroring `UsageEndpointReader.interactiveSource`.
+/// week (all models).
 public enum ClaudeUsagePanel {
 
     /// The two constraints scraped off the panel. Reset dates are best-effort
@@ -45,8 +45,7 @@ public enum ClaudeUsagePanel {
                        weekResetsAt: week.reset)
     }
 
-    /// Map a parsed panel to the interactive-pool source. Identical binding logic
-    /// to `UsageEndpointReader.interactiveSource`: the constraint with LESS
+    /// Map a parsed panel to the interactive-pool source: the constraint with LESS
     /// remaining drives the gauge, its reset and refill kind included.
     public static func interactiveSource(
         from reading: Reading, poolPrefix: String = "interactive"
